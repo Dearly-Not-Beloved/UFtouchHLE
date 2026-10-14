@@ -1923,6 +1923,11 @@ impl Environment {
         if !self.yielder.is_null() {
             unsafe {
                 let yielder = self.yielder.as_ref().unwrap();
+                // Restore this afterwards rather than assuming it was false:
+                // the app picker's coroutine runs with it set to true, and
+                // setting it to false made its next event poll panic (e.g.
+                // after returning from the background on Android).
+                let was_on_main_stack = self.window.as_ref().unwrap().on_main_stack;
                 let wrapped = WindowWrapper {
                     window: self.window.as_mut().unwrap(),
                 };
@@ -1931,7 +1936,7 @@ impl Environment {
                     wrapped.window.on_main_stack = true;
                     f(wrapped.window, self.options.as_mut())
                 });
-                self.window.as_mut().unwrap().on_main_stack = false;
+                self.window.as_mut().unwrap().on_main_stack = was_on_main_stack;
                 res
             }
         } else {
