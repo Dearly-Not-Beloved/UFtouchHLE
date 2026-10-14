@@ -174,12 +174,16 @@ pub fn get_rgba8_pixels(
         bytes.to_vec()
     } else {
         let (r, g, b, a) = offsets;
-        bytes
-            .as_chunks::<4>()
+        let mut out = vec![0u8; bytes.len()];
+        for (o, p) in out
+            .as_chunks_mut::<4>()
             .0
-            .iter()
-            .flat_map(|p| [p[r], p[g], p[b], a.map_or(255, |a| p[a])])
-            .collect()
+            .iter_mut()
+            .zip(bytes.as_chunks::<4>().0)
+        {
+            *o = [p[r], p[g], p[b], a.map_or(255, |a| p[a])];
+        }
+        out
     };
     (bitmap_data.width, bitmap_data.height, pixels)
 }
@@ -925,11 +929,38 @@ pub(super) fn fill_rect(env: &mut Environment, context: CGContextRef, rect: CGRe
                 .into_iter()
                 .map(|o| (o, drawer.pixels[idx + o]))
                 .collect();
+            let bpp = bytes_per_pixel(&drawer.bitmap_info) as usize;
+            let contiguous = xs.last().unwrap() - first_x + 1 == xs.len() as i32;
+            let whole_pixel = bytes.len() == bpp;
+            let all_zero = bytes.iter().all(|&(_, v)| v == 0);
+            let mut pixel_bytes = vec![0u8; bpp];
+            for &(offset, value) in &bytes {
+                pixel_bytes[offset] = value;
+            }
             for &y in &ys {
-                for &x in &xs {
-                    let idx = drawer.pixel_index(x, y);
-                    for &(offset, value) in &bytes {
-                        drawer.pixels[idx + offset] = value;
+                if contiguous {
+                    // The pixels of a row are next to each other in memory.
+                    let start = drawer.pixel_index(first_x, y);
+                    let row = &mut drawer.pixels[start..start + xs.len() * bpp];
+                    if whole_pixel && all_zero {
+                        row.fill(0);
+                    } else if whole_pixel {
+                        for pixel in row.chunks_exact_mut(bpp) {
+                            pixel.copy_from_slice(&pixel_bytes);
+                        }
+                    } else {
+                        for pixel in row.chunks_exact_mut(bpp) {
+                            for &(offset, value) in &bytes {
+                                pixel[offset] = value;
+                            }
+                        }
+                    }
+                } else {
+                    for &x in &xs {
+                        let idx = drawer.pixel_index(x, y);
+                        for &(offset, value) in &bytes {
+                            drawer.pixels[idx + offset] = value;
+                        }
                     }
                 }
             }
