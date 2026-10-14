@@ -33,6 +33,21 @@ public class MainActivity extends SDLActivity {
         super.onCreate(savedInstanceState);
     }
 
+    // By default, the back button/gesture finishes the activity, which makes
+    // touchHLE exit and any unsaved progress in the app is lost. Treat it like
+    // the home button instead: touchHLE goes into the background (where the
+    // app is paused) and can be resumed. It can still be closed from the
+    // recent apps screen.
+    @Override
+    public void onBackPressed() {
+        moveTaskToBack(true);
+    }
+
+    @Override
+    public void superOnBackPressed() {
+        moveTaskToBack(true);
+    }
+
     @Override
     protected String[] getLibraries() {
         return new String[]{
