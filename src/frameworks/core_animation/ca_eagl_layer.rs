@@ -188,3 +188,37 @@ pub fn present_pixels(env: &mut Environment, layer: id, pixels: Vec<u8>, width: 
     host_obj.presented_pixels = Some((pixels, width, height));
     host_obj.gles_texture_is_up_to_date = false;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_quarter_turns() {
+        let rotation = |angle: f32| {
+            let (sin, cos) = angle.sin_cos();
+            CGAffineTransform {
+                a: cos,
+                b: sin,
+                c: -sin,
+                d: cos,
+                tx: 0.0,
+                ty: 0.0,
+            }
+        };
+        use std::f32::consts::FRAC_PI_2;
+        assert_eq!(quarter_turns(&rotation(0.0)), Some(0));
+        // Not exact in floating point, as apps' rotations won't be either.
+        assert_eq!(quarter_turns(&rotation(FRAC_PI_2)), Some(1));
+        assert_eq!(quarter_turns(&rotation(2.0 * FRAC_PI_2)), Some(2));
+        assert_eq!(quarter_turns(&rotation(3.0 * FRAC_PI_2)), Some(3));
+        assert_eq!(quarter_turns(&rotation(-FRAC_PI_2)), Some(3));
+        assert_eq!(quarter_turns(&rotation(0.5)), None);
+        let mut translated = rotation(FRAC_PI_2);
+        translated.tx = 10.0;
+        assert_eq!(quarter_turns(&translated), None);
+        let mut scaled = rotation(0.0);
+        scaled.a = 2.0;
+        assert_eq!(quarter_turns(&scaled), None);
+    }
+}
