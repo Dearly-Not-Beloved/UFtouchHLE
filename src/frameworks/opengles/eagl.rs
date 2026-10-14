@@ -644,7 +644,13 @@ unsafe fn present_renderbuffer(
     let rotation_matrix = env.window.as_mut().unwrap().rotation_matrix().multiply(
         &crate::matrix::Matrix::z_rotation((quarter_turns as f32) * std::f32::consts::FRAC_PI_2),
     );
-    let virtual_cursor_visible_at = env.window.as_mut().unwrap().virtual_cursor_visible_at();
+    // If more is drawn on top afterwards, that draws the cursor instead, so
+    // it's on top and not drawn twice.
+    let virtual_cursor_visible_at = if swap {
+        env.window.as_mut().unwrap().virtual_cursor_visible_at()
+    } else {
+        None
+    };
     let sharp_upscale = env.window.as_ref().unwrap().sharp_upscale_factor();
 
     let sharegroup = {
