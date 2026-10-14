@@ -66,6 +66,7 @@ pub struct Options {
     pub fullscreen: bool,
     pub aspect_mode: AspectMode,
     pub filter_mode: FilterMode,
+    pub keep_screen_on: bool,
     pub device_family: Option<DeviceFamily>,
     pub initial_orientation: DeviceOrientation,
     pub scale_hack: NonZeroU32,
@@ -101,6 +102,7 @@ impl Default for Options {
             fullscreen: false,
             aspect_mode: AspectMode::Fit,
             filter_mode: FilterMode::Smooth,
+            keep_screen_on: false,
             device_family: None,
             initial_orientation: DeviceOrientation::Portrait,
             scale_hack: NonZeroU32::new(1).unwrap(),
@@ -157,6 +159,8 @@ impl Options {
                 "integer" => AspectMode::Integer,
                 _ => return Err("Invalid value for --aspect".to_string()),
             };
+        } else if arg == "--keep-screen-on" {
+            self.keep_screen_on = true;
         } else if let Some(value) = arg.strip_prefix("--filter=") {
             self.filter_mode = match value {
                 "smooth" => FilterMode::Smooth,

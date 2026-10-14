@@ -26,6 +26,11 @@ View options:
         - pixel: nearest-neighbour filtering only. Crisp, but pixels may have
           uneven sizes unless --aspect=integer is used.
 
+    --keep-screen-on
+        Keep the screen on (prevent the screen saver, or on Android, the
+        screen turning off) while touchHLE is running, even if the app doesn't
+        ask for it.
+
     --upside-down
     --landscape-left
     --landscape-right

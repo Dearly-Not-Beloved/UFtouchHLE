@@ -363,6 +363,7 @@ pub struct Window {
     pub(super) on_main_stack: bool,
     aspect_mode: crate::options::AspectMode,
     filter_mode: crate::options::FilterMode,
+    keep_screen_on: bool,
 }
 
 impl Window {
@@ -405,7 +406,11 @@ impl Window {
         // SDL2 disables the screen saver by default, but iPhone OS enables
         // the idle timer that triggers sleep by default, so we turn it back on
         // here, and then the app can disable it if it wants to.
-        video_ctx.enable_screen_saver();
+        if options.keep_screen_on {
+            video_ctx.disable_screen_saver();
+        } else {
+            video_ctx.enable_screen_saver();
+        }
 
         let scale_hack = options.scale_hack;
         // TODO: some apps specify their orientation in Info.plist, we could use
@@ -496,6 +501,7 @@ impl Window {
             fullscreen,
             aspect_mode: options.aspect_mode,
             filter_mode: options.filter_mode,
+            keep_screen_on: options.keep_screen_on,
             scale_hack,
             internal_gl_ins: None,
             splash_image: launch_image,
@@ -1624,7 +1630,7 @@ impl Window {
     }
     pub fn set_screen_saver_enabled(&mut self, enabled: bool) {
         assert!(self.on_main_stack);
-        match enabled {
+        match enabled && !self.keep_screen_on {
             true => self.video_ctx.enable_screen_saver(),
             false => self.video_ctx.disable_screen_saver(),
         }

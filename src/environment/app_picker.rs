@@ -153,6 +153,7 @@ struct AppPickerDelegateHostObject {
     orientation_landscape_right: bool,
     analog_stick_tilt_controls: Option<bool>,
     network: Option<bool>,
+    keep_screen_on: Option<bool>,
     fullscreen: Option<bool>,
     /// Button tapped among the quick options that use `quickOptionTapped:`.
     option_tapped: id,
@@ -242,6 +243,10 @@ const CLASSES: ClassExports = objc_classes! {
 - (())network:(id)switch { // UISwitch*
     let switch_state: bool = msg![env; switch isOn];
     env.objc.borrow_mut::<AppPickerDelegateHostObject>(this).network = Some(switch_state);
+}
+- (())keepScreenOn:(id)switch { // UISwitch*
+    let switch_state: bool = msg![env; switch isOn];
+    env.objc.borrow_mut::<AppPickerDelegateHostObject>(this).keep_screen_on = Some(switch_state);
 }
 - (())fullscreen:(id)switch { // UISwitch*
     let switch_state: bool = msg![env; switch isOn];
@@ -586,6 +591,7 @@ fn app_picker_inner(
     let mut quick_options_filter: usize = 0;
     let mut quick_options_analog_stick_tilt_controls = true;
     let mut quick_options_network = false;
+    let mut quick_options_keep_screen_on = false;
 
     // Restore the quick options chosen last time (saved when an app is
     // launched), so they don't have to be chosen again every time.
@@ -620,6 +626,7 @@ fn app_picker_inner(
                         quick_options_analog_stick_tilt_controls = false
                     }
                     "--allow-network-access" => quick_options_network = true,
+                    "--keep-screen-on" => quick_options_keep_screen_on = true,
                     _ => (),
                 }
             }
@@ -628,6 +635,7 @@ fn app_picker_inner(
     for &(selector, switch) in &quick_options_stuff.switches {
         let on = match selector {
             "network:" => quick_options_network,
+            "keepScreenOn:" => quick_options_keep_screen_on,
             "analogStickTiltControls:" => quick_options_analog_stick_tilt_controls,
             "fullscreen:" => quick_options_fullscreen.is_some(),
             _ => continue,
@@ -852,6 +860,8 @@ fn app_picker_inner(
             quick_options_analog_stick_tilt_controls = enabled;
         } else if let Some(enabled) = std::mem::take(&mut host_obj.network) {
             quick_options_network = enabled;
+        } else if let Some(enabled) = std::mem::take(&mut host_obj.keep_screen_on) {
+            quick_options_keep_screen_on = enabled;
         } else if let Some(fullscreen) = std::mem::take(&mut host_obj.fullscreen) {
             quick_options_fullscreen = match fullscreen {
                 false => None,
@@ -889,6 +899,9 @@ fn app_picker_inner(
     }
     if quick_options_network {
         option_args.push("--allow-network-access".to_string());
+    }
+    if quick_options_keep_screen_on {
+        option_args.push("--keep-screen-on".to_string());
     }
 
     if let Err(e) = std::fs::write(&quick_options_file, option_args.join("\n")) {
@@ -1616,6 +1629,8 @@ fn setup_quick_options(
             ("锐利", "quickOptionTapped:"),
             ("像素", "quickOptionTapped:"),
         ]),
+        RowKind::Label("游戏时保持亮屏"),
+        RowKind::Switch("keepScreenOn:", false),
         RowKind::Label("允许联网"),
         RowKind::Switch("network:", false),
         RowKind::Label("用摇杆模拟重力感应"),
