@@ -453,6 +453,17 @@ pub(super) fn will_resign_active(env: &mut Environment) {
     let center: id = msg_class![env; NSNotificationCenter defaultCenter];
     let notif_name = get_static_str(env, UIApplicationWillResignActiveNotification);
     () = msg![env; center postNotificationName:notif_name object:ui_application userInfo:nil];
+
+    // Like iOS 4+ multitasking: apps typically save their state here, which
+    // matters because the OS may kill touchHLE while it's in the background.
+    if env
+        .objc
+        .object_has_method_named(&env.mem, delegate, "applicationDidEnterBackground:")
+    {
+        () = msg![env; delegate applicationDidEnterBackground:ui_application];
+    }
+    let notif_name = get_static_str(env, UIApplicationDidEnterBackgroundNotification);
+    () = msg![env; center postNotificationName:notif_name object:ui_application userInfo:nil];
     let _: () = msg![env; pool drain];
 }
 
@@ -461,6 +472,15 @@ pub(super) fn did_become_active(env: &mut Environment) {
     let ui_application: id = msg_class![env; UIApplication sharedApplication];
     let pool: id = msg_class![env; NSAutoreleasePool new];
     let delegate: id = msg![env; ui_application delegate];
+    if env
+        .objc
+        .object_has_method_named(&env.mem, delegate, "applicationWillEnterForeground:")
+    {
+        () = msg![env; delegate applicationWillEnterForeground:ui_application];
+    }
+    let center: id = msg_class![env; NSNotificationCenter defaultCenter];
+    let notif_name = get_static_str(env, UIApplicationWillEnterForegroundNotification);
+    () = msg![env; center postNotificationName:notif_name object:ui_application userInfo:nil];
     if env
         .objc
         .object_has_method_named(&env.mem, delegate, "applicationDidBecomeActive:")
