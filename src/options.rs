@@ -31,10 +31,41 @@ pub enum Button {
     LeftShoulder,
 }
 
+/// How the app's screen is fitted into a fullscreen window.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
+pub enum AspectMode {
+    /// Keep the aspect ratio, add black bars (letterbox/pillarbox).
+    #[default]
+    Fit,
+    /// Fill the whole window, distorting the image.
+    Stretch,
+    /// Keep the aspect ratio and fill the whole window, cropping the edges.
+    Fill,
+    /// Keep the aspect ratio and only scale by whole numbers, so every pixel
+    /// of the app is the same size.
+    Integer,
+}
+
+/// How the app's screen is filtered when scaled up.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
+pub enum FilterMode {
+    /// Bilinear filtering: smooth, but blurry for pixel art.
+    #[default]
+    Smooth,
+    /// "Sharp bilinear": scale up by a whole number with nearest-neighbour
+    /// filtering, then bilinear for the rest. Crisp pixels, no uneven pixel
+    /// sizes.
+    Sharp,
+    /// Nearest-neighbour filtering only.
+    Pixel,
+}
+
 /// Struct containing all user-configurable options.
 #[derive(Clone)]
 pub struct Options {
     pub fullscreen: bool,
+    pub aspect_mode: AspectMode,
+    pub filter_mode: FilterMode,
     pub device_family: Option<DeviceFamily>,
     pub initial_orientation: DeviceOrientation,
     pub scale_hack: NonZeroU32,
@@ -68,6 +99,8 @@ impl Default for Options {
     fn default() -> Self {
         Options {
             fullscreen: false,
+            aspect_mode: AspectMode::Fit,
+            filter_mode: FilterMode::Smooth,
             device_family: None,
             initial_orientation: DeviceOrientation::Portrait,
             scale_hack: NonZeroU32::new(1).unwrap(),
@@ -116,6 +149,21 @@ impl Options {
 
         if arg == "--fullscreen" {
             self.fullscreen = true;
+        } else if let Some(value) = arg.strip_prefix("--aspect=") {
+            self.aspect_mode = match value {
+                "fit" => AspectMode::Fit,
+                "stretch" => AspectMode::Stretch,
+                "fill" => AspectMode::Fill,
+                "integer" => AspectMode::Integer,
+                _ => return Err("Invalid value for --aspect".to_string()),
+            };
+        } else if let Some(value) = arg.strip_prefix("--filter=") {
+            self.filter_mode = match value {
+                "smooth" => FilterMode::Smooth,
+                "sharp" => FilterMode::Sharp,
+                "pixel" => FilterMode::Pixel,
+                _ => return Err("Invalid value for --filter".to_string()),
+            };
         } else if arg == "--upside-down" {
             self.initial_orientation = DeviceOrientation::PortraitUpsideDown;
         } else if arg == "--landscape-left" {

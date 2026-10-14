@@ -549,6 +549,8 @@ unsafe fn read_renderbuffer(gles: &mut dyn GLES, mut pixel_buffer: Vec<u8>) -> (
 unsafe fn present_renderbuffer(env: &mut Environment) {
     // Save these for when we need to draw the frame
     let viewport = env.window.as_mut().unwrap().viewport();
+    let pixel_filter =
+        env.window.as_ref().unwrap().filter_mode() == crate::options::FilterMode::Pixel;
     let rotation_matrix = env.window.as_mut().unwrap().rotation_matrix();
     let virtual_cursor_visible_at = env.window.as_mut().unwrap().virtual_cursor_visible_at();
 
@@ -605,8 +607,20 @@ unsafe fn present_renderbuffer(env: &mut Environment) {
     gles.TexParameteri(
         gles11::TEXTURE_2D,
         gles11::TEXTURE_MIN_FILTER,
-        gles11::LINEAR as _,
+        if pixel_filter {
+            gles11::NEAREST
+        } else {
+            gles11::LINEAR
+        } as _,
     );
+    // The default magnification filter is LINEAR.
+    if pixel_filter {
+        gles.TexParameteri(
+            gles11::TEXTURE_2D,
+            gles11::TEXTURE_MAG_FILTER,
+            gles11::NEAREST as _,
+        );
+    }
 
     // Clean up the framebuffer object since we no longer need it.
     // This also sets the framebuffer bindings back to zero, so rendering

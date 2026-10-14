@@ -8,6 +8,24 @@ View options:
         in use, the result may be a bit blurry. An internal resolution larger
         than your screen's is possible, in which case the output is downscaled.
 
+    --aspect=...
+        How the app's screen is fitted into the screen in full screen mode
+        (including on Android). One of:
+        - fit: keep the aspect ratio, with black bars on two sides (default)
+        - stretch: fill the whole screen, distorting the image
+        - fill: keep the aspect ratio and fill the whole screen, cropping the
+          edges that don't fit
+        - integer: keep the aspect ratio and only scale by whole numbers, so
+          all pixels have the same size (may leave larger black bars)
+
+    --filter=...
+        How the app's screen is filtered when scaled up. One of:
+        - smooth: bilinear filtering (default). Can look blurry.
+        - sharp: scale up by a whole number keeping pixels crisp, then smoothly
+          for the rest. Recommended for pixel art on large screens.
+        - pixel: nearest-neighbour filtering only. Crisp, but pixels may have
+          uneven sizes unless --aspect=integer is used.
+
     --upside-down
     --landscape-left
     --landscape-right

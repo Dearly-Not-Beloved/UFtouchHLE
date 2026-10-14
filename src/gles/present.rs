@@ -46,7 +46,7 @@ impl FpsCounter {
 /// The provided context must be current.
 pub unsafe fn present_frame(
     gles: &mut dyn GLES,
-    viewport: (u32, u32, u32, u32),
+    viewport: (i32, i32, u32, u32),
     rotation_matrix: Matrix<2>,
     virtual_cursor_visible_at: Option<(f32, f32, bool)>,
 ) {

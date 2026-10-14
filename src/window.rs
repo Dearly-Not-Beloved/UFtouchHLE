@@ -105,6 +105,100 @@ fn rotate_fullscreen_size(orientation: DeviceOrientation, screen_size: (u32, u32
         }
     }
 }
+/// Where to draw an app screen of size `app` (`base` is the size without the
+/// scale hack) in a fullscreen window of size `screen`. See [Window::viewport].
+fn compute_viewport(
+    mode: crate::options::AspectMode,
+    app: (u32, u32),
+    base: (u32, u32),
+    screen: (u32, u32),
+) -> (i32, i32, u32, u32) {
+    use crate::options::AspectMode;
+    let (app_width, app_height) = app;
+    let (base_width, base_height) = base;
+    let (screen_width, screen_height) = screen;
+    let app_aspect = app_width as f32 / app_height as f32;
+    let screen_aspect = screen_width as f32 / screen_height as f32;
+    let fit = |cover: bool| {
+        if (app_aspect < screen_aspect) != cover {
+            (
+                (screen_height as f32 * app_aspect).round() as u32,
+                screen_height,
+            )
+        } else {
+            (
+                screen_width,
+                (screen_width as f32 / app_aspect).round() as u32,
+            )
+        }
+    };
+    let (scaled_width, scaled_height) = match mode {
+        AspectMode::Fit => fit(false),
+        AspectMode::Fill => fit(true),
+        AspectMode::Stretch => (screen_width, screen_height),
+        AspectMode::Integer => {
+            let factor = (screen_width / base_width)
+                .min(screen_height / base_height)
+                .max(1);
+            (base_width * factor, base_height * factor)
+        }
+    };
+    let x = (screen_width as i32 - scaled_width as i32) / 2;
+    let y = (screen_height as i32 - scaled_height as i32) / 2;
+    (x, y, scaled_width, scaled_height)
+}
+
+#[cfg(test)]
+#[test]
+fn test_compute_viewport() {
+    use crate::options::AspectMode::*;
+    let landscape = ((480, 320), (480, 320));
+    // 20:9 phone in landscape (like a 2400x1080 screen)
+    let phone = (2400, 1080);
+    assert_eq!(
+        compute_viewport(Fit, landscape.0, landscape.1, phone),
+        (390, 0, 1620, 1080)
+    );
+    assert_eq!(
+        compute_viewport(Stretch, landscape.0, landscape.1, phone),
+        (0, 0, 2400, 1080)
+    );
+    // 2400 wide at 3:2 is 1600 tall: cropped top and bottom
+    assert_eq!(
+        compute_viewport(Fill, landscape.0, landscape.1, phone),
+        (0, -260, 2400, 1600)
+    );
+    // 1080/320 = 3.375 -> 3x
+    assert_eq!(
+        compute_viewport(Integer, landscape.0, landscape.1, phone),
+        (480, 60, 1440, 960)
+    );
+    // 4:3 tablet: bars top and bottom instead
+    let tablet = (2048, 1536);
+    assert_eq!(
+        compute_viewport(Fit, landscape.0, landscape.1, tablet),
+        (0, 85, 2048, 1365)
+    );
+    assert_eq!(
+        compute_viewport(Fill, landscape.0, landscape.1, tablet),
+        (-128, 0, 2304, 1536)
+    );
+    assert_eq!(
+        compute_viewport(Integer, landscape.0, landscape.1, tablet),
+        (64, 128, 1920, 1280)
+    );
+    // Scale hack: integer scaling is based on the unscaled size
+    assert_eq!(
+        compute_viewport(Integer, (960, 640), landscape.1, phone),
+        (480, 60, 1440, 960)
+    );
+    // Screen smaller than the app: never scale below 1x
+    assert_eq!(
+        compute_viewport(Integer, landscape.0, landscape.1, (400, 300)),
+        (-40, -10, 480, 320)
+    );
+}
+
 /// Tell SDL2 what orientation we want. Only useful on Android.
 ///
 /// Both orientations of the same kind (portrait or landscape) are allowed, so
@@ -267,6 +361,8 @@ pub struct Window {
     /// certain SDL functions (that call JNI functions) are on the main
     /// stack on Android.
     pub(super) on_main_stack: bool,
+    aspect_mode: crate::options::AspectMode,
+    filter_mode: crate::options::FilterMode,
 }
 
 impl Window {
@@ -398,6 +494,8 @@ impl Window {
             #[cfg(target_os = "macos")]
             viewport_y_offset: 0,
             fullscreen,
+            aspect_mode: options.aspect_mode,
+            filter_mode: options.filter_mode,
             scale_hack,
             internal_gl_ins: None,
             splash_image: launch_image,
@@ -1296,7 +1394,7 @@ impl Window {
         // image data will be top-to-bottom. A reflection transform compensates.
         let matrix = self.rotation_matrix().multiply(&Matrix::y_flip());
         let (vx, vy, vw, vh) = self.viewport();
-        let viewport = (vx, vy + self.viewport_y_offset(), vw, vh);
+        let viewport = (vx, vy + self.viewport_y_offset() as i32, vw, vh);
 
         let image = self.splash_image.as_ref().unwrap();
 
@@ -1453,7 +1551,10 @@ impl Window {
     ///
     /// The aspect ratio of this region always reflects the guest app's view of
     /// the world, but the scale and orientation might not.
-    pub fn viewport(&self) -> (u32, u32, u32, u32) {
+    /// The area of the window the app's screen is drawn to, as `(x, y, width,
+    /// height)` in pixels. `x` and `y` can be negative when the screen is
+    /// cropped ([crate::options::AspectMode::Fill]).
+    pub fn viewport(&self) -> (i32, i32, u32, u32) {
         let (app_width, app_height) =
             size_for_orientation(self.device_family, self.device_orientation, self.scale_hack);
         if !self.fullscreen && !Self::rotatable_fullscreen() {
@@ -1461,23 +1562,39 @@ impl Window {
         }
 
         let (screen_width, screen_height) = self.window.drawable_size();
+        // The scale hack only increases the internal resolution, so the
+        // unscaled size is what matters for whole-number scaling.
+        let (base_width, base_height) = size_for_orientation(
+            self.device_family,
+            self.device_orientation,
+            NonZeroU32::new(1).unwrap(),
+        );
 
-        let app_aspect = app_width as f32 / app_height as f32;
-        let screen_aspect = screen_width as f32 / screen_height as f32;
-        let (scaled_width, scaled_height) = if app_aspect < screen_aspect {
-            (
-                (screen_height as f32 * app_aspect).round() as u32,
-                screen_height,
-            )
-        } else {
-            (
-                screen_width,
-                (screen_width as f32 / app_aspect).round() as u32,
-            )
-        };
-        let x = (screen_width - scaled_width) / 2;
-        let y = (screen_height - scaled_height) / 2;
-        (x, y, scaled_width, scaled_height)
+        compute_viewport(
+            self.aspect_mode,
+            (app_width, app_height),
+            (base_width, base_height),
+            (screen_width, screen_height),
+        )
+    }
+
+    /// For [crate::options::FilterMode::Sharp]: the whole number the app's
+    /// screen is scaled up by (with nearest-neighbour filtering) before the
+    /// final bilinear scaling to the viewport size. 1 for other modes.
+    pub fn sharp_upscale_factor(&self) -> u32 {
+        if self.filter_mode != crate::options::FilterMode::Sharp {
+            return 1;
+        }
+        let (app_width, app_height) =
+            size_for_orientation(self.device_family, self.device_orientation, self.scale_hack);
+        let (_, _, vw, vh) = self.viewport();
+        // Cap it to keep the intermediate texture a reasonable size.
+        (vw / app_width).min(vh / app_height).clamp(1, 8)
+    }
+
+    /// The configured [crate::options::FilterMode].
+    pub fn filter_mode(&self) -> crate::options::FilterMode {
+        self.filter_mode
     }
 
     /// Special offset to add to y co-ordinates, only when drawing to screen.

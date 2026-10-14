@@ -28,10 +28,14 @@ use std::time::{Duration, Instant};
 
 #[derive(Default)]
 pub(super) struct State {
-    texture_framebuffer: Option<(GLuint, GLuint)>,
+    /// Texture, framebuffer and size (width, height) of the render target.
+    texture_framebuffer: Option<(GLuint, GLuint, (u32, u32))>,
     recomposite_next: Option<Instant>,
     fps_counter: Option<FpsCounter>,
     misc_gl_objects: Option<MiscGlObjects>,
+    /// Whether layer textures are sampled with nearest-neighbour filtering
+    /// (see [crate::options::FilterMode]).
+    layer_nearest: bool,
 }
 
 struct MiscGlObjects {
@@ -140,8 +144,16 @@ pub fn recomposite_if_necessary(env: &mut Environment, force: bool) -> Option<In
         msg![env; screen bounds]
     };
     let scale_hack: u32 = env.options.scale_hack.get();
-    let fb_width = screen_bounds.size.width as u32 * scale_hack;
-    let fb_height = screen_bounds.size.height as u32 * scale_hack;
+    // For sharp filtering, the screen is rendered at a whole multiple of its
+    // size (with nearest-neighbour filtering of the layers) before the final
+    // bilinear scaling. This is invisible to the app.
+    let upscale = env.window().sharp_upscale_factor();
+    let filter_mode = env.window().filter_mode();
+    let layer_nearest = filter_mode != crate::options::FilterMode::Smooth;
+    let final_nearest = filter_mode == crate::options::FilterMode::Pixel;
+    env.framework_state.core_animation.composition.layer_nearest = layer_nearest;
+    let fb_width = screen_bounds.size.width as u32 * scale_hack * upscale;
+    let fb_height = screen_bounds.size.height as u32 * scale_hack * upscale;
     let present_frame_args = (
         env.window().viewport(),
         env.window().rotation_matrix(),
@@ -160,7 +172,26 @@ pub fn recomposite_if_necessary(env: &mut Environment, force: bool) -> Option<In
     // Set up GL objects needed for render-to-texture. We could draw directly
     // to the screen instead, but this way we can reuse the code for scaling and
     // rotating the screen and drawing the virtual cursor.
-    let texture = if let Some((texture, framebuffer)) = env
+    // The render target needs replacing if its size changed (e.g. the window
+    // was resized or rotated while using sharp filtering).
+    if let Some((texture, framebuffer, size)) = env
+        .framework_state
+        .core_animation
+        .composition
+        .texture_framebuffer
+    {
+        if size != (fb_width, fb_height) {
+            unsafe {
+                gles.DeleteFramebuffersOES(1, &framebuffer);
+                gles.DeleteTextures(1, &texture);
+            }
+            env.framework_state
+                .core_animation
+                .composition
+                .texture_framebuffer = None;
+        }
+    }
+    let texture = if let Some((texture, framebuffer, _)) = env
         .framework_state
         .core_animation
         .composition
@@ -216,7 +247,7 @@ pub fn recomposite_if_necessary(env: &mut Environment, force: bool) -> Option<In
         env.framework_state
             .core_animation
             .composition
-            .texture_framebuffer = Some((texture, framebuffer));
+            .texture_framebuffer = Some((texture, framebuffer, (fb_width, fb_height)));
         texture
     };
 
@@ -366,6 +397,13 @@ pub fn recomposite_if_necessary(env: &mut Environment, force: bool) -> Option<In
     // default framebuffer (0) so we need to unbind our internal framebuffer.
     unsafe {
         gles.BindTexture(gles11::TEXTURE_2D, texture);
+        let filter = if final_nearest {
+            gles11::NEAREST
+        } else {
+            gles11::LINEAR
+        };
+        gles.TexParameteri(gles11::TEXTURE_2D, gles11::TEXTURE_MIN_FILTER, filter as _);
+        gles.TexParameteri(gles11::TEXTURE_2D, gles11::TEXTURE_MAG_FILTER, filter as _);
         gles.BindFramebufferOES(gles11::FRAMEBUFFER_OES, 0);
         present_frame(
             gles.as_mut(),
@@ -594,6 +632,14 @@ unsafe fn composite_layer_recursive(
 
     // Draw texture, if any
     if need_texture {
+        let filter = if env.framework_state.core_animation.composition.layer_nearest {
+            gles11::NEAREST
+        } else {
+            gles11::LINEAR
+        };
+        gles.TexParameteri(gles11::TEXTURE_2D, gles11::TEXTURE_MIN_FILTER, filter as _);
+        gles.TexParameteri(gles11::TEXTURE_2D, gles11::TEXTURE_MAG_FILTER, filter as _);
+
         let misc = env
             .framework_state
             .core_animation
