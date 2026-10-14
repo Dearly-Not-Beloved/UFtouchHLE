@@ -311,11 +311,14 @@ pub fn recomposite_if_necessary(env: &mut Environment, force: bool) -> Option<In
                 texture,
                 0,
             );
-            assert_eq!(gles.GetError(), 0);
-            assert_eq!(
-                gles.CheckFramebufferStatusOES(gles11::FRAMEBUFFER_OES),
-                gles11::FRAMEBUFFER_COMPLETE_OES
-            );
+            warn_on_gl_error(gles.as_mut(), "creating the render target");
+            let status = gles.CheckFramebufferStatusOES(gles11::FRAMEBUFFER_OES);
+            if status != gles11::FRAMEBUFFER_COMPLETE_OES {
+                log!(
+                    "Warning: compositor render target is incomplete ({:#x})",
+                    status
+                );
+            }
         }
         env.framework_state
             .core_animation
@@ -464,7 +467,7 @@ pub fn recomposite_if_necessary(env: &mut Environment, force: bool) -> Option<In
         gles.LoadIdentity();
         gles.BindBuffer(gles11::ARRAY_BUFFER, 0);
         gles.BindBuffer(gles11::ELEMENT_ARRAY_BUFFER, 0);
-        assert_eq!(gles.GetError(), 0);
+        warn_on_gl_error(gles.as_mut(), "compositing");
     }
 
     // Present our rendered frame (bound to TEXTURE_2D). This copies it to the
@@ -951,6 +954,18 @@ unsafe fn upload_slice<T: SafeWrite>(
         data.as_ptr() as *const _,
         usage,
     )
+}
+
+/// Log OpenGL ES errors in the compositor. They used to be fatal, but they
+/// don't have to be, and on Android the OpenGL ES context can be in a bad
+/// state after touchHLE returns from the background. Crashing then would lose
+/// the app's unsaved progress, whereas a glitch might only last one frame.
+unsafe fn warn_on_gl_error(gles: &mut dyn GLES, doing: &str) {
+    let error = gles.GetError();
+    if error != 0 {
+        log!("Warning: OpenGL ES error {:#x} while {}", error, doing);
+        debug_assert!(false, "OpenGL ES error in compositor");
+    }
 }
 
 /// [upload_rgba8_pixels] for a layer's texture (which must be bound), reusing
