@@ -23,7 +23,7 @@ use super::cg_image::{
 };
 use super::{CGFloat, CGPoint, CGRect};
 use crate::dyld::{export_c_func, FunctionExports};
-use crate::image::{gamma_decode, gamma_encode, Image};
+use crate::image::{gamma_decode, gamma_decode_u8, gamma_encode, Image};
 use crate::mem::{GuestUSize, Mem, MutVoidPtr, Ptr};
 use crate::objc::ObjC;
 use crate::Environment;
@@ -393,12 +393,6 @@ fn pixel_offsets_big_endian(data: &CGBitmapContextData) -> (usize, usize, usize,
         }
         _ => unimplemented!(),
     }
-}
-
-/// [gamma_decode] for each 8-bit value, so decoding doesn't need `powf`.
-fn gamma_decode_u8(v: u8) -> f32 {
-    static TABLE: std::sync::OnceLock<[f32; 256]> = std::sync::OnceLock::new();
-    TABLE.get_or_init(|| std::array::from_fn(|i| gamma_decode(i as f32 / 255.0)))[v as usize]
 }
 
 /// Equivalent to `(gamma_encode(v) * 255.0) as u8`, but without `powf`: finds

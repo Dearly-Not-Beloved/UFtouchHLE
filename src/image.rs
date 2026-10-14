@@ -144,9 +144,9 @@ impl Image {
             let rgba = &self.pixels()[y_usize * width * 4 + x_usize * 4..][..4];
             let [r, g, b, a]: [u8; 4] = rgba.try_into().unwrap();
             Some((
-                gamma_decode(r as f32 / 255.0),
-                gamma_decode(g as f32 / 255.0),
-                gamma_decode(b as f32 / 255.0),
+                gamma_decode_u8(r),
+                gamma_decode_u8(g),
+                gamma_decode_u8(b),
                 a as f32 / 255.0, // alpha is linear
             ))
         } else {
@@ -244,6 +244,12 @@ pub fn gamma_encode(intensity: f32) -> f32 {
 pub fn gamma_decode(intensity: f32) -> f32 {
     // TODO: This doesn't implement the linear section near zero.
     intensity.powf(2.2)
+}
+/// Equivalent to `gamma_decode(v as f32 / 255.0)`, but using a lookup table
+/// rather than `powf`, since this is done for every pixel drawn.
+pub fn gamma_decode_u8(v: u8) -> f32 {
+    static TABLE: std::sync::OnceLock<[f32; 256]> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| std::array::from_fn(|i| gamma_decode(i as f32 / 255.0)))[v as usize]
 }
 
 /// Decodes Imagination Technologies' PVRTC texture compression format to
