@@ -11,6 +11,7 @@ package org.touchhle.android;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.SystemClock;
+import android.view.Display;
 import android.view.WindowManager;
 import android.widget.Toast;
 
@@ -32,7 +33,32 @@ public class MainActivity extends SDLActivity {
                 WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
             getWindow().setAttributes(attrs);
         }
+        preferSixtyHertz();
         super.onCreate(savedInstanceState);
+    }
+
+    // iPhone OS apps never run at more than 60 frames per second, and
+    // touchHLE composites the screen at 60Hz. On phones with a 90Hz, 120Hz
+    // or 144Hz display, that makes frames take an uneven number of refreshes
+    // (stutter) and wastes battery, so ask for a 60Hz display mode with the
+    // same resolution, if there is one.
+    @SuppressWarnings("deprecation")
+    private void preferSixtyHertz() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+            return;
+        }
+        Display display = getWindowManager().getDefaultDisplay();
+        Display.Mode current = display.getMode();
+        for (Display.Mode mode : display.getSupportedModes()) {
+            if (mode.getPhysicalWidth() == current.getPhysicalWidth()
+                && mode.getPhysicalHeight() == current.getPhysicalHeight()
+                && Math.abs(mode.getRefreshRate() - 60.0f) < 1.0f) {
+                WindowManager.LayoutParams attrs = getWindow().getAttributes();
+                attrs.preferredDisplayModeId = mode.getModeId();
+                getWindow().setAttributes(attrs);
+                return;
+            }
+        }
     }
 
     // By default, the back button/gesture finishes the activity, which makes
