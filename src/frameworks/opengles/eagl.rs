@@ -70,6 +70,27 @@ pub(super) struct EAGLContextHostObject {
 }
 impl HostObject for EAGLContextHostObject {}
 
+/// Identifies the sharegroup of an EAGLContext. Contexts in the same
+/// sharegroup share their renderbuffer drawable bindings.
+pub(super) fn sharegroup_key(host_obj: &EAGLContextHostObject) -> usize {
+    Rc::as_ptr(&host_obj.renderbuffer_drawable_bindings) as *const () as usize
+}
+
+/// Sizes of the textures [present_renderbuffer] keeps between frames.
+#[derive(Default, Copy, Clone)]
+pub(super) struct PresentTextureSizes {
+    frame: Option<(GLsizei, GLsizei)>,
+    upscaled: Option<(GLsizei, GLsizei)>,
+}
+
+// Names of the objects [present_renderbuffer] keeps between frames, rather
+// than creating new ones every frame (which is slow on some GPUs). They're in
+// the app's context, so very high names are used: some apps don't call
+// glGenTextures and just use small numbers as names.
+const PRESENT_FRAME_TEXTURE: GLuint = 0xFFFF_FF01;
+const PRESENT_UPSCALED_TEXTURE: GLuint = 0xFFFF_FF02;
+const PRESENT_UPSCALED_FRAMEBUFFER: GLuint = 0xFFFF_FF03;
+
 pub const CLASSES: ClassExports = objc_classes! {
 
 (env, this, _cmd);
@@ -190,6 +211,10 @@ pub const CLASSES: ClassExports = objc_classes! {
         env.mem.free(guest_buf);
     }
     if Rc::strong_count(&host_obj.renderbuffer_drawable_bindings) == 1 {
+        env.framework_state
+            .opengles
+            .present_texture_sizes
+            .remove(&sharegroup_key(host_obj));
         let bindings = std::mem::take(&mut host_obj.renderbuffer_drawable_bindings);
         for (_renderbuffer, drawable) in bindings.take() {
             release(env, drawable);
@@ -553,6 +578,23 @@ unsafe fn present_renderbuffer(env: &mut Environment) {
         env.window.as_ref().unwrap().filter_mode() == crate::options::FilterMode::Pixel;
     let rotation_matrix = env.window.as_mut().unwrap().rotation_matrix();
     let virtual_cursor_visible_at = env.window.as_mut().unwrap().virtual_cursor_visible_at();
+    let sharp_upscale = env.window.as_ref().unwrap().sharp_upscale_factor();
+
+    let sharegroup = {
+        let ctx = env
+            .framework_state
+            .opengles
+            .current_ctx_for_thread(env.current_thread)
+            .unwrap();
+        sharegroup_key(env.objc.borrow::<EAGLContextHostObject>(ctx))
+    };
+    let mut sizes = env
+        .framework_state
+        .opengles
+        .present_texture_sizes
+        .get(&sharegroup)
+        .copied()
+        .unwrap_or_default();
 
     let gles_ctx = super::get_thread_context(
         &mut env.framework_state.opengles,
@@ -588,20 +630,26 @@ unsafe fn present_renderbuffer(env: &mut Environment) {
         renderbuffer,
     );
 
-    // Create a texture with a copy of the pixels in the framebuffer
-    let mut texture: GLuint = 0;
-    gles.GenTextures(1, &mut texture);
+    // Copy the pixels in the framebuffer to a texture. The texture is reused
+    // if it has the right size (glIsTexture() checks it still exists).
+    let texture = PRESENT_FRAME_TEXTURE;
+    let reuse = sizes.frame == Some((width, height)) && gles.IsTexture(texture) != 0;
     gles.BindTexture(gles11::TEXTURE_2D, texture);
-    gles.CopyTexImage2D(
-        gles11::TEXTURE_2D,
-        0,
-        gles11::RGB as _,
-        0,
-        0,
-        width,
-        height,
-        0,
-    );
+    if reuse {
+        gles.CopyTexSubImage2D(gles11::TEXTURE_2D, 0, 0, 0, 0, 0, width, height);
+    } else {
+        gles.CopyTexImage2D(
+            gles11::TEXTURE_2D,
+            0,
+            gles11::RGB as _,
+            0,
+            0,
+            width,
+            height,
+            0,
+        );
+        sizes.frame = Some((width, height));
+    }
     // The texture will not have any mip levels so we must ensure the filter
     // does not use them, else rendering will fail.
     gles.TexParameteri(
@@ -691,11 +739,83 @@ unsafe fn present_renderbuffer(env: &mut Environment) {
         tex_env_mode_arr.as_ptr().cast(),
     );
 
+    // For sharp filtering, first scale the frame up by a whole number with
+    // nearest-neighbour filtering, then draw that with bilinear filtering
+    // (see crate::options::FilterMode::Sharp).
+    if sharp_upscale > 1 {
+        // Keep the intermediate texture a reasonable size.
+        let upscale = (sharp_upscale as GLsizei)
+            .min(4096 / width.max(1))
+            .min(4096 / height.max(1))
+            .max(1);
+        let (up_width, up_height) = (width * upscale, height * upscale);
+        gles.TexParameteri(
+            gles11::TEXTURE_2D,
+            gles11::TEXTURE_MIN_FILTER,
+            gles11::NEAREST as _,
+        );
+        gles.TexParameteri(
+            gles11::TEXTURE_2D,
+            gles11::TEXTURE_MAG_FILTER,
+            gles11::NEAREST as _,
+        );
+
+        let up_texture = PRESENT_UPSCALED_TEXTURE;
+        let reuse =
+            sizes.upscaled == Some((up_width, up_height)) && gles.IsTexture(up_texture) != 0;
+        gles.BindTexture(gles11::TEXTURE_2D, up_texture);
+        if !reuse {
+            gles.TexImage2D(
+                gles11::TEXTURE_2D,
+                0,
+                gles11::RGBA as _,
+                up_width,
+                up_height,
+                0,
+                gles11::RGBA,
+                gles11::UNSIGNED_BYTE,
+                std::ptr::null(),
+            );
+            sizes.upscaled = Some((up_width, up_height));
+        }
+        gles.TexParameteri(
+            gles11::TEXTURE_2D,
+            gles11::TEXTURE_MIN_FILTER,
+            gles11::LINEAR as _,
+        );
+        gles.TexParameteri(
+            gles11::TEXTURE_2D,
+            gles11::TEXTURE_MAG_FILTER,
+            gles11::LINEAR as _,
+        );
+        gles.BindFramebufferOES(gles11::FRAMEBUFFER_OES, PRESENT_UPSCALED_FRAMEBUFFER);
+        gles.FramebufferTexture2DOES(
+            gles11::FRAMEBUFFER_OES,
+            gles11::COLOR_ATTACHMENT0_OES,
+            gles11::TEXTURE_2D,
+            up_texture,
+            0,
+        );
+
+        gles.BindTexture(gles11::TEXTURE_2D, texture);
+        present_frame(
+            gles,
+            (0, 0, up_width as u32, up_height as u32),
+            crate::matrix::Matrix::identity(),
+            None,
+        );
+
+        gles.BindFramebufferOES(gles11::FRAMEBUFFER_OES, 0);
+        gles.BindTexture(gles11::TEXTURE_2D, up_texture);
+    }
+
     // Draw the quad
     present_frame(gles, viewport, rotation_matrix, virtual_cursor_visible_at);
 
-    // Clean up the texture
-    gles.DeleteTextures(1, &texture);
+    env.framework_state
+        .opengles
+        .present_texture_sizes
+        .insert(sharegroup, sizes);
 
     // Restore all the state saved before rendering
     for (&is_enabled, info) in old_arrays.iter().zip(gles1_on_gl2::ARRAYS.iter()) {
