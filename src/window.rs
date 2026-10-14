@@ -1076,6 +1076,14 @@ impl Window {
         loop {
             std::thread::sleep(Duration::from_millis(50));
             self.poll_for_events(options);
+            // Another going-into-the-background event while already paused
+            // (which shouldn't happen, but it would otherwise stop event
+            // polling, so touchHLE would never notice it's back in the
+            // foreground, or pause again right after resuming).
+            if matches!(self.high_priority_event, Some(Event::AppWillResignActive)) {
+                self.high_priority_event = None;
+                self.enable_event_polling = true;
+            }
             if matches!(self.high_priority_event, Some(Event::AppWillTerminate))
                 || self.event_queue.iter().any(|e| matches!(e, Event::Quit))
             {
