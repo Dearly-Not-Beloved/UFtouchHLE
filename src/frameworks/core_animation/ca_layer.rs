@@ -485,8 +485,13 @@ pub const CLASSES: ClassExports = objc_classes! {
     };
 
     CGContextTranslateCTM(env, cg_context, -origin.x, -origin.y);
-    // TODO: move clearing to UIKit (clearsContextBeforeDrawing)?
-    CGContextClearRect(env, cg_context, CGRect { origin, size });
+    // UIView clears the context itself if clearsContextBeforeDrawing is set
+    // (see its drawLayer:inContext:), so don't do it twice, and respect that
+    // property being unset.
+    let ui_view_class = env.objc.get_known_class("UIView", &mut env.mem);
+    if !env.objc.class_is_subclass_of(delegate_class, ui_view_class) {
+        CGContextClearRect(env, cg_context, CGRect { origin, size });
+    }
     () = msg![env; delegate drawLayer:this inContext:cg_context];
     CGContextTranslateCTM(env, cg_context, origin.x, origin.y);
 }
