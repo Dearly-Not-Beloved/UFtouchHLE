@@ -154,6 +154,8 @@ struct AppPickerDelegateHostObject {
     analog_stick_tilt_controls: Option<bool>,
     network: Option<bool>,
     fullscreen: Option<bool>,
+    /// Button tapped among the quick options that use `quickOptionTapped:`.
+    option_tapped: id,
     /// Set when touchHLE returns from the background (e.g. after using the
     /// file manager), so the app list can be reloaded.
     became_active: bool,
@@ -244,6 +246,10 @@ const CLASSES: ClassExports = objc_classes! {
 - (())fullscreen:(id)switch { // UISwitch*
     let switch_state: bool = msg![env; switch isOn];
     env.objc.borrow_mut::<AppPickerDelegateHostObject>(this).fullscreen = Some(switch_state);
+}
+
+- (())quickOptionTapped:(id)sender { // UIButton*
+    env.objc.borrow_mut::<AppPickerDelegateHostObject>(this).option_tapped = sender;
 }
 
 - (())applicationDidBecomeActive:(id)_application {
@@ -576,6 +582,8 @@ fn app_picker_inner(
     let mut quick_options_scale_hack: Option<NonZeroU32> = None;
     let mut quick_options_fullscreen: Option<()> = None;
     let mut quick_options_orientation: Option<DeviceOrientation> = None;
+    let mut quick_options_aspect: usize = 0;
+    let mut quick_options_filter: usize = 0;
     let mut quick_options_analog_stick_tilt_controls = true;
     let mut quick_options_network = false;
 
@@ -622,6 +630,17 @@ fn app_picker_inner(
         quick_options_orientation,
     );
 
+    update_quick_option_buttons(
+        env,
+        &quick_options_stuff.aspect_buttons,
+        quick_options_aspect,
+    );
+    update_quick_option_buttons(
+        env,
+        &quick_options_stuff.filter_buttons,
+        quick_options_filter,
+    );
+
     () = msg![env; window makeKeyAndVisible];
 
     let main_run_loop: id = msg_class![env; NSRunLoop mainRunLoop];
@@ -634,6 +653,26 @@ fn app_picker_inner(
             log!("Reloading app list.");
             apps = load_apps();
             show_apps(env, &mut icon_grid_stuff, message_label, &mut apps);
+            continue;
+        }
+        let host_obj = env.objc.borrow_mut::<AppPickerDelegateHostObject>(delegate);
+        let option_tapped = std::mem::take(&mut host_obj.option_tapped);
+        if option_tapped != nil {
+            if let Some(i) = quick_options_stuff
+                .aspect_buttons
+                .iter()
+                .position(|&b| b == option_tapped)
+            {
+                quick_options_aspect = i;
+                update_quick_option_buttons(env, &quick_options_stuff.aspect_buttons, i);
+            } else if let Some(i) = quick_options_stuff
+                .filter_buttons
+                .iter()
+                .position(|&b| b == option_tapped)
+            {
+                quick_options_filter = i;
+                update_quick_option_buttons(env, &quick_options_stuff.filter_buttons, i);
+            }
             continue;
         }
         let host_obj = env.objc.borrow_mut::<AppPickerDelegateHostObject>(delegate);
@@ -787,6 +826,12 @@ fn app_picker_inner(
             }
             .to_string(),
         );
+    }
+    if let Some(value) = QUICK_ASPECT_VALUES[quick_options_aspect] {
+        option_args.push(format!("--aspect={}", value));
+    }
+    if let Some(value) = QUICK_FILTER_VALUES[quick_options_filter] {
+        option_args.push(format!("--filter={}", value));
     }
     if let Some(()) = quick_options_fullscreen {
         option_args.push("--fullscreen".to_string());
@@ -1413,7 +1458,15 @@ struct QuickOptionsStuff {
     main_view: id,
     scale_hack_buttons: [id; 5],
     orientation_buttons: [id; 4],
+    aspect_buttons: [id; 4],
+    filter_buttons: [id; 3],
 }
+
+/// `--aspect=` values for the quick options buttons, in order.
+const QUICK_ASPECT_VALUES: [Option<&str>; 4] =
+    [None, Some("stretch"), Some("fill"), Some("integer")];
+/// `--filter=` values for the quick options buttons, in order.
+const QUICK_FILTER_VALUES: [Option<&str>; 3] = [None, Some("sharp"), Some("pixel")];
 
 fn setup_quick_options(
     env: &mut Environment,
@@ -1492,6 +1545,19 @@ fn setup_quick_options(
             ("←", "orientationLandscapeLeft"),
             ("→", "orientationLandscapeRight"),
             ("↓", "orientationPortraitUpsideDown"),
+        ]),
+        RowKind::Label("画面比例"),
+        RowKind::Buttons(&[
+            ("原始", "quickOptionTapped:"),
+            ("拉伸", "quickOptionTapped:"),
+            ("填满", "quickOptionTapped:"),
+            ("整数倍", "quickOptionTapped:"),
+        ]),
+        RowKind::Label("画面滤镜"),
+        RowKind::Buttons(&[
+            ("平滑", "quickOptionTapped:"),
+            ("锐利", "quickOptionTapped:"),
+            ("像素", "quickOptionTapped:"),
         ]),
         RowKind::Label("允许联网"),
         RowKind::Switch("network:", false),
@@ -1576,5 +1642,7 @@ fn setup_quick_options(
         main_view,
         scale_hack_buttons: button_rows[0][..].try_into().unwrap(),
         orientation_buttons: button_rows[1][..].try_into().unwrap(),
+        aspect_buttons: button_rows[2][..].try_into().unwrap(),
+        filter_buttons: button_rows[3][..].try_into().unwrap(),
     }
 }
