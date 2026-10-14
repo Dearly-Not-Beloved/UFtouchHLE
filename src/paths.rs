@@ -152,14 +152,16 @@ pub fn user_data_base_path() -> Cow<'static, Path> {
 /// that [user_data_base_path] represents.
 pub fn url_for_opening_user_data_dir() -> Result<String, String> {
     if std::env::consts::OS == "android" {
-        // See DocumentsProvider.kt, app/build.gradle and AndroidManifest.xml
+        // Handled by FileManagerActivity, which opens a file manager for the
+        // files of DocumentsProvider. See also app/build.gradle and
+        // AndroidManifest.xml.
         let brand = match crate::branding() {
             // The package name kept the old "unofficial" suffix.
             "UF" => "unofficial".to_string(),
             brand => brand.to_lowercase(),
         };
         Ok(format!(
-            "content://org.touchhle.android{}{}.provider/root/root",
+            "org.touchhle.android{}{}.files://open",
             if brand.is_empty() { "" } else { "." },
             brand
         ))
