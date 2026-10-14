@@ -334,6 +334,9 @@ pub struct Window {
     /// Whether the window is minimized, or (on Android) touchHLE is in the
     /// background. Nothing is drawn then, as the surface may be gone.
     minimized: bool,
+    /// Set when the window's contents may have been lost or need redrawing
+    /// (e.g. it was exposed or resized), see [Window::take_needs_redraw].
+    needs_redraw: std::cell::Cell<bool>,
     enable_event_polling: bool,
     #[cfg(target_os = "macos")]
     max_height: u32,
@@ -493,6 +496,7 @@ impl Window {
             last_polled: Instant::now() - Duration::from_secs(1),
             high_priority_event: None,
             minimized: false,
+            needs_redraw: std::cell::Cell::new(true),
             enable_event_polling: true,
             #[cfg(target_os = "macos")]
             max_height,
@@ -854,6 +858,18 @@ impl Window {
                         WE::Minimized | WE::Hidden => self.minimized = true,
                         WE::Restored | WE::Shown | WE::Maximized => self.minimized = false,
                         _ => (),
+                    }
+                    if matches!(
+                        win_event,
+                        WE::Restored
+                            | WE::Shown
+                            | WE::Maximized
+                            | WE::Exposed
+                            | WE::Resized(..)
+                            | WE::SizeChanged(..)
+                            | WE::FocusGained
+                    ) {
+                        self.needs_redraw.set(true);
                     }
                     continue;
                 }
@@ -1380,6 +1396,13 @@ impl Window {
     /// touchHLE is in the background.
     pub fn is_minimized(&self) -> bool {
         self.minimized
+    }
+
+    /// Whether the window's contents need to be fully redrawn even if the
+    /// frame to be drawn hasn't changed (e.g. because the window was exposed
+    /// or resized). Resets the flag.
+    pub fn take_needs_redraw(&self) -> bool {
+        self.needs_redraw.replace(false)
     }
 
     /// Make the internal OpenGL ES context (for splash screen and UI rendering)

@@ -13,6 +13,7 @@
 use super::ca_eagl_layer::find_fullscreen_eagl_layer;
 use super::ca_layer::CALayerHostObject;
 use crate::frameworks::core_animation::animation;
+use crate::frameworks::core_graphics::cg_affine_transform::CGAffineTransform;
 use crate::frameworks::core_graphics::cg_color::CGColorHostObject;
 use crate::frameworks::core_graphics::{cg_bitmap_context, cg_image, CGFloat, CGRect};
 use crate::gles::gles11_raw as gles11; // constants only
@@ -47,6 +48,12 @@ pub(super) struct State {
     /// Textures of deallocated layers, deleted at the next composition (when
     /// the right GL context is current).
     textures_to_delete: Vec<GLuint>,
+    /// Fingerprint (see [frame_fingerprint]) of the last composited frame,
+    /// used to skip compositing frames that would be identical. `None` if the
+    /// window might not show that frame any more.
+    last_frame_fingerprint: Option<u64>,
+    /// When a frame was last actually composited.
+    last_composited: Option<Instant>,
 }
 
 /// Called when a layer with a texture is deallocated.
@@ -91,17 +98,29 @@ pub fn recomposite_if_necessary(env: &mut Environment, force: bool) -> Option<In
     let windows = env.framework_state.uikit.ui_view.ui_window.windows.clone();
     if !windows.iter().any(|&window| !msg![env; window isHidden]) {
         log_dbg!("No visible windows, skipping composition");
+        env.framework_state
+            .core_animation
+            .composition
+            .last_frame_fingerprint = None;
         return None;
     }
 
     if env.window.as_ref().is_some_and(|w| w.is_minimized()) {
         // Nothing would be shown, and on Android the surface may be gone.
+        env.framework_state
+            .core_animation
+            .composition
+            .last_frame_fingerprint = None;
         return None;
     }
 
     if find_fullscreen_eagl_layer(env) != nil {
         // No composition done, EAGLContext will present directly.
         log_dbg!("Using CAEAGLLayer fast path, skipping composition");
+        env.framework_state
+            .core_animation
+            .composition
+            .last_frame_fingerprint = None;
         return None;
     }
 
@@ -140,16 +159,6 @@ pub fn recomposite_if_necessary(env: &mut Environment, force: bool) -> Option<In
         .composition
         .recomposite_next = new_recomposite_next;
 
-    // Count only frames that are actually composited (not early returns).
-    if env.options.print_fps {
-        env.framework_state
-            .core_animation
-            .composition
-            .fps_counter
-            .get_or_insert_with(FpsCounter::start)
-            .count_frame(format_args!("Core Animation compositor"));
-    }
-
     let window_layers: Vec<id> = windows
         .into_iter()
         .map(|window| {
@@ -182,6 +191,41 @@ pub fn recomposite_if_necessary(env: &mut Environment, force: bool) -> Option<In
         env.window().rotation_matrix(),
         env.window().virtual_cursor_visible_at(),
     );
+
+    // If nothing has changed since the last frame, compositing again would
+    // produce an identical image, so skip it. Many apps only redraw a few
+    // times per second, so this saves a lot of GPU work (and battery).
+    let fingerprint = frame_fingerprint(
+        &env.objc,
+        &window_layers,
+        (fb_width, fb_height, filter_mode as u8),
+        &present_frame_args,
+    );
+    let needs_redraw = env.window().take_needs_redraw();
+    let composition = &mut env.framework_state.core_animation.composition;
+    // As a precaution against any change that the fingerprint misses, never
+    // skip compositing for more than a second.
+    let recently_composited = composition
+        .last_composited
+        .is_some_and(|last| now.duration_since(last) < Duration::from_secs(1));
+    if !force
+        && !needs_redraw
+        && recently_composited
+        && fingerprint.is_some()
+        && fingerprint == composition.last_frame_fingerprint
+    {
+        log_dbg!("Nothing changed, skipping composition");
+        return new_recomposite_next;
+    }
+    composition.last_composited = Some(now);
+
+    // Count only frames that are actually composited (not skipped).
+    if env.options.print_fps {
+        composition
+            .fps_counter
+            .get_or_insert_with(FpsCounter::start)
+            .count_frame(format_args!("Core Animation compositor"));
+    }
 
     // TODO: draw status bar if it's not hidden
 
@@ -391,6 +435,7 @@ pub fn recomposite_if_necessary(env: &mut Environment, force: bool) -> Option<In
 
     // Assumes the windows in the list are ordered back-to-front.
     // TODO: this may not be correct once we support windowLevel.
+    let window_layers_for_fingerprint = window_layers.clone();
     for root_layer in window_layers {
         // Here's where the actual drawing happens
         unsafe {
@@ -446,7 +491,109 @@ pub fn recomposite_if_necessary(env: &mut Environment, force: bool) -> Option<In
 
     animation_state.update_started_and_finished_animations(env);
 
+    // Compositing updates the layers' textures, so the fingerprint to compare
+    // the next frame with must be taken afterwards.
+    env.framework_state
+        .core_animation
+        .composition
+        .last_frame_fingerprint = frame_fingerprint(
+        &env.objc,
+        &window_layers_for_fingerprint,
+        (fb_width, fb_height, filter_mode as u8),
+        &present_frame_args,
+    );
+
     new_recomposite_next
+}
+
+/// Viewport, rotation matrix and virtual cursor state, as passed to
+/// [present_frame].
+type PresentFrameArgs = ((i32, i32, u32, u32), Matrix<2>, Option<(f32, f32, bool)>);
+
+/// Compute a hash of everything that determines what a composited frame looks
+/// like: the layer trees' properties that [composite_layer_recursive] uses,
+/// whether their textures need updating, and the presentation parameters.
+/// Returns [None] if the frame must be composited regardless, because there
+/// are animations in progress.
+fn frame_fingerprint(
+    objc: &ObjC,
+    window_layers: &[id],
+    target: (u32, u32, u8),
+    present_frame_args: &PresentFrameArgs,
+) -> Option<u64> {
+    use std::hash::{Hash, Hasher};
+
+    fn hash_f32s(hasher: &mut crate::fast_hash::FxHasher, values: &[f32]) {
+        for value in values {
+            value.to_bits().hash(hasher);
+        }
+    }
+
+    fn traverse(objc: &ObjC, layer: id, hasher: &mut crate::fast_hash::FxHasher) -> Option<()> {
+        let host_obj = objc.borrow::<CALayerHostObject>(layer);
+        if !host_obj.animations.is_empty() || !host_obj.anonymous_animations.is_empty() {
+            return None;
+        }
+        layer.hash(hasher);
+        host_obj.hidden.hash(hasher);
+        if host_obj.hidden {
+            return Some(());
+        }
+        let CGRect { origin, size } = host_obj.bounds;
+        let CGAffineTransform { a, b, c, d, tx, ty } = host_obj.affine_transform;
+        hash_f32s(
+            hasher,
+            &[
+                origin.x,
+                origin.y,
+                size.width,
+                size.height,
+                host_obj.position.x,
+                host_obj.position.y,
+                host_obj.anchor_point.x,
+                host_obj.anchor_point.y,
+                a,
+                b,
+                c,
+                d,
+                tx,
+                ty,
+                host_obj.opacity,
+                host_obj.corner_radius,
+            ],
+        );
+        if let Some(color) = &host_obj.background_color {
+            hash_f32s(hasher, &[color.r, color.g, color.b, color.a]);
+        } else {
+            hash_f32s(hasher, &[-1.0]);
+        }
+        host_obj.opaque.hash(hasher);
+        host_obj.contents.hash(hasher);
+        host_obj.cg_context.hash(hasher);
+        host_obj.presented_pixels.is_some().hash(hasher);
+        host_obj.gles_texture.hash(hasher);
+        host_obj.gles_texture_is_up_to_date.hash(hasher);
+        host_obj.sublayers.len().hash(hasher);
+        for &sublayer in &host_obj.sublayers {
+            traverse(objc, sublayer, hasher)?;
+        }
+        Some(())
+    }
+
+    let mut hasher = crate::fast_hash::FxHasher::default();
+    target.hash(&mut hasher);
+    let (viewport, rotation_matrix, virtual_cursor) = present_frame_args;
+    viewport.hash(&mut hasher);
+    hash_f32s(&mut hasher, &rotation_matrix.columns().concat());
+    if let &Some((x, y, pressed)) = virtual_cursor {
+        hash_f32s(&mut hasher, &[x, y]);
+        pressed.hash(&mut hasher);
+    }
+    window_layers.len().hash(&mut hasher);
+    for &layer in window_layers {
+        traverse(objc, layer, &mut hasher)?;
+    }
+    Some(hasher.finish())
 }
 
 /// Call `displayIfNeeded` on all relevant layers in the tree, so their bitmaps
