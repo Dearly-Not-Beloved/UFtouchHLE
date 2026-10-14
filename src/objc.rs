@@ -21,7 +21,6 @@
 use crate::dyld::{export_c_func, ConstantExports, FunctionExports, HostConstant, HostDylib};
 use crate::objc::messages::ThreadInitializer;
 use crate::MutexId;
-use std::collections::HashMap;
 
 mod classes;
 mod messages;
@@ -66,7 +65,7 @@ pub type NSZonePtr = crate::mem::MutVoidPtr;
 /// Main type holding Objective-C runtime state.
 pub struct ObjC {
     /// Known selectors (interned method name strings).
-    selectors: HashMap<String, SEL>,
+    selectors: crate::fast_hash::FastHashMap<String, SEL>,
 
     /// Mapping of known (guest) object pointers to their host objects.
     ///
@@ -76,7 +75,7 @@ pub struct ObjC {
     /// Known classes.
     ///
     /// Look at the `isa` to get the metaclass for a class.
-    classes: HashMap<String, Class>,
+    classes: crate::fast_hash::FastHashMap<String, Class>,
 
     /// Mutexes used in @synchronized blocks (objc_sync_enter/exit).
     sync_mutexes: crate::fast_hash::FastHashMap<id, MutexId>,
@@ -93,9 +92,9 @@ pub struct ObjC {
 impl ObjC {
     pub fn new() -> ObjC {
         ObjC {
-            selectors: HashMap::new(),
+            selectors: Default::default(),
             objects: Default::default(),
-            classes: HashMap::new(),
+            classes: Default::default(),
             sync_mutexes: Default::default(),
             initializer_threads: Default::default(),
             message_type_info: None,
