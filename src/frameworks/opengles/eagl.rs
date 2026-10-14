@@ -586,25 +586,37 @@ unsafe fn read_renderbuffer(gles: &mut dyn GLES, mut pixel_buffer: Vec<u8>) -> (
 /// Draw the frame most recently presented by `context` to the window again,
 /// without swapping the window's buffers, so that the layers on top of it can
 /// be redrawn when the app isn't presenting new frames (see
-/// [crate::frameworks::core_animation::present_overlays]). `context` must be
-/// the current context. Returns false if that isn't possible.
+/// [crate::frameworks::core_animation::present_overlays]). Returns false if
+/// that isn't possible.
 pub fn redraw_last_frame(env: &mut Environment, context: id, quarter_turns: u8) -> bool {
-    if *env
-        .framework_state
-        .opengles
-        .current_ctx_for_thread(env.current_thread)
-        != Some(context)
+    // The context may have been destroyed since.
+    if !env
+        .objc
+        .get_host_object(context)
+        .is_some_and(|host_obj| host_obj.as_any().is::<EAGLContextHostObject>())
     {
         return false;
     }
-    unsafe {
+    // Apps may no longer have the context current (e.g. while paused), so it
+    // is made current temporarily. The OpenGL ES context that is actually
+    // current is synced again before the app next uses OpenGL ES.
+    let previous = env
+        .framework_state
+        .opengles
+        .current_ctx_for_thread(env.current_thread)
+        .replace(context);
+    let result = unsafe {
         present_renderbuffer(
             env,
             quarter_turns,
             /* copy: */ false,
             /* swap: */ false,
         )
-    }
+    };
+    *env.framework_state
+        .opengles
+        .current_ctx_for_thread(env.current_thread) = previous;
+    result
 }
 
 /// Copies the pixels in a renderbuffer bound to `GL_RENDERBUFFER_BINDING_OES`

@@ -301,8 +301,11 @@ fn recomposite_overlays(
     if layer != found.layer {
         return None;
     }
-    if !force && now.duration_since(last_present) < Duration::from_millis(100) {
-        // The app is presenting frames, which also draws the overlays.
+    // If the app has presented a frame in about the last frame interval, the
+    // overlays were drawn with it. Otherwise (the app has stopped presenting
+    // frames, or presents them less often than the overlays change) they are
+    // redrawn here if they changed.
+    if !force && now.duration_since(last_present) < Duration::from_millis(25) {
         return Some(next);
     }
 
