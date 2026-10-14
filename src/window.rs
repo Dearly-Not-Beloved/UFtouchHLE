@@ -857,6 +857,14 @@ impl Window {
                     }
                     continue;
                 }
+                E::RenderDeviceReset { .. } => {
+                    // On Android, SDL sends this if the OpenGL ES context
+                    // couldn't be restored after touchHLE was in the
+                    // background. touchHLE can't recover from that yet, but
+                    // logging it makes such problems much easier to diagnose.
+                    log!("Warning: the OpenGL ES context was lost (render device reset). Graphics may be broken from now on.");
+                    continue;
+                }
                 E::AppDidEnterForeground { .. } => {
                     log!("Received app-did-become-active event.");
                     Event::AppDidBecomeActive

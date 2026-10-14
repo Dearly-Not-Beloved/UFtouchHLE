@@ -3,6 +3,7 @@
 /touchHLE_sandbox
 /touchHLE_apps
 touchHLE_log.txt
+touchHLE_log_previous.txt
 touchHLE_wallpaper.*
 touchHLE_quick_options.txt
 

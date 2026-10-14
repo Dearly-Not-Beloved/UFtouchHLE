@@ -15,7 +15,13 @@ use std::sync::LazyLock;
 /// who don't have access to ADB, so we also write to a log file.
 pub fn get_log_file() -> &'static File {
     static LOG_FILE: LazyLock<File> = LazyLock::new(|| {
-        File::create(crate::paths::user_data_base_path().join("touchHLE_log.txt")).unwrap()
+        let base = crate::paths::user_data_base_path();
+        let path = base.join("touchHLE_log.txt");
+        // Keep the log of the previous run. If touchHLE crashed (especially
+        // on Android, where it's easy to relaunch it straight away), that log
+        // is the one that's needed to find out why.
+        let _ = std::fs::rename(&path, base.join("touchHLE_log_previous.txt"));
+        File::create(path).unwrap()
     });
 
     &LOG_FILE
