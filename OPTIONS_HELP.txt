@@ -20,9 +20,11 @@ View options:
 
     --filter=...
         How the app's screen is filtered when scaled up. One of:
-        - smooth: bilinear filtering (default). Can look blurry.
+        - smooth: bilinear filtering (default, except on Android). Can look
+          blurry.
         - sharp: scale up by a whole number keeping pixels crisp, then smoothly
-          for the rest. Recommended for pixel art on large screens.
+          for the rest. Recommended for pixel art on large screens. This is
+          the default on Android.
         - pixel: nearest-neighbour filtering only. Crisp, but pixels may have
           uneven sizes unless --aspect=integer is used.
         - hq: like sharp, but images the app draws without OpenGL ES (e.g.

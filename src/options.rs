@@ -47,10 +47,9 @@ pub enum AspectMode {
 }
 
 /// How the app's screen is filtered when scaled up.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum FilterMode {
     /// Bilinear filtering: smooth, but blurry for pixel art.
-    #[default]
     Smooth,
     /// "Sharp bilinear": scale up by a whole number with nearest-neighbour
     /// filtering, then bilinear for the rest. Crisp pixels, no uneven pixel
@@ -62,6 +61,27 @@ pub enum FilterMode {
     /// 2D games that use Core Graphics, and UIKit views) are first scaled up
     /// with a pixel art scaling algorithm, rounding off jagged edges.
     Hq,
+}
+
+impl FilterMode {
+    /// The default. Phone screens are typically scaled up by 3× or more,
+    /// where plain bilinear filtering makes iPhone OS apps (especially pixel
+    /// art) look very blurry, so sharp filtering is the default there.
+    pub const DEFAULT: FilterMode = if cfg!(target_os = "android") {
+        FilterMode::Sharp
+    } else {
+        FilterMode::Smooth
+    };
+
+    /// The name used for this mode in `--filter=`.
+    pub fn name(self) -> &'static str {
+        match self {
+            FilterMode::Smooth => "smooth",
+            FilterMode::Sharp => "sharp",
+            FilterMode::Pixel => "pixel",
+            FilterMode::Hq => "hq",
+        }
+    }
 }
 
 /// Struct containing all user-configurable options.
@@ -105,7 +125,7 @@ impl Default for Options {
         Options {
             fullscreen: false,
             aspect_mode: AspectMode::Fit,
-            filter_mode: FilterMode::Smooth,
+            filter_mode: FilterMode::DEFAULT,
             keep_screen_on: false,
             device_family: None,
             initial_orientation: DeviceOrientation::Portrait,

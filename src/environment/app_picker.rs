@@ -28,7 +28,7 @@ use crate::fs::BundleData;
 use crate::image::Image;
 use crate::mem::Ptr;
 use crate::objc::{id, msg, msg_class, nil, objc_classes, release, ClassExports, HostObject};
-use crate::options::Options;
+use crate::options::{FilterMode, Options};
 use crate::paths;
 use crate::window::DeviceOrientation;
 use crate::Environment;
@@ -593,7 +593,10 @@ fn app_picker_inner(
     let mut quick_options_fullscreen: Option<()> = None;
     let mut quick_options_orientation: Option<DeviceOrientation> = None;
     let mut quick_options_aspect: usize = 0;
-    let mut quick_options_filter: usize = 0;
+    let mut quick_options_filter: usize = QUICK_FILTER_VALUES
+        .iter()
+        .position(|&x| x == Some(FilterMode::DEFAULT.name()))
+        .unwrap();
     let mut quick_options_analog_stick_tilt_controls = true;
     let mut quick_options_network = false;
     let mut quick_options_keep_screen_on = false;
@@ -1541,7 +1544,8 @@ struct QuickOptionsStuff {
 const QUICK_ASPECT_VALUES: [Option<&str>; 4] =
     [None, Some("stretch"), Some("fill"), Some("integer")];
 /// `--filter=` values for the quick options buttons, in order.
-const QUICK_FILTER_VALUES: [Option<&str>; 4] = [None, Some("sharp"), Some("pixel"), Some("hq")];
+const QUICK_FILTER_VALUES: [Option<&str>; 4] =
+    [Some("smooth"), Some("sharp"), Some("pixel"), Some("hq")];
 
 fn setup_quick_options(
     env: &mut Environment,
