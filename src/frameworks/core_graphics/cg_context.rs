@@ -375,26 +375,40 @@ fn CGContextSelectFont(
         .unwrap_or("")
         .to_ascii_lowercase();
     let bold = name.contains("bold");
-    let font = if name.contains("courier") || name.contains("mono") {
-        if bold {
-            Font::mono_bold()
-        } else {
-            Font::mono_regular()
-        }
+    let family: u8 = if name.contains("courier") || name.contains("mono") {
+        0
     } else if name.contains("times") || name.contains("georgia") {
-        if bold {
-            Font::serif_bold()
-        } else {
-            Font::serif_regular()
-        }
-    } else if bold {
-        Font::sans_bold()
+        1
     } else {
-        Font::sans_regular()
+        2
     };
-    let font = cg_font::from_font(env, font);
+    // Loading a font is slow (it's read from disk and parsed), and apps may
+    // select a font every time they draw text, so cache them.
+    let font = if let Some(&font) = env
+        .framework_state
+        .core_graphics
+        .selected_fonts
+        .get(&(family, bold))
+    {
+        font
+    } else {
+        let font = match (family, bold) {
+            (0, true) => Font::mono_bold(),
+            (0, false) => Font::mono_regular(),
+            (1, true) => Font::serif_bold(),
+            (1, false) => Font::serif_regular(),
+            (_, true) => Font::sans_bold(),
+            (_, false) => Font::sans_regular(),
+        };
+        // The cache keeps this reference forever.
+        let font = cg_font::from_font(env, font);
+        env.framework_state
+            .core_graphics
+            .selected_fonts
+            .insert((family, bold), font);
+        font
+    };
     CGContextSetFont(env, context, font);
-    CGFontRelease(env, font);
     CGContextSetFontSize(env, context, size);
 }
 

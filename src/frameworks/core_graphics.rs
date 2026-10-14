@@ -49,4 +49,11 @@ pub const DYLIB: crate::dyld::HostDylib = crate::dyld::HostDylib {
 
 pub type CGFloat = f32;
 
+#[derive(Default)]
+pub struct State {
+    /// Fonts used by `CGContextSelectFont`, so they're only loaded once.
+    /// Keyed by (monospace/serif/sans, bold).
+    selected_fonts: std::collections::HashMap<(u8, bool), cg_font::CGFontRef>,
+}
+
 pub use cg_geometry::{CGPoint, CGRect, CGSize};
