@@ -486,6 +486,22 @@ fn app_picker_inner(
         () = msg![env; main_view addSubview:divider];
     }
 
+    // If touchHLE crashed last time, say where to find the log, which is
+    // needed to find out why (and is easily lost by running touchHLE again).
+    if previous_run_crashed() {
+        // Between the header and the icons, where it can't overlap anything.
+        add_label(
+            env,
+            main_view,
+            (8.0, 66.0, app_frame.size.width - 16.0, 13.0),
+            "上次运行出错退出 · 日志：文件管理 › touchHLE_log_previous.txt",
+            9.0,
+            false,
+            WARNING_TEXT_COLOR,
+            UITextAlignmentCenter,
+        );
+    }
+
     // Version label
     {
         let edition = match crate::branding() {
@@ -1226,6 +1242,20 @@ fn update_icon_grid(
 }
 
 const SUBTLE_TEXT_COLOR: (CGFloat, CGFloat, CGFloat, CGFloat) = (0.75, 0.8, 0.9, 1.0);
+const WARNING_TEXT_COLOR: (CGFloat, CGFloat, CGFloat, CGFloat) = (1.0, 0.78, 0.4, 1.0);
+
+/// Whether the log of the previous run (see [crate::log::get_log_file]) shows
+/// that touchHLE crashed.
+fn previous_run_crashed() -> bool {
+    std::fs::read_to_string(paths::user_data_base_path().join("touchHLE_log_previous.txt"))
+        .is_ok_and(|log| {
+            // Written by the panic hook on Android, when a panic happens
+            // while running an app, and when one happens in the app picker.
+            log.contains("Panic at ")
+                || log.contains("Register state immediately after panic")
+                || log.contains("Crash in app picker!")
+        })
+}
 
 #[allow(clippy::too_many_arguments)]
 fn add_label(
