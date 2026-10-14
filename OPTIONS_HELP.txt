@@ -285,6 +285,9 @@ Other options:
 
     --print-fps
         Logs the current framerate (FPS) to the console once per second.
+        For apps that draw with UIKit or Core Graphics, this counts the frames
+        that touchHLE actually draws, which is lower than 60 when the app's
+        content doesn't change on every frame.
 
     --fps-limit=...
         Modify or disable the framerate (FPS) limit.
