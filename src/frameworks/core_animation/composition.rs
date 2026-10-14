@@ -71,6 +71,15 @@ pub(super) struct State {
     overlay_target_fingerprint: Option<u64>,
 }
 
+/// Called when an app presents a frame the slow way (read back from the GPU),
+/// so that [recomposite_overlays] doesn't redraw an older one instead.
+pub fn forget_overlay_present(env: &mut Environment) {
+    env.framework_state
+        .core_animation
+        .composition
+        .last_overlay_present = None;
+}
+
 /// Called after an app presented a frame from a full-screen `CAEAGLLayer`
 /// with overlays (see [present_overlays]).
 pub fn note_overlay_present(env: &mut Environment, layer: id, context: id) {

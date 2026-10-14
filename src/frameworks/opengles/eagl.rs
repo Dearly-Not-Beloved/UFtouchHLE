@@ -303,11 +303,18 @@ pub const CLASSES: ClassExports = objc_classes! {
     }
 
     // The fullscreen layer may have other layers on top of it (overlays).
-    let (fullscreen_layer, quarter_turns, overlays) =
-        match find_fullscreen_eagl_layer_with_overlays(env) {
-            Some(found) => (found.layer, found.quarter_turns, found.overlays),
-            None => (nil, 0, Vec::new()),
-        };
+    // Drawing them composites UIKit layers (and may call the app's drawing
+    // code), which should only happen on the main thread, like normal
+    // composition. Apps that present from another thread use the slow path
+    // in that case.
+    let found = find_fullscreen_eagl_layer_with_overlays(env);
+    let found_layer = found.as_ref().map_or(nil, |found| found.layer);
+    let (fullscreen_layer, quarter_turns, overlays) = match found {
+        Some(found) if found.overlays.is_empty() || env.current_thread == 0 => {
+            (found.layer, found.quarter_turns, found.overlays)
+        }
+        _ => (nil, 0, Vec::new()),
+    };
 
     // Unclear from documentation if this method requires the context to be
     // current, but it would be weird if it didn't?
@@ -385,6 +392,12 @@ pub const CLASSES: ClassExports = objc_classes! {
             renderbuffer,
             drawable,
         );
+        // If this is the full-screen layer (but it's presented from another
+        // thread), the compositor must not redraw an older frame presented
+        // the fast way instead of this one (see recomposite_overlays).
+        if drawable == found_layer {
+            crate::frameworks::core_animation::forget_overlay_present(env);
+        }
         let pixels_vec = get_pixels_vec_for_presenting(env, drawable);
         // re-borrow
         let (pixels_vec, width, height) = {

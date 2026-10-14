@@ -19,7 +19,9 @@ mod animation;
 mod composition;
 mod scale2x;
 
-pub use composition::{note_overlay_present, present_overlays, recomposite_if_necessary};
+pub use composition::{
+    forget_overlay_present, note_overlay_present, present_overlays, recomposite_if_necessary,
+};
 
 use crate::dyld::{export_c_func, FunctionExports};
 use crate::frameworks::core_foundation::time::CFTimeInterval;
