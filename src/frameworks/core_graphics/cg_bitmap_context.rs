@@ -41,6 +41,9 @@ pub(super) struct CGBitmapContextData {
     /// If true, 32-bit pixels are stored little-endian (e.g. ARGB is stored as
     /// BGRA in memory), as with `kCGBitmapByteOrder32Little`.
     little_endian: bool,
+    /// Cached result of [pixel_offsets] and [bytes_per_pixel], which are
+    /// needed for every pixel drawn. See [CGBitmapContextData::with_layout].
+    layout: Option<PixelLayout>,
     /// If true, drawing co-ordinates already point down (as for a layer's
     /// backing store, where UIKit's flip is implied), so CG's y=0 maps to the
     /// first row in memory. This matches the memory layout on iOS, where the
@@ -83,18 +86,22 @@ pub fn CGBitmapContextCreate(
     };
 
     let host_object = CGContextHostObject {
-        subclass: CGContextSubclass::CGBitmapContext(CGBitmapContextData {
-            data,
-            data_is_owned,
-            width,
-            height,
-            bits_per_component,
-            bytes_per_row,
-            color_space,
-            alpha_info: bitmap_info & kCGBitmapAlphaInfoMask,
-            little_endian: bitmap_info & kCGBitmapByteOrderMask == kCGImageByteOrder32Little,
-            y_down: false,
-        }),
+        subclass: CGContextSubclass::CGBitmapContext(
+            CGBitmapContextData {
+                data,
+                data_is_owned,
+                width,
+                height,
+                bits_per_component,
+                bytes_per_row,
+                color_space,
+                alpha_info: bitmap_info & kCGBitmapAlphaInfoMask,
+                little_endian: bitmap_info & kCGBitmapByteOrderMask == kCGImageByteOrder32Little,
+                layout: None,
+                y_down: false,
+            }
+            .with_layout(),
+        ),
         // TODO: is this the correct default?
         rgb_fill_color: (0.0, 0.0, 0.0, 0.0),
         font: Ptr::null(),
@@ -232,6 +239,9 @@ fn components_for_gray(bitmap_info: CGBitmapInfo) -> Result<GuestUSize, ()> {
 }
 
 fn bytes_per_pixel(data: &CGBitmapContextData) -> GuestUSize {
+    if let Some(layout) = data.layout {
+        return layout.bytes_per_pixel;
+    }
     let &CGBitmapContextData {
         bits_per_component,
         color_space,
@@ -318,7 +328,31 @@ fn blend_premultiplied(
 }
 
 /// per component offsets (r, g, b, a)
+/// Byte offsets of the R, G, B and (if present) A components within a pixel,
+/// and the size of a pixel in bytes.
+#[derive(Copy, Clone)]
+struct PixelLayout {
+    offsets: (usize, usize, usize, Option<usize>),
+    bytes_per_pixel: GuestUSize,
+}
+
+impl CGBitmapContextData {
+    /// Fill in the cached [PixelLayout]. Must be called after creating or
+    /// changing the format fields.
+    fn with_layout(mut self) -> Self {
+        self.layout = None;
+        self.layout = Some(PixelLayout {
+            offsets: pixel_offsets(&self),
+            bytes_per_pixel: bytes_per_pixel(&self),
+        });
+        self
+    }
+}
+
 fn pixel_offsets(data: &CGBitmapContextData) -> (usize, usize, usize, Option<usize>) {
+    if let Some(layout) = data.layout {
+        return layout.offsets;
+    }
     let (r, g, b, a) = pixel_offsets_big_endian(data);
     if data.little_endian {
         // 32-bit pixel stored little-endian: byte order is reversed.
@@ -357,6 +391,43 @@ fn pixel_offsets_big_endian(data: &CGBitmapContextData) -> (usize, usize, usize,
     }
 }
 
+/// [gamma_decode] for each 8-bit value, so decoding doesn't need `powf`.
+fn gamma_decode_u8(v: u8) -> f32 {
+    static TABLE: std::sync::OnceLock<[f32; 256]> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| std::array::from_fn(|i| gamma_decode(i as f32 / 255.0)))[v as usize]
+}
+
+/// Equivalent to `(gamma_encode(v) * 255.0) as u8`, but without `powf`: finds
+/// the largest 8-bit value whose decoded intensity doesn't exceed `v`.
+fn gamma_encode_u8(v: f32) -> u8 {
+    static THRESHOLDS: std::sync::OnceLock<[f32; 256]> = std::sync::OnceLock::new();
+    let t = THRESHOLDS.get_or_init(|| {
+        // The smallest input encoding to each value, so that rounding
+        // matches the direct calculation.
+        std::array::from_fn(|i| {
+            if i == 0 {
+                return f32::NEG_INFINITY;
+            }
+            let mut lo = gamma_decode((i as f32 - 1.0) / 255.0);
+            let mut hi = gamma_decode((i as f32 + 0.5) / 255.0).min(1.0);
+            for _ in 0..40 {
+                let mid = (lo + hi) / 2.0;
+                if (gamma_encode(mid) * 255.0) as u8 >= i as u8 {
+                    hi = mid;
+                } else {
+                    lo = mid;
+                }
+            }
+            hi
+        })
+    });
+    if v.is_nan() || v <= 0.0 {
+        return (gamma_encode(v.max(0.0)) * 255.0) as u8;
+    }
+    // number of thresholds <= v, minus one
+    (t.partition_point(|&th| th <= v) - 1) as u8
+}
+
 /// Get gamma-decoded RGBA value.
 fn get_pixel(
     data: &CGBitmapContextData,
@@ -364,22 +435,15 @@ fn get_pixel(
     first_component_idx: usize,
 ) -> (f32, f32, f32, f32) {
     let pixel_offset = pixel_offsets(data);
-    let pixel = (
-        pixels[first_component_idx + pixel_offset.0] as f32 / 255.0,
-        pixels[first_component_idx + pixel_offset.1] as f32 / 255.0,
-        pixels[first_component_idx + pixel_offset.2] as f32 / 255.0,
+    (
+        gamma_decode_u8(pixels[first_component_idx + pixel_offset.0]),
+        gamma_decode_u8(pixels[first_component_idx + pixel_offset.1]),
+        gamma_decode_u8(pixels[first_component_idx + pixel_offset.2]),
         if let Some(alpha_offest) = pixel_offset.3 {
             pixels[first_component_idx + alpha_offest] as f32 / 255.0
         } else {
             1.0
         },
-    );
-
-    (
-        gamma_decode(pixel.0),
-        gamma_decode(pixel.1),
-        gamma_decode(pixel.2),
-        pixel.3,
     )
 }
 
@@ -433,16 +497,15 @@ fn put_pixel(
     };
 
     // Alpha is always linear.
-    let (r, g, b) = (gamma_encode(r), gamma_encode(g), gamma_encode(b));
     let pixel_offset = pixel_offsets(data);
     match data.alpha_info {
         kCGImageAlphaOnly => {
             pixels[first_component_idx] = (a * 255.0) as u8;
         }
         _ => {
-            pixels[first_component_idx + pixel_offset.0] = (r * 255.0) as u8;
-            pixels[first_component_idx + pixel_offset.1] = (g * 255.0) as u8;
-            pixels[first_component_idx + pixel_offset.2] = (b * 255.0) as u8;
+            pixels[first_component_idx + pixel_offset.0] = gamma_encode_u8(r);
+            pixels[first_component_idx + pixel_offset.1] = gamma_encode_u8(g);
+            pixels[first_component_idx + pixel_offset.2] = gamma_encode_u8(b);
             if let Some(alpha_offset) = pixel_offset.3 {
                 pixels[first_component_idx + alpha_offset] = (a * 255.0) as u8;
             }
@@ -526,6 +589,80 @@ impl CGBitmapContextDrawer<'_> {
         )
     }
 
+    /// Index of the first byte of the pixel at in-bounds absolute `(x, y)`.
+    fn pixel_index(&self, x: i32, y: i32) -> usize {
+        let data = &self.bitmap_info;
+        let (x, y) = (x as GuestUSize, y as GuestUSize);
+        let y = if data.y_down { y } else { data.height - 1 - y };
+        (y * data.bytes_per_row + x * bytes_per_pixel(data)) as usize
+    }
+
+    /// The byte offsets within a pixel that drawing writes to.
+    fn component_offsets(&self) -> Vec<usize> {
+        let data = &self.bitmap_info;
+        if data.alpha_info == kCGImageAlphaOnly {
+            return vec![0];
+        }
+        let (r, g, b, a) = pixel_offsets(data);
+        let mut offsets = vec![r, g, b];
+        offsets.extend(a);
+        offsets.sort_unstable();
+        offsets.dedup();
+        offsets
+    }
+
+    /// If the current transform has no rotation or skew, returns the pixel
+    /// columns and rows covered by `untransformed_rect`. The covered pixels are
+    /// then exactly those [Self::iter_transformed_pixels] would produce (the
+    /// same calculation is done, just once per column and row).
+    fn axis_aligned_coverage(&self, untransformed_rect: CGRect) -> Option<(Vec<i32>, Vec<i32>)> {
+        if self.transform.b != 0.0 || self.transform.c != 0.0 {
+            return None;
+        }
+        let bounding_rect = self.transform.apply_to_rect(untransformed_rect);
+        let x_start = bounding_rect.origin.x.round().max(0.0) as GuestUSize;
+        let y_start = bounding_rect.origin.y.round().max(0.0) as GuestUSize;
+        let x_end = (bounding_rect.origin.x + bounding_rect.size.width)
+            .round()
+            .min(self.width() as f32) as GuestUSize;
+        let y_end = (bounding_rect.origin.y + bounding_rect.size.height)
+            .round()
+            .min(self.height() as f32) as GuestUSize;
+        let inverse_transform = self.transform.invert();
+        let within = |v: f32, origin: f32, size: f32| (0.0..1.0).contains(&((v - origin) / size));
+        // With no rotation or skew, the x result doesn't depend on y and vice
+        // versa, so any fixed value can be used for the other co-ordinate.
+        let xs = (x_start..x_end)
+            .filter(|&x| {
+                let p = inverse_transform.apply_to_point(CGPoint {
+                    x: x as f32 + 0.5,
+                    y: y_start as f32 + 0.5,
+                });
+                within(
+                    p.x,
+                    untransformed_rect.origin.x,
+                    untransformed_rect.size.width,
+                )
+            })
+            .map(|x| x as i32)
+            .collect();
+        let ys = (y_start..y_end)
+            .filter(|&y| {
+                let p = inverse_transform.apply_to_point(CGPoint {
+                    x: x_start as f32 + 0.5,
+                    y: y as f32 + 0.5,
+                });
+                within(
+                    p.y,
+                    untransformed_rect.origin.y,
+                    untransformed_rect.size.height,
+                )
+            })
+            .map(|y| y as i32)
+            .collect();
+        Some((xs, ys))
+    }
+
     /// Takes a [CGRect] and applies the current transform to it, and iterates
     /// over the transformed, clipped, absolute integer pixel co-ordinates in
     /// raster order for the target bitmap while providing floating-point
@@ -592,8 +729,10 @@ fn test_iter_transformed_pixels() {
                 color_space: "kCGColorSpaceGenericRGB",
                 alpha_info: 0,
                 little_endian: false,
+                layout: None,
                 y_down: false,
-            },
+            }
+            .with_layout(),
             rgb_fill_color: (0.0, 0.0, 0.0, 0.0),
             blend_mode: kCGBlendModeNormal,
             transform,
@@ -668,6 +807,98 @@ fn test_iter_transformed_pixels() {
         .eq(inverted_square_2x2_at_0_0.into_iter()));
 }
 
+#[cfg(test)]
+#[test]
+fn test_axis_aligned_coverage_matches_iter_transformed_pixels() {
+    use super::CGSize;
+    let mut seed: u32 = 12345;
+    let mut rnd = move |lo: f32, hi: f32| {
+        seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+        lo + (hi - lo) * ((seed >> 8) as f32 / (1u32 << 24) as f32)
+    };
+    for i in 0..3000 {
+        let pick = |v: f32, choices: &[f32]| choices[(v as usize) % choices.len()];
+        let sx = pick(rnd(0.0, 100.0), &[1.0, -1.0, 2.0, 0.5, 1.5, -2.0, 3.0]);
+        let sy = pick(rnd(0.0, 100.0), &[1.0, -1.0, 2.0, 0.5, 1.5, -2.0, 3.0]);
+        let (tx, ty) = if i % 2 == 0 {
+            (rnd(-20.0, 60.0).round(), rnd(-20.0, 60.0).round())
+        } else {
+            (rnd(-20.0, 60.0), rnd(-20.0, 60.0))
+        };
+        let transform = CGAffineTransform {
+            a: sx,
+            b: 0.0,
+            c: 0.0,
+            d: sy,
+            tx,
+            ty,
+        };
+        let rect = CGRect {
+            origin: CGPoint {
+                x: rnd(-30.0, 40.0),
+                y: rnd(-30.0, 40.0),
+            },
+            size: CGSize {
+                width: rnd(0.5, 50.0),
+                height: rnd(0.5, 50.0),
+            },
+        };
+        let drawer = CGBitmapContextDrawer {
+            bitmap_info: CGBitmapContextData {
+                data: crate::mem::Ptr::null(),
+                data_is_owned: false,
+                width: 40,
+                height: 30,
+                bits_per_component: 8,
+                bytes_per_row: 4 * 40,
+                color_space: "kCGColorSpaceGenericRGB",
+                alpha_info: kCGImageAlphaPremultipliedLast,
+                little_endian: false,
+                layout: None,
+                y_down: false,
+            }
+            .with_layout(),
+            rgb_fill_color: (0.0, 0.0, 0.0, 0.0),
+            blend_mode: kCGBlendModeNormal,
+            transform,
+            pixels: &mut [],
+        };
+        let expected: Vec<(i32, i32)> = drawer
+            .iter_transformed_pixels(rect)
+            .map(|(c, _)| c)
+            .collect();
+        let (xs, ys) = drawer.axis_aligned_coverage(rect).unwrap();
+        let actual: Vec<(i32, i32)> = ys
+            .iter()
+            .flat_map(|&y| xs.iter().map(move |&x| (x, y)))
+            .collect();
+        assert_eq!(expected, actual, "transform {transform:?} rect {rect:?}");
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn test_gamma_lookup_tables_match_direct_calculation() {
+    for i in 0..=255u8 {
+        assert_eq!(gamma_decode_u8(i), gamma_decode(i as f32 / 255.0));
+    }
+    let mut mismatches = 0;
+    for i in 0..=1_000_000u32 {
+        let v = i as f32 / 1_000_000.0;
+        if gamma_encode_u8(v) != (gamma_encode(v) * 255.0) as u8 {
+            mismatches += 1;
+        }
+    }
+    for v in [-1.0f32, 0.0, 1.0, 1.5, 100.0] {
+        assert_eq!(
+            gamma_encode_u8(v),
+            (gamma_encode(v.max(0.0)) * 255.0) as u8,
+            "{v}"
+        );
+    }
+    assert_eq!(mismatches, 0);
+}
+
 /// Implementation of `CGContextFillRect` (`clear` == [false]) and
 /// `CGContextClearRect` (`clear` == [true]) for `CGBitmapContext`.
 pub(super) fn fill_rect(env: &mut Environment, context: CGContextRef, rect: CGRect, clear: bool) {
@@ -677,8 +908,36 @@ pub(super) fn fill_rect(env: &mut Environment, context: CGContextRef, rect: CGRe
     } else {
         drawer.rgb_fill_color()
     };
+    // When the result doesn't depend on what's already there (clearing, or an
+    // opaque fill in the normal blend mode), compute the pixel's bytes once
+    // and copy them, rather than blending and gamma-encoding every pixel.
+    // This matters a lot: layers are cleared before every redraw.
+    let independent_of_bg = clear || (color.3 >= 1.0 && drawer.blend_mode == kCGBlendModeNormal);
+    if independent_of_bg {
+        if let Some((xs, ys)) = drawer.axis_aligned_coverage(rect) {
+            let Some(&first_y) = ys.first() else { return };
+            let Some(&first_x) = xs.first() else { return };
+            // Draw one pixel normally to get its bytes, then copy them.
+            drawer.put_pixel((first_x, first_y), color, /* blend: */ !clear);
+            let idx = drawer.pixel_index(first_x, first_y);
+            let bytes: Vec<(usize, u8)> = drawer
+                .component_offsets()
+                .into_iter()
+                .map(|o| (o, drawer.pixels[idx + o]))
+                .collect();
+            for &y in &ys {
+                for &x in &xs {
+                    let idx = drawer.pixel_index(x, y);
+                    for &(offset, value) in &bytes {
+                        drawer.pixels[idx + offset] = value;
+                    }
+                }
+            }
+            return;
+        }
+    }
     // TODO: correct anti-aliasing
-    for ((x, y), _) in drawer.iter_transformed_pixels(rect) {
+    for ((x, y), _) in drawer.iter_transformed_pixels(rect).collect::<Vec<_>>() {
         drawer.put_pixel((x, y), color, /* blend: */ !clear)
     }
 }
@@ -748,10 +1007,6 @@ pub(super) fn draw_image(
     //);
 }
 
-#[allow(rustdoc::broken_intra_doc_links)] // https://github.com/rust-lang/rust/issues/83049
-/// Shortcut for [crate::frameworks::core_animation::composition]. This is a
-/// workaround for not having a `&mut Environment` that should eventually be
-/// removed somehow (TODO).
 /// Used by Core Animation for layer backing stores. See
 /// [CGBitmapContextData::y_down].
 pub fn set_y_down(objc: &mut ObjC, context: CGContextRef) {
