@@ -1534,14 +1534,14 @@ struct QuickOptionsStuff {
     scale_hack_buttons: [id; 5],
     orientation_buttons: [id; 4],
     aspect_buttons: [id; 4],
-    filter_buttons: [id; 3],
+    filter_buttons: [id; 4],
 }
 
 /// `--aspect=` values for the quick options buttons, in order.
 const QUICK_ASPECT_VALUES: [Option<&str>; 4] =
     [None, Some("stretch"), Some("fill"), Some("integer")];
 /// `--filter=` values for the quick options buttons, in order.
-const QUICK_FILTER_VALUES: [Option<&str>; 3] = [None, Some("sharp"), Some("pixel")];
+const QUICK_FILTER_VALUES: [Option<&str>; 4] = [None, Some("sharp"), Some("pixel"), Some("hq")];
 
 fn setup_quick_options(
     env: &mut Environment,
@@ -1633,6 +1633,7 @@ fn setup_quick_options(
             ("平滑", "quickOptionTapped:"),
             ("锐利", "quickOptionTapped:"),
             ("像素", "quickOptionTapped:"),
+            ("高清", "quickOptionTapped:"),
         ]),
         RowKind::Label("游戏时保持亮屏"),
         RowKind::Switch("keepScreenOn:", false),

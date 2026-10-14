@@ -17,6 +17,7 @@ pub mod ca_transaction;
 
 mod animation;
 mod composition;
+mod scale2x;
 
 pub use composition::recomposite_if_necessary;
 

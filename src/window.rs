@@ -1588,14 +1588,24 @@ impl Window {
     /// screen is scaled up by (with nearest-neighbour filtering) before the
     /// final bilinear scaling to the viewport size. 1 for other modes.
     pub fn sharp_upscale_factor(&self) -> u32 {
-        if self.filter_mode != crate::options::FilterMode::Sharp {
+        use crate::options::FilterMode;
+        if !matches!(self.filter_mode, FilterMode::Sharp | FilterMode::Hq) {
             return 1;
         }
         let (app_width, app_height) =
             size_for_orientation(self.device_family, self.device_orientation, self.scale_hack);
         let (_, _, vw, vh) = self.viewport();
+        let factor = (vw / app_width).min(vh / app_height).max(1);
+        // With the hq filter, some layers' textures are twice the size, so the
+        // factor must be even for their pixels to be scaled evenly. Round up
+        // rather than down, since the final scaling handles shrinking better.
+        let factor = if self.filter_mode == FilterMode::Hq {
+            factor.next_multiple_of(2)
+        } else {
+            factor
+        };
         // Cap it to keep the intermediate texture a reasonable size.
-        (vw / app_width).min(vh / app_height).clamp(1, 8)
+        factor.clamp(1, 8)
     }
 
     /// The configured [crate::options::FilterMode].

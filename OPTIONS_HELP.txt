@@ -25,6 +25,9 @@ View options:
           for the rest. Recommended for pixel art on large screens.
         - pixel: nearest-neighbour filtering only. Crisp, but pixels may have
           uneven sizes unless --aspect=integer is used.
+        - hq: like sharp, but images the app draws without OpenGL ES (e.g.
+          2D games that draw with Core Graphics) are first scaled up with a
+          pixel art scaling algorithm (Scale2x), rounding off jagged edges.
 
     --keep-screen-on
         Keep the screen on (prevent the screen saver, or on Android, the

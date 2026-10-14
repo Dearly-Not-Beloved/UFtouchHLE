@@ -36,6 +36,11 @@ pub(super) struct State {
     /// Whether layer textures are sampled with nearest-neighbour filtering
     /// (see [crate::options::FilterMode]).
     layer_nearest: bool,
+    /// Whether to scale up layer contents drawn on the CPU with Scale2x (see
+    /// [crate::options::FilterMode::Hq]).
+    layer_scale2x: bool,
+    /// Buffer for the Scale2x output, reused to avoid reallocation.
+    scale2x_buffer: Vec<u8>,
     /// Size of each layer texture's storage, so it can be updated with
     /// glTexSubImage2D when the size is unchanged (cheaper on mobile GPUs).
     layer_texture_sizes: crate::fast_hash::FastHashMap<GLuint, (u32, u32)>,
@@ -168,6 +173,8 @@ pub fn recomposite_if_necessary(env: &mut Environment, force: bool) -> Option<In
     let layer_nearest = filter_mode != crate::options::FilterMode::Smooth;
     let final_nearest = filter_mode == crate::options::FilterMode::Pixel;
     env.framework_state.core_animation.composition.layer_nearest = layer_nearest;
+    env.framework_state.core_animation.composition.layer_scale2x =
+        filter_mode == crate::options::FilterMode::Hq;
     let fb_width = screen_bounds.size.width as u32 * scale_hack * upscale;
     let fb_height = screen_bounds.size.height as u32 * scale_hack * upscale;
     let present_frame_args = (
@@ -625,8 +632,8 @@ unsafe fn composite_layer_recursive(
             }
 
             let texture = original_host_obj.gles_texture.unwrap();
-            let sizes = &mut env.framework_state.core_animation.composition.layer_texture_sizes;
-            upload_layer_pixels(gles.as_mut(), sizes, texture, pixels, (width, height));
+            let state = &mut env.framework_state.core_animation.composition;
+            upload_layer_pixels(gles.as_mut(), state, texture, pixels, (width, height));
         }
     }
 
@@ -637,17 +644,31 @@ unsafe fn composite_layer_recursive(
 
             // No special handling for opacity is needed here: the alpha channel
             // on an image is meaningful and won't be ignored.
-            let texture = env.objc.borrow::<CALayerHostObject>(layer).gles_texture.unwrap();
-            let sizes = &mut env.framework_state.core_animation.composition.layer_texture_sizes;
-            upload_layer_pixels(gles.as_mut(), sizes, texture, image.pixels(), image.dimensions());
+            let texture = env
+                .objc
+                .borrow::<CALayerHostObject>(layer)
+                .gles_texture
+                .unwrap();
+            let state = &mut env.framework_state.core_animation.composition;
+            upload_layer_pixels(
+                gles.as_mut(),
+                state,
+                texture,
+                image.pixels(),
+                image.dimensions(),
+            );
         } else if let Some(cg_context) = host_obj.cg_context {
             // Make sure this is in sync with the code in ca_layer.rs that
             // sets up the context!
             let (width, height, pixels) =
                 cg_bitmap_context::get_rgba8_pixels(&env.objc, &env.mem, cg_context);
-            let texture = env.objc.borrow::<CALayerHostObject>(layer).gles_texture.unwrap();
-            let sizes = &mut env.framework_state.core_animation.composition.layer_texture_sizes;
-            upload_layer_pixels(gles.as_mut(), sizes, texture, &pixels, (width, height));
+            let texture = env
+                .objc
+                .borrow::<CALayerHostObject>(layer)
+                .gles_texture
+                .unwrap();
+            let state = &mut env.framework_state.core_animation.composition;
+            upload_layer_pixels(gles.as_mut(), state, texture, &pixels, (width, height));
         }
     }
 
@@ -786,15 +807,31 @@ unsafe fn upload_slice<T: SafeWrite>(
 }
 
 /// [upload_rgba8_pixels] for a layer's texture (which must be bound), reusing
-/// the texture's storage if the size hasn't changed.
+/// the texture's storage if the size hasn't changed, and applying Scale2x if
+/// enabled.
 unsafe fn upload_layer_pixels(
     gles: &mut dyn GLES,
-    sizes: &mut crate::fast_hash::FastHashMap<GLuint, (u32, u32)>,
+    state: &mut State,
     texture: GLuint,
     pixels: &[u8],
     dimensions: (u32, u32),
 ) {
-    if sizes.get(&texture) == Some(&dimensions) {
+    // Images that are already large aren't pixel art that needs scaling, and
+    // doubling them could exceed the GPU's maximum texture size.
+    const SCALE2X_MAX_SIZE: u32 = 1024;
+    let (pixels, dimensions) = if state.layer_scale2x
+        && dimensions.0 <= SCALE2X_MAX_SIZE
+        && dimensions.1 <= SCALE2X_MAX_SIZE
+    {
+        super::scale2x::scale2x_rgba8(pixels, dimensions, &mut state.scale2x_buffer);
+        (
+            &state.scale2x_buffer[..],
+            (dimensions.0 * 2, dimensions.1 * 2),
+        )
+    } else {
+        (pixels, dimensions)
+    };
+    if state.layer_texture_sizes.get(&texture) == Some(&dimensions) {
         gles.TexSubImage2D(
             gles11::TEXTURE_2D,
             0,
@@ -808,7 +845,7 @@ unsafe fn upload_layer_pixels(
         );
     } else {
         upload_rgba8_pixels(gles, pixels, dimensions);
-        sizes.insert(texture, dimensions);
+        state.layer_texture_sizes.insert(texture, dimensions);
     }
 }
 

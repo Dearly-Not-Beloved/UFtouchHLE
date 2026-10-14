@@ -58,6 +58,10 @@ pub enum FilterMode {
     Sharp,
     /// Nearest-neighbour filtering only.
     Pixel,
+    /// Like [FilterMode::Sharp], but images drawn by the app's CPU code (e.g.
+    /// 2D games that use Core Graphics, and UIKit views) are first scaled up
+    /// with a pixel art scaling algorithm, rounding off jagged edges.
+    Hq,
 }
 
 /// Struct containing all user-configurable options.
@@ -166,6 +170,7 @@ impl Options {
                 "smooth" => FilterMode::Smooth,
                 "sharp" => FilterMode::Sharp,
                 "pixel" => FilterMode::Pixel,
+                "hq" => FilterMode::Hq,
                 _ => return Err("Invalid value for --filter".to_string()),
             };
         } else if arg == "--upside-down" {
