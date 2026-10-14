@@ -1746,6 +1746,14 @@ pub fn get_battery_status() -> (i32, BatteryState) {
     )
 }
 
+/// Like [get_preferred_language_codes], but usable without an [Environment]
+/// (e.g. before one exists).
+pub fn system_language_codes() -> Vec<String> {
+    sdl2::locale::get_preferred_locales()
+        .map(|loc| loc.lang)
+        .collect()
+}
+
 pub fn get_preferred_language_codes(env: &mut Environment) -> Vec<String> {
     env.on_parent_stack_in_coroutine(|_, _| {
         sdl2::locale::get_preferred_locales()

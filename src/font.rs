@@ -643,3 +643,18 @@ impl Font {
         }
     }
 }
+
+/// Whether all characters of `text` can probably be displayed with the
+/// bundled fonts: Latin (and other scripts in the Liberation fonts) and CJK
+/// (Noto Sans JP/SC), but e.g. not Hangul.
+pub fn bundled_fonts_can_display(text: &str) -> bool {
+    text.chars().all(|c| {
+        let c = c as u32;
+        c < 0x2000 // Latin, Greek, Cyrillic etc.
+            || (0x2000..=0x206F).contains(&c) // general punctuation
+            || (0x3000..=0x30FF).contains(&c) // CJK punctuation, kana
+            || (0x3400..=0x4DBF).contains(&c) // CJK extension A
+            || (0x4E00..=0x9FFF).contains(&c) // CJK unified ideographs
+            || (0xFF00..=0xFFEF).contains(&c) // full-width forms
+    })
+}

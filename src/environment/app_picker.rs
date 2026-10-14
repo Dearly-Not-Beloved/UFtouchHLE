@@ -48,12 +48,17 @@ struct AppInfo {
 }
 
 pub fn app_picker(options: Options) -> Result<(PathBuf, Vec<String>), String> {
-    let apps = load_apps();
+    let apps = load_apps(&options);
     show_app_picker_gui(options, apps)
 }
 
 /// Find the apps in the apps directory. The error is a message to display.
-fn load_apps() -> Result<Vec<AppInfo>, String> {
+fn load_apps(options: &Options) -> Result<Vec<AppInfo>, String> {
+    // For localized app names.
+    let languages = options
+        .preferred_languages
+        .clone()
+        .unwrap_or_else(crate::window::system_language_codes);
     let apps_dir = paths::user_data_base_path().join(paths::APPS_DIR);
 
     if !apps_dir.is_dir() {
@@ -62,7 +67,7 @@ fn load_apps() -> Result<Vec<AppInfo>, String> {
             apps_dir.display()
         ))
     } else {
-        enumerate_apps(&apps_dir)
+        enumerate_apps(&apps_dir, &languages)
             .map_err(|err| {
                 format!(
                     "无法读取 {} 文件夹里的应用列表：{}",
@@ -83,7 +88,7 @@ fn load_apps() -> Result<Vec<AppInfo>, String> {
     }
 }
 
-fn enumerate_apps(apps_dir: &Path) -> Result<Vec<AppInfo>, std::io::Error> {
+fn enumerate_apps(apps_dir: &Path, languages: &[String]) -> Result<Vec<AppInfo>, std::io::Error> {
     let mut apps = Vec::new();
     for app in std::fs::read_dir(apps_dir)? {
         let app_path = app?.path();
@@ -109,7 +114,7 @@ fn enumerate_apps(apps_dir: &Path) -> Result<Vec<AppInfo>, std::io::Error> {
         };
 
         // TODO: what if this crashes?
-        let display_name = bundle.display_name().to_owned();
+        let display_name = bundle.localized_display_name(&fs, languages);
 
         let icon = match bundle.load_icon(&fs) {
             Ok(icon) => Some(icon),
@@ -707,7 +712,7 @@ fn app_picker_inner(
         let host_obj = env.objc.borrow_mut::<AppPickerDelegateHostObject>(delegate);
         if std::mem::take(&mut host_obj.became_active) {
             log!("Reloading app list.");
-            apps = load_apps();
+            apps = load_apps(&env.options);
             show_apps(env, &mut icon_grid_stuff, message_label, &mut apps);
             continue;
         }

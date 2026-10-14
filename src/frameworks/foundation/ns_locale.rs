@@ -70,7 +70,7 @@ fn get_preferred_languages(env: &mut Environment) -> Vec<String> {
 }
 
 /// Names of the `.lproj` directories an app could use for a language code.
-fn lproj_names_for_language(code: &str) -> Vec<String> {
+pub(crate) fn lproj_names_for_language(code: &str) -> Vec<String> {
     let base = code.split(['-', '_']).next().unwrap();
     let mut names: Vec<String> = Vec::new();
     if base == "zh" {

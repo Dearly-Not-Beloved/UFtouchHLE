@@ -100,6 +100,33 @@ impl Bundle {
         self.path.file_name().unwrap().strip_suffix(".app").unwrap()
     }
 
+    /// The display name as the user would see it on the home screen: the
+    /// `CFBundleDisplayName` from the `InfoPlist.strings` of the first of
+    /// `languages` (language codes) the app is localized for, or English,
+    /// falling back to [Self::display_name].
+    pub fn localized_display_name(&self, fs: &Fs, languages: &[String]) -> String {
+        use crate::frameworks::foundation::ns_locale::lproj_names_for_language;
+        let lprojs = languages
+            .iter()
+            .map(String::as_str)
+            .chain(["en"])
+            .flat_map(lproj_names_for_language);
+        for lproj in lprojs {
+            let path = self.path.join(&lproj).join("InfoPlist.strings");
+            let Ok(bytes) = fs.read(&path) else {
+                continue;
+            };
+            if let Some(name) = parse_strings_value(&bytes, "CFBundleDisplayName") {
+                // Skip names we couldn't display (e.g. Korean, which the
+                // bundled fonts don't cover) in favour of another language.
+                if !name.is_empty() && crate::font::bundled_fonts_can_display(&name) {
+                    return name;
+                }
+            }
+        }
+        self.display_name().to_string()
+    }
+
     pub fn display_name(&self) -> &str {
         if let Some(display_name) = self.plist.get("CFBundleDisplayName") {
             display_name.as_string().unwrap()
@@ -297,4 +324,67 @@ impl Bundle {
             })
             .unwrap_or_else(|| vec![DeviceFamily::iPhone])
     }
+}
+
+/// Get a value from a `.strings` file, which is either a property list
+/// (binary or XML) or the old text format (`"key" = "value";`).
+fn parse_strings_value(bytes: &[u8], key: &str) -> Option<String> {
+    if let Ok(Value::Dictionary(dict)) = Value::from_reader(Cursor::new(bytes)) {
+        return dict.get(key).and_then(Value::as_string).map(str::to_string);
+    }
+    // Text format, usually UTF-16 with a byte order mark.
+    let text = if bytes.starts_with(&[0xFF, 0xFE]) || bytes.starts_with(&[0xFE, 0xFF]) {
+        let big_endian = bytes[0] == 0xFE;
+        let units: Vec<u16> = bytes[2..]
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&c| {
+                if big_endian {
+                    u16::from_be_bytes(c)
+                } else {
+                    u16::from_le_bytes(c)
+                }
+            })
+            .collect();
+        String::from_utf16_lossy(&units)
+    } else {
+        String::from_utf8_lossy(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes)).into_owned()
+    };
+    for line in text.lines() {
+        let line = line.trim();
+        let Some((k, v)) = line.split_once('=') else {
+            continue;
+        };
+        if k.trim().trim_matches('"') != key {
+            continue;
+        }
+        let v = v.trim().trim_end_matches(';').trim();
+        let v = v.strip_prefix('"').unwrap_or(v);
+        let v = v.strip_suffix('"').unwrap_or(v);
+        return Some(v.replace("\\\"", "\""));
+    }
+    None
+}
+
+#[cfg(test)]
+#[test]
+fn test_parse_strings_value() {
+    let text = "/* comment */\n\"CFBundleDisplayName\" = \"My \\\"App\\\"\";\nOther = \"x\";\n";
+    assert_eq!(
+        parse_strings_value(text.as_bytes(), "CFBundleDisplayName").as_deref(),
+        Some("My \"App\"")
+    );
+    let mut utf16 = vec![0xFF, 0xFE];
+    for unit in "CFBundleDisplayName = \"イノティア\";".encode_utf16() {
+        utf16.extend_from_slice(&unit.to_le_bytes());
+    }
+    assert_eq!(
+        parse_strings_value(&utf16, "CFBundleDisplayName").as_deref(),
+        Some("イノティア")
+    );
+    assert_eq!(
+        parse_strings_value(b"Other = \"x\";", "CFBundleDisplayName"),
+        None
+    );
 }

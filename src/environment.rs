@@ -401,7 +401,13 @@ impl Environment {
             Some(Box::new(window::Window::new(
                 &format!(
                     "{} (touchHLE {}{}{})",
-                    bundle.display_name(),
+                    bundle.localized_display_name(
+                        &fs,
+                        &options
+                            .preferred_languages
+                            .clone()
+                            .unwrap_or_else(window::system_language_codes),
+                    ),
                     super::branding(),
                     if super::branding().is_empty() {
                         ""
