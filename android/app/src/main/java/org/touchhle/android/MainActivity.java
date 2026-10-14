@@ -8,6 +8,7 @@
  */
 package org.touchhle.android;
 
+import android.content.Intent;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.SystemClock;
@@ -35,6 +36,28 @@ public class MainActivity extends SDLActivity {
         }
         preferSixtyHertz();
         super.onCreate(savedInstanceState);
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        // Started while touchHLE is in the foreground, since Android doesn't
+        // allow starting foreground services from the background.
+        try {
+            startService(new Intent(this, KeepAliveService.class));
+        } catch (Throwable e) {
+            // Not essential.
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        try {
+            stopService(new Intent(this, KeepAliveService.class));
+        } catch (Throwable e) {
+            // Not essential.
+        }
+        super.onDestroy();
     }
 
     // iPhone OS apps never run at more than 60 frames per second, and

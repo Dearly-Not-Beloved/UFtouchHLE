@@ -53,6 +53,10 @@
     <!-- Allow access to the vibrator -->
     <uses-permission android:name="android.permission.VIBRATE" />
 
+    <!-- For KeepAliveService, which makes Android less likely to kill
+         touchHLE (and lose the app's unsaved progress) in the background -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+
     <!-- if you want to capture audio, uncomment this. -->
     <!-- <uses-permission android:name="android.permission.RECORD_AUDIO" /> -->
 
@@ -91,6 +95,11 @@
             </intent-filter>
             -->
         </activity>
+
+        <!-- See KeepAliveService.java -->
+        <service
+            android:name="org.touchhle.android.KeepAliveService"
+            android:exported="false" />
 
         <!-- Opens a file manager for touchHLE's files, see src/paths.rs -->
         <activity
