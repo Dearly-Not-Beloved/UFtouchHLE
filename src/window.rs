@@ -90,6 +90,41 @@ fn size_for_orientation(
         DeviceOrientation::LandscapeRight => (height * scale_hack, width * scale_hack),
     }
 }
+/// Touches just outside the app's screen, e.g. at the edge of the black bars
+/// around it on a phone with a wider aspect ratio, are moved onto the edge of
+/// the screen, so that buttons at the edge are easier to hit. Touches further
+/// away are left alone.
+fn snap_to_screen_edge((x, y): Coords, (width, height): (u32, u32)) -> Coords {
+    /// In points (the app's co-ordinates), so about 5% of the iPhone screen's
+    /// width.
+    const MARGIN: f32 = 16.0;
+    fn snap(v: f32, size: u32) -> f32 {
+        let max = size as f32 - 1.0;
+        if (-MARGIN..0.0).contains(&v) {
+            0.0
+        } else if v > max && v <= max + MARGIN {
+            max
+        } else {
+            v
+        }
+    }
+    (snap(x, width), snap(y, height))
+}
+
+#[cfg(test)]
+#[test]
+fn test_snap_to_screen_edge() {
+    let size = (320, 480);
+    // Inside: unchanged.
+    assert_eq!(snap_to_screen_edge((0.0, 479.0), size), (0.0, 479.0));
+    assert_eq!(snap_to_screen_edge((100.0, 200.0), size), (100.0, 200.0));
+    // Just outside: moved onto the edge.
+    assert_eq!(snap_to_screen_edge((-10.0, 200.0), size), (0.0, 200.0));
+    assert_eq!(snap_to_screen_edge((325.0, 490.0), size), (319.0, 479.0));
+    // Far outside: unchanged.
+    assert_eq!(snap_to_screen_edge((-100.0, 600.0), size), (-100.0, 600.0));
+}
+
 fn rotate_fullscreen_size(orientation: DeviceOrientation, screen_size: (u32, u32)) -> (u32, u32) {
     let (short_side, long_side) = if screen_size.0 < screen_size.1 {
         (screen_size.0, screen_size.1)
@@ -589,7 +624,7 @@ impl Window {
             let out_x = (x + 0.5) * out_w as f32;
             let out_y = (y + 0.5) * out_h as f32;
             // Round to match touch precision of official devices.
-            (out_x.round(), out_y.round())
+            snap_to_screen_edge((out_x.round(), out_y.round()), (out_w, out_h))
         }
         fn transform_virt_accel_coords(window: &Window, (in_x, in_y): (i32, i32)) -> (f32, f32) {
             let (_, _, vw, vh) = window.viewport();
