@@ -159,6 +159,10 @@ pub enum Event {
     /// OS has informed touchHLE it will soon become inactive.
     /// (iOS `applicationWillResignActive:`, Android `onPause()`)
     AppWillResignActive,
+    /// OS has informed touchHLE it is active again after
+    /// [Event::AppWillResignActive].
+    /// (iOS `applicationDidBecomeActive:`, Android `onResume()`)
+    AppDidBecomeActive,
     /// OS has informed touchHLE it will soon terminate.
     /// (iOS `applicationWillTerminate:`, Android `onDestroy()`)
     AppWillTerminate,
@@ -728,6 +732,10 @@ impl Window {
                     self.enable_event_polling = false;
                     continue;
                 }
+                E::AppDidEnterForeground { .. } => {
+                    log!("Received app-did-become-active event.");
+                    Event::AppDidBecomeActive
+                }
                 E::AppTerminating { .. } => {
                     log!("Received app-will-terminate event.");
                     assert!(self.high_priority_event.is_none());
@@ -875,6 +883,32 @@ impl Window {
 
     /// Pop an event from the queue (in FIFO order, except for high priority
     /// events)
+    /// Called after [Event::AppWillResignActive] has been handled: blocks
+    /// (so the app is frozen) until the OS brings touchHLE back to the
+    /// foreground. Returns `false` if touchHLE should terminate instead; the
+    /// corresponding event is left in the queue in that case.
+    pub fn wait_until_active(&mut self, options: &Options) -> bool {
+        self.enable_event_polling = true;
+        loop {
+            std::thread::sleep(Duration::from_millis(50));
+            self.poll_for_events(options);
+            if matches!(self.high_priority_event, Some(Event::AppWillTerminate))
+                || self.event_queue.iter().any(|e| matches!(e, Event::Quit))
+            {
+                return false;
+            }
+            if let Some(i) = self
+                .event_queue
+                .iter()
+                .position(|e| matches!(e, Event::AppDidBecomeActive))
+            {
+                // Input from before the app was paused is stale.
+                self.event_queue.drain(..=i);
+                return true;
+            }
+        }
+    }
+
     pub fn pop_event(&mut self) -> Option<Event> {
         self.high_priority_event
             .take()

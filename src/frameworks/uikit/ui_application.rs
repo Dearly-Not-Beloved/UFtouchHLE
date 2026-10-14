@@ -433,6 +433,46 @@ pub(super) fn UIApplicationMain(
 }
 
 /// Tell the app it's about to quit and then exit.
+/// Tell the app it's about to be paused (e.g. touchHLE going into the
+/// background). User defaults are saved too, in case the app is later killed
+/// while paused.
+pub(super) fn will_resign_active(env: &mut Environment) {
+    let ui_application: id = msg_class![env; UIApplication sharedApplication];
+    let pool: id = msg_class![env; NSAutoreleasePool new];
+    if !env.is_app_picker {
+        let user_defaults: id = msg_class![env; NSUserDefaults standardUserDefaults];
+        let _: bool = msg![env; user_defaults synchronize];
+    }
+    let delegate: id = msg![env; ui_application delegate];
+    if env
+        .objc
+        .object_has_method_named(&env.mem, delegate, "applicationWillResignActive:")
+    {
+        () = msg![env; delegate applicationWillResignActive:ui_application];
+    }
+    let center: id = msg_class![env; NSNotificationCenter defaultCenter];
+    let notif_name = get_static_str(env, UIApplicationWillResignActiveNotification);
+    () = msg![env; center postNotificationName:notif_name object:ui_application userInfo:nil];
+    let _: () = msg![env; pool drain];
+}
+
+/// Tell the app it's active again after [will_resign_active].
+pub(super) fn did_become_active(env: &mut Environment) {
+    let ui_application: id = msg_class![env; UIApplication sharedApplication];
+    let pool: id = msg_class![env; NSAutoreleasePool new];
+    let delegate: id = msg![env; ui_application delegate];
+    if env
+        .objc
+        .object_has_method_named(&env.mem, delegate, "applicationDidBecomeActive:")
+    {
+        () = msg![env; delegate applicationDidBecomeActive:ui_application];
+    }
+    let center: id = msg_class![env; NSNotificationCenter defaultCenter];
+    let notif_name = get_static_str(env, UIApplicationDidBecomeActiveNotification);
+    () = msg![env; center postNotificationName:notif_name object:ui_application userInfo:nil];
+    let _: () = msg![env; pool drain];
+}
+
 pub(super) fn exit(env: &mut Environment) {
     let ui_application: id = msg_class![env; UIApplication sharedApplication];
 

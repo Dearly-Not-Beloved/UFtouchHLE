@@ -118,22 +118,25 @@ pub fn handle_events(env: &mut Environment) -> Option<Instant> {
             }
             Event::AppWillResignActive => {
                 // Getting this event means touchHLE is becoming inactive, e.g.
-                // due to switching apps. The obvious way to handle this would
-                // be to just send `applicationWillResignActive:` to the
-                // UIApplicationDelegate. However:
-                // - touchHLE's event loop can't handle an inactive app well
-                //   right now. For example, audio isn't paused.
-                // - touchHLE's event loop can't handle the subsequent
-                //   termination of an app right now: it doesn't manage to send
-                //   the `applicationWillTerminate:` message in time. This can
-                //   mean loss of data!
-                // Therefore, for the moment we will simulate the early iOS
-                // behavior where switching app usually resulted in termination.
-                // We can usually handle this in time, so there won't be data
-                // loss, nor problems with background resource usage or audio.
-                // TODO: Handle this better.
-                log!("Handling app-will-resign-active event: exiting.");
-                ui_application::exit(env);
+                // due to switching apps or the screen turning off. Rather than
+                // terminating the app (which loses unsaved progress), freeze
+                // it with audio paused until it's back in the foreground, like
+                // a suspended app on later iOS versions.
+                log!("Handling app-will-resign-active event: pausing app.");
+                ui_application::will_resign_active(env);
+                crate::audio::openal::pause_all_devices();
+                let resumed = env.on_parent_stack_in_coroutine(|window, options| {
+                    window.wait_until_active(options)
+                });
+                crate::audio::openal::resume_all_devices();
+                if resumed {
+                    log!("Resuming app.");
+                    ui_application::did_become_active(env);
+                }
+                // Otherwise, the terminate/quit event is handled next.
+            }
+            Event::AppDidBecomeActive => {
+                // Handled by wait_until_active().
             }
             Event::AppWillTerminate => {
                 log!("Handling app-will-terminate event.");

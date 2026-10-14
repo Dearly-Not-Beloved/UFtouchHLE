@@ -84,6 +84,10 @@ extern "C" {
     pub fn alcGetError(device: *mut ALCdevice) -> ALCenum;
 
     pub fn alcGetString(device: *mut ALCdevice, param: ALCenum) -> *const ALCchar;
+
+    // ALC_SOFT_pause_device
+    pub fn alcDevicePauseSOFT(device: *mut ALCdevice);
+    pub fn alcDeviceResumeSOFT(device: *mut ALCdevice);
 }
 
 // === al.h ===

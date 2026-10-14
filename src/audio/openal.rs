@@ -17,6 +17,34 @@ pub use al_sys::{alcCloseDevice, alcGetError, alcGetString, alcOpenDevice};
 
 use al_types::*;
 
+/// All open OpenAL devices, so that they can be paused while the app is in
+/// the background. Stored as addresses because raw pointers aren't `Send`.
+static OPEN_DEVICES: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
+
+/// Must be called for every device opened with [alcOpenDevice].
+pub fn register_device(device: *mut ALCdevice) {
+    OPEN_DEVICES.lock().unwrap().push(device as usize);
+}
+/// Must be called before closing a device registered with [register_device].
+pub fn unregister_device(device: *mut ALCdevice) {
+    OPEN_DEVICES
+        .lock()
+        .unwrap()
+        .retain(|&d| d != device as usize);
+}
+/// Stop audio output of all devices (e.g. when the app goes to the background).
+pub fn pause_all_devices() {
+    for &d in OPEN_DEVICES.lock().unwrap().iter() {
+        unsafe { al_sys::alcDevicePauseSOFT(d as *mut ALCdevice) };
+    }
+}
+/// Undo [pause_all_devices].
+pub fn resume_all_devices() {
+    for &d in OPEN_DEVICES.lock().unwrap().iter() {
+        unsafe { al_sys::alcDeviceResumeSOFT(d as *mut ALCdevice) };
+    }
+}
+
 static OPENALMANAGER_INSTANCE_EXISTS: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 pub struct OpenALManager {}
@@ -49,6 +77,7 @@ impl OpenALContext {
         if device.is_null() {
             return Err("Could not open OpenAL device".to_string());
         }
+        register_device(device);
         unsafe { Self::new_with_device_and_attrlist(_manager, device, std::ptr::null()) }
     }
 

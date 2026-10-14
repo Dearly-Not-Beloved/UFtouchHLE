@@ -146,6 +146,7 @@ fn alcOpenDevice(env: &mut Environment, devicename: ConstPtr<u8>) -> MutPtr<Gues
         log_dbg!("alcOpenDevice(NULL) returned NULL");
         return Ptr::null();
     }
+    al::register_device(res);
 
     let guest_res = env.mem.alloc_and_write(GuestALCdevice { _filler: 0 });
     let state = State::get(env);
@@ -175,6 +176,7 @@ fn alcCloseDevice(env: &mut Environment, device: MutPtr<GuestALCdevice>) -> bool
         return false;
     };
     env.mem.free(device.cast());
+    al::unregister_device(host_device);
     let res = unsafe { al::alcCloseDevice(host_device) };
     log_dbg!("alcCloseDevice({:?}) => {:?}", device, res,);
     res != al::ALC_FALSE
