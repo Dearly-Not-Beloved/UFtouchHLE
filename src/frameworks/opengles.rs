@@ -12,6 +12,8 @@
 mod eagl;
 mod gles_guest;
 
+pub use eagl::redraw_last_frame;
+
 use touchHLE_gl_bindings::gles11::types::GLenum;
 
 use crate::mem::ConstPtr;

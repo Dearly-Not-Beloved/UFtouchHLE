@@ -10,7 +10,7 @@
 //! diverges wildly from what the real iPhone OS does.
 #![allow(clippy::zero_ptr)] // alas, as you know, opengl
 
-use super::ca_eagl_layer::find_fullscreen_eagl_layer;
+use super::ca_eagl_layer::{find_fullscreen_eagl_layer_with_overlays, FullscreenEaglLayer};
 use super::ca_layer::CALayerHostObject;
 use crate::frameworks::core_animation::animation;
 use crate::frameworks::core_graphics::cg_affine_transform::CGAffineTransform;
@@ -54,6 +54,30 @@ pub(super) struct State {
     last_frame_fingerprint: Option<u64>,
     /// When a frame was last actually composited.
     last_composited: Option<Instant>,
+    /// Set while compositing layers that will be drawn on top of an OpenGL ES
+    /// frame (see [present_overlays]).
+    overlay_mode: bool,
+    /// The full-screen `CAEAGLLayer` and `EAGLContext` that last presented a
+    /// frame with overlays (see [present_overlays]), and when.
+    last_overlay_present: Option<(id, id, Instant)>,
+    /// Like `last_frame_fingerprint`, but for the overlays when they were last
+    /// redrawn while the app wasn't presenting new frames.
+    last_overlay_fingerprint: Option<u64>,
+    /// When the overlays were last redrawn while the app wasn't presenting new
+    /// frames.
+    last_overlay_redraw: Option<Instant>,
+    /// Fingerprint of the overlays in the render target, if it contains them
+    /// (see [present_overlays]).
+    overlay_target_fingerprint: Option<u64>,
+}
+
+/// Called after an app presented a frame from a full-screen `CAEAGLLayer`
+/// with overlays (see [present_overlays]).
+pub fn note_overlay_present(env: &mut Environment, layer: id, context: id) {
+    env.framework_state
+        .core_animation
+        .composition
+        .last_overlay_present = Some((layer, context, Instant::now()));
 }
 
 /// Called when a layer with a texture is deallocated.
@@ -114,14 +138,23 @@ pub fn recomposite_if_necessary(env: &mut Environment, force: bool) -> Option<In
         return None;
     }
 
-    if find_fullscreen_eagl_layer(env) != nil {
-        // No composition done, EAGLContext will present directly.
-        log_dbg!("Using CAEAGLLayer fast path, skipping composition");
-        env.framework_state
-            .core_animation
-            .composition
-            .last_frame_fingerprint = None;
-        return None;
+    match find_fullscreen_eagl_layer_with_overlays(env) {
+        Some(found) if found.overlays.is_empty() => {
+            // No composition done, EAGLContext will present directly.
+            log_dbg!("Using CAEAGLLayer fast path, skipping composition");
+            env.framework_state
+                .core_animation
+                .composition
+                .last_frame_fingerprint = None;
+            return None;
+        }
+        Some(found) => {
+            if let Some(next) = recomposite_overlays(env, &found, force) {
+                return next;
+            }
+            // Otherwise, composite normally.
+        }
+        None => (),
     }
 
     let now = Instant::now();
@@ -169,28 +202,12 @@ pub fn recomposite_if_necessary(env: &mut Environment, force: bool) -> Option<In
         })
         .collect();
 
-    let screen_bounds: CGRect = {
-        let screen: id = msg_class![env; UIScreen mainScreen];
-        msg![env; screen bounds]
-    };
-    let scale_hack: u32 = env.options.scale_hack.get();
-    // For sharp filtering, the screen is rendered at a whole multiple of its
-    // size (with nearest-neighbour filtering of the layers) before the final
-    // bilinear scaling. This is invisible to the app.
-    let upscale = env.window().sharp_upscale_factor();
-    let filter_mode = env.window().filter_mode();
-    let layer_nearest = filter_mode != crate::options::FilterMode::Smooth;
-    let final_nearest = filter_mode == crate::options::FilterMode::Pixel;
-    env.framework_state.core_animation.composition.layer_nearest = layer_nearest;
-    env.framework_state.core_animation.composition.layer_scale2x =
-        filter_mode == crate::options::FilterMode::Hq;
-    let fb_width = screen_bounds.size.width as u32 * scale_hack * upscale;
-    let fb_height = screen_bounds.size.height as u32 * scale_hack * upscale;
-    let present_frame_args = (
-        env.window().viewport(),
-        env.window().rotation_matrix(),
-        env.window().virtual_cursor_visible_at(),
-    );
+    let (params, filter_mode) = prepare_render_params(env);
+    let RenderParams {
+        fb_size: (fb_width, fb_height),
+        ref present_frame_args,
+        ..
+    } = params;
 
     // If nothing has changed since the last frame, compositing again would
     // produce an identical image, so skip it. Many apps only redraw a few
@@ -199,7 +216,7 @@ pub fn recomposite_if_necessary(env: &mut Environment, force: bool) -> Option<In
         &env.objc,
         &window_layers,
         (fb_width, fb_height, filter_mode as u8),
-        &present_frame_args,
+        present_frame_args,
     );
     let needs_redraw = env.window().take_needs_redraw();
     let composition = &mut env.framework_state.core_animation.composition;
@@ -229,9 +246,244 @@ pub fn recomposite_if_necessary(env: &mut Environment, force: bool) -> Option<In
 
     // TODO: draw status bar if it's not hidden
 
-    // Initial state for layer tree traversal (see composite_layer_recursive)
-    let cumulative_transform = Matrix::<4>::identity();
-    let opacity = 1.0;
+    let window_layers_for_fingerprint = window_layers.clone();
+    let roots: Vec<(id, Matrix<4>)> = window_layers
+        .into_iter()
+        .map(|layer| (layer, Matrix::identity()))
+        .collect();
+    unsafe {
+        render_and_present(
+            env,
+            &mut animation_state,
+            &roots,
+            &params,
+            /* overlay: */ false,
+            /* composite: */ true,
+        );
+    }
+
+    animation_state.update_started_and_finished_animations(env);
+
+    // Compositing updates the layers' textures, so the fingerprint to compare
+    // the next frame with must be taken afterwards.
+    env.framework_state
+        .core_animation
+        .composition
+        .last_frame_fingerprint = frame_fingerprint(
+        &env.objc,
+        &window_layers_for_fingerprint,
+        (fb_width, fb_height, filter_mode as u8),
+        &params.present_frame_args,
+    );
+
+    new_recomposite_next
+}
+
+/// For when the app's full-screen `CAEAGLLayer` has other layers on top of it:
+/// when the app presents a frame, it's drawn directly and the overlays are
+/// drawn on top (see [present_overlays]), so nothing needs to be done here,
+/// unless the app has stopped presenting frames while the overlays change
+/// (e.g. a UIKit menu over a paused game). In that case the last frame and the
+/// overlays are redrawn. Returns [None] if normal composition is needed
+/// instead, otherwise what [recomposite_if_necessary] should return.
+fn recomposite_overlays(
+    env: &mut Environment,
+    found: &FullscreenEaglLayer,
+    force: bool,
+) -> Option<Option<Instant>> {
+    let now = Instant::now();
+    let next = Some(now + Duration::from_secs_f64(1.0 / 60.0));
+    let (layer, context, last_present) = env
+        .framework_state
+        .core_animation
+        .composition
+        .last_overlay_present?;
+    if layer != found.layer {
+        return None;
+    }
+    if !force && now.duration_since(last_present) < Duration::from_millis(100) {
+        // The app is presenting frames, which also draws the overlays.
+        return Some(next);
+    }
+
+    // Ensure layer bitmaps are up to date before taking the fingerprint.
+    for &(overlay, _) in &found.overlays {
+        display_layers(env, overlay);
+    }
+    let (params, filter_mode) = prepare_render_params(env);
+    let overlay_layers: Vec<id> = found.overlays.iter().map(|&(layer, _)| layer).collect();
+    let target = (
+        params.fb_size.0,
+        params.fb_size.1,
+        filter_mode as u8 | (found.quarter_turns << 4),
+    );
+    let fingerprint = frame_fingerprint(
+        &env.objc,
+        &overlay_layers,
+        target,
+        &params.present_frame_args,
+    );
+    let needs_redraw = env.window().take_needs_redraw();
+    let composition = &env.framework_state.core_animation.composition;
+    let recently_redrawn = composition
+        .last_overlay_redraw
+        .is_some_and(|last| now.duration_since(last) < Duration::from_secs(1));
+    if !force
+        && !needs_redraw
+        && recently_redrawn
+        && fingerprint.is_some()
+        && fingerprint == composition.last_overlay_fingerprint
+    {
+        return Some(next);
+    }
+
+    if !crate::frameworks::opengles::redraw_last_frame(env, context, found.quarter_turns) {
+        return None;
+    }
+    present_overlays(env, &found.overlays);
+    let composition = &mut env.framework_state.core_animation.composition;
+    composition.last_overlay_redraw = Some(now);
+    composition.last_overlay_fingerprint = frame_fingerprint(
+        &env.objc,
+        &overlay_layers,
+        target,
+        &params.present_frame_args,
+    );
+    Some(next)
+}
+
+/// Work out the parameters for compositing and presenting a frame, and
+/// update the compositor's filtering settings.
+fn prepare_render_params(env: &mut Environment) -> (RenderParams, crate::options::FilterMode) {
+    let screen_bounds: CGRect = {
+        let screen: id = msg_class![env; UIScreen mainScreen];
+        msg![env; screen bounds]
+    };
+    let scale_hack: u32 = env.options.scale_hack.get();
+    // For sharp filtering, the screen is rendered at a whole multiple of its
+    // size (with nearest-neighbour filtering of the layers) before the final
+    // bilinear scaling. This is invisible to the app.
+    let upscale = env.window().sharp_upscale_factor();
+    let filter_mode = env.window().filter_mode();
+    let layer_nearest = filter_mode != crate::options::FilterMode::Smooth;
+    let final_nearest = filter_mode == crate::options::FilterMode::Pixel;
+    env.framework_state.core_animation.composition.layer_nearest = layer_nearest;
+    env.framework_state.core_animation.composition.layer_scale2x =
+        filter_mode == crate::options::FilterMode::Hq;
+    let fb_width = screen_bounds.size.width as u32 * scale_hack * upscale;
+    let fb_height = screen_bounds.size.height as u32 * scale_hack * upscale;
+    let present_frame_args = (
+        env.window().viewport(),
+        env.window().rotation_matrix(),
+        env.window().virtual_cursor_visible_at(),
+    );
+    (
+        RenderParams {
+            fb_size: (fb_width, fb_height),
+            screen_bounds,
+            final_nearest,
+            present_frame_args,
+        },
+        filter_mode,
+    )
+}
+
+/// Draw `overlays` (layers drawn on top of a full-screen OpenGL ES layer, see
+/// [super::ca_eagl_layer::find_fullscreen_eagl_layer_with_overlays]) on top of
+/// the OpenGL ES frame that has just been drawn to the window, then swap the
+/// window's buffers. This avoids having to read the frame back from the GPU
+/// and composite it, which is slow.
+pub fn present_overlays(env: &mut Environment, overlays: &[(id, Matrix<4>)]) {
+    let mut animation_state = animation::State::default();
+    // Ensure layer bitmaps are up to date.
+    for &(layer, _) in overlays {
+        display_layers(env, layer);
+    }
+    let (params, filter_mode) = prepare_render_params(env);
+
+    // Usually the overlays don't change from frame to frame, so the render
+    // target can be presented again without compositing them again.
+    let overlays_fingerprint = |env: &Environment| {
+        use std::hash::{Hash, Hasher};
+        let layers: Vec<id> = overlays.iter().map(|&(layer, _)| layer).collect();
+        let fingerprint = frame_fingerprint(
+            &env.objc,
+            &layers,
+            (params.fb_size.0, params.fb_size.1, filter_mode as u8),
+            &params.present_frame_args,
+        )?;
+        let mut hasher = crate::fast_hash::FxHasher::default();
+        fingerprint.hash(&mut hasher);
+        for (_, transform) in overlays {
+            for column in transform.columns() {
+                for value in column {
+                    value.to_bits().hash(&mut hasher);
+                }
+            }
+        }
+        Some(hasher.finish())
+    };
+    let fingerprint = overlays_fingerprint(env);
+    let composition = &env.framework_state.core_animation.composition;
+    let reuse = fingerprint.is_some()
+        && fingerprint == composition.overlay_target_fingerprint
+        && composition
+            .texture_framebuffer
+            .is_some_and(|(_, _, size)| size == params.fb_size);
+
+    unsafe {
+        render_and_present(
+            env,
+            &mut animation_state,
+            overlays,
+            &params,
+            /* overlay: */ true,
+            /* composite: */ !reuse,
+        );
+    }
+    animation_state.update_started_and_finished_animations(env);
+    // Compositing updates the layers' textures, so the fingerprint to compare
+    // with next time must be taken afterwards.
+    let fingerprint = overlays_fingerprint(env);
+    let composition = &mut env.framework_state.core_animation.composition;
+    composition.overlay_target_fingerprint = fingerprint;
+    // What's in the window is no longer a normally composited frame.
+    composition.last_frame_fingerprint = None;
+}
+
+/// What [render_and_present] needs to know about the screen.
+struct RenderParams {
+    /// Size of the render target.
+    fb_size: (u32, u32),
+    /// Bounds of the app's screen (`UIScreen`).
+    screen_bounds: CGRect,
+    /// Whether to use nearest-neighbour filtering when presenting.
+    final_nearest: bool,
+    present_frame_args: PresentFrameArgs,
+}
+
+/// Composite `roots` (each with the cumulative transform of its superlayer,
+/// see [composite_layer_recursive]) into the render target and draw it to the
+/// window, then swap the window's buffers.
+///
+/// If `overlay` is set, the render target is cleared to transparent rather
+/// than black, and it is drawn on top of what's already in the window's
+/// framebuffer (see [present_overlays]). If `composite` is false, the render
+/// target's existing contents are presented again instead.
+unsafe fn render_and_present(
+    env: &mut Environment,
+    animation_state: &mut animation::State,
+    roots: &[(id, Matrix<4>)],
+    params: &RenderParams,
+    overlay: bool,
+    composite: bool,
+) {
+    let &RenderParams {
+        fb_size: (fb_width, fb_height),
+        screen_bounds,
+        final_nearest,
+        ref present_frame_args,
+    } = params;
 
     let window = env.window.as_mut().unwrap();
     let mut gles = window.make_internal_gl_ctx_current();
@@ -408,9 +660,13 @@ pub fn recomposite_if_necessary(env: &mut Environment, force: bool) -> Option<In
         });
 
     // Clear the framebuffer and set up state to prepare for rendering
-    unsafe {
+    if composite {
         gles.Viewport(0, 0, fb_width as _, fb_height as _);
-        gles.ClearColor(0.0, 0.0, 0.0, 1.0);
+        if overlay {
+            gles.ClearColor(0.0, 0.0, 0.0, 0.0);
+        } else {
+            gles.ClearColor(0.0, 0.0, 0.0, 1.0);
+        }
         gles.Clear(gles11::COLOR_BUFFER_BIT);
         gles.Color4f(1.0, 1.0, 1.0, 1.0);
 
@@ -436,21 +692,25 @@ pub fn recomposite_if_necessary(env: &mut Environment, force: bool) -> Option<In
     }
     std::mem::drop(gles);
 
-    // Assumes the windows in the list are ordered back-to-front.
-    // TODO: this may not be correct once we support windowLevel.
-    let window_layers_for_fingerprint = window_layers.clone();
-    for root_layer in window_layers {
-        // Here's where the actual drawing happens
-        unsafe {
-            composite_layer_recursive(
-                env,
-                &mut animation_state,
-                root_layer,
-                cumulative_transform,
-                opacity,
-            );
-        }
+    env.framework_state.core_animation.composition.overlay_mode = overlay;
+    if !overlay {
+        // The render target won't contain the overlays any more.
+        env.framework_state
+            .core_animation
+            .composition
+            .overlay_target_fingerprint = None;
     }
+    for &(root_layer, cumulative_transform) in roots.iter().filter(|_| composite) {
+        // Here's where the actual drawing happens
+        composite_layer_recursive(
+            env,
+            animation_state,
+            root_layer,
+            cumulative_transform,
+            /* opacity: */ 1.0,
+        );
+    }
+    env.framework_state.core_animation.composition.overlay_mode = false;
 
     // Re-borrow
     let window = env.window.as_mut().unwrap();
@@ -482,31 +742,24 @@ pub fn recomposite_if_necessary(env: &mut Environment, force: bool) -> Option<In
         gles.TexParameteri(gles11::TEXTURE_2D, gles11::TEXTURE_MIN_FILTER, filter as _);
         gles.TexParameteri(gles11::TEXTURE_2D, gles11::TEXTURE_MAG_FILTER, filter as _);
         gles.BindFramebufferOES(gles11::FRAMEBUFFER_OES, 0);
+        if overlay {
+            // Draw on top of what's already there (the app's OpenGL ES frame).
+            gles.Enable(gles11::BLEND);
+            gles.BlendFunc(gles11::ONE, gles11::ONE_MINUS_SRC_ALPHA);
+        }
         present_frame(
             gles.as_mut(),
             present_frame_args.0,
             present_frame_args.1,
             present_frame_args.2,
+            /* clear: */ !overlay,
         );
+        if overlay {
+            gles.Disable(gles11::BLEND);
+        }
     }
     std::mem::drop(gles);
     window.swap_window();
-
-    animation_state.update_started_and_finished_animations(env);
-
-    // Compositing updates the layers' textures, so the fingerprint to compare
-    // the next frame with must be taken afterwards.
-    env.framework_state
-        .core_animation
-        .composition
-        .last_frame_fingerprint = frame_fingerprint(
-        &env.objc,
-        &window_layers_for_fingerprint,
-        (fb_width, fb_height, filter_mode as u8),
-        &present_frame_args,
-    );
-
-    new_recomposite_next
 }
 
 /// Viewport, rotation matrix and virtual cursor state, as passed to
@@ -848,7 +1101,8 @@ unsafe fn composite_layer_recursive(
             .unwrap();
 
         gles.Color4f(opacity, opacity, opacity, opacity);
-        if opacity == 1.0 && host_obj.opaque && !have_background {
+        let draw_opaque = opacity == 1.0 && host_obj.opaque && !have_background;
+        if draw_opaque {
             gles.Disable(gles11::BLEND);
         } else {
             gles.Enable(gles11::BLEND);
@@ -879,6 +1133,24 @@ unsafe fn composite_layer_recursive(
             gles11::UNSIGNED_BYTE,
             0 as *const GLvoid,
         );
+
+        // The alpha channel of an opaque layer's texture is meant to be
+        // ignored. That doesn't matter when compositing onto black, but
+        // overlays are drawn on top of an OpenGL ES frame afterwards (see
+        // present_overlays), so make the layer's area fully opaque.
+        if draw_opaque && env.framework_state.core_animation.composition.overlay_mode {
+            gles.ColorMask(gles11::FALSE, gles11::FALSE, gles11::FALSE, gles11::TRUE);
+            gles.Disable(gles11::TEXTURE_2D);
+            gles.DisableClientState(gles11::TEXTURE_COORD_ARRAY);
+            gles.Color4f(1.0, 1.0, 1.0, 1.0);
+            gles.DrawElements(
+                gles11::TRIANGLES,
+                SQUARE_INDICES.len() as _,
+                gles11::UNSIGNED_BYTE,
+                0 as *const GLvoid,
+            );
+            gles.ColorMask(gles11::TRUE, gles11::TRUE, gles11::TRUE, gles11::TRUE);
+        }
     }
     std::mem::drop(gles);
 

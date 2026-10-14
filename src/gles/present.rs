@@ -43,12 +43,16 @@ impl FpsCounter {
 /// the window. It may be rotated, scaled and/or letterboxed as necessary. The
 /// virtual cursor is also drawn if it should be currently visible.
 ///
+/// If `clear` is false, the window's framebuffer isn't cleared first, which is
+/// useful for drawing on top of an existing frame (with blending enabled).
+///
 /// The provided context must be current.
 pub unsafe fn present_frame(
     gles: &mut dyn GLES,
     viewport: (i32, i32, u32, u32),
     rotation_matrix: Matrix<2>,
     virtual_cursor_visible_at: Option<(f32, f32, bool)>,
+    clear: bool,
 ) {
     // While this is a generic utility, it is closely tied to
     // crate::frameworks::opengles::eagl::present_renderbuffer, which handles
@@ -64,8 +68,12 @@ pub unsafe fn present_frame(
         viewport.2 as _,
         viewport.3 as _,
     );
-    gles.ClearColor(0.0, 0.0, 0.0, 1.0);
-    gles.Clear(gles11::COLOR_BUFFER_BIT | gles11::DEPTH_BUFFER_BIT | gles11::STENCIL_BUFFER_BIT);
+    if clear {
+        gles.ClearColor(0.0, 0.0, 0.0, 1.0);
+        gles.Clear(
+            gles11::COLOR_BUFFER_BIT | gles11::DEPTH_BUFFER_BIT | gles11::STENCIL_BUFFER_BIT,
+        );
+    }
     gles.BindBuffer(gles11::ARRAY_BUFFER, 0);
     let vertices: [f32; 12] = [
         -1.0, -1.0, -1.0, 1.0, 1.0, -1.0, 1.0, -1.0, -1.0, 1.0, 1.0, 1.0,

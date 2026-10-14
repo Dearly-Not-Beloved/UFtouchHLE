@@ -1521,6 +1521,7 @@ impl Window {
                 viewport,
                 matrix,
                 /* virtual_cursor_visible_at: */ None,
+                /* clear: */ true,
             );
 
             gl_ctx.DeleteTextures(1, &texture);

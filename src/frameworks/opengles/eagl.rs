@@ -7,7 +7,7 @@
 
 use crate::dyld::{ConstantExports, HostConstant};
 use crate::frameworks::core_animation::ca_eagl_layer::{
-    find_fullscreen_eagl_layer_and_rotation, get_pixels_vec_for_presenting, present_pixels,
+    find_fullscreen_eagl_layer_with_overlays, get_pixels_vec_for_presenting, present_pixels,
 };
 use crate::frameworks::core_graphics::{CGRect, CGSize};
 use crate::frameworks::foundation::ns_string::get_static_str;
@@ -302,7 +302,12 @@ pub const CLASSES: ClassExports = objc_classes! {
             .count_frame(format_args!("EAGLContext {this:?}"));
     }
 
-    let (fullscreen_layer, quarter_turns) = find_fullscreen_eagl_layer_and_rotation(env);
+    // The fullscreen layer may have other layers on top of it (overlays).
+    let (fullscreen_layer, quarter_turns, overlays) =
+        match find_fullscreen_eagl_layer_with_overlays(env) {
+            Some(found) => (found.layer, found.quarter_turns, found.overlays),
+            None => (nil, 0, Vec::new()),
+        };
 
     // Unclear from documentation if this method requires the context to be
     // current, but it would be weird if it didn't?
@@ -337,7 +342,18 @@ pub const CLASSES: ClassExports = objc_classes! {
         );
         // re-borrow
         unsafe {
-            present_renderbuffer(env, quarter_turns);
+            present_renderbuffer(
+                env,
+                quarter_turns,
+                /* copy: */ true,
+                /* swap: */ overlays.is_empty(),
+            );
+        }
+        if !overlays.is_empty() {
+            // Draw the layers on top of it, rather than taking the slow path
+            // below.
+            crate::frameworks::core_animation::present_overlays(env, &overlays);
+            crate::frameworks::core_animation::note_overlay_present(env, drawable, this);
         }
     } else {
         if fullscreen_layer != nil {
@@ -360,8 +376,8 @@ pub const CLASSES: ClassExports = objc_classes! {
         // The very slow and inefficient path: not only does glReadPixels()
         // block the thread until rendering finishes, but the result has to be
         // copied back to system RAM, and then will have to be copied to VRAM
-        // again during composition. find_fullscreen_eagl_layer() exists to
-        // avoid this.
+        // again during composition.
+        // find_fullscreen_eagl_layer_with_overlays() exists to avoid this.
         log_dbg!(
             "There is no fullscreen layer, presenting renderbuffer {:?} to layer {:?} by copying to RAM (slow path).",
             renderbuffer,
@@ -567,17 +583,51 @@ unsafe fn read_renderbuffer(gles: &mut dyn GLES, mut pixel_buffer: Vec<u8>) -> (
     (pixel_buffer, width_u32, height_u32)
 }
 
+/// Draw the frame most recently presented by `context` to the window again,
+/// without swapping the window's buffers, so that the layers on top of it can
+/// be redrawn when the app isn't presenting new frames (see
+/// [crate::frameworks::core_animation::present_overlays]). `context` must be
+/// the current context. Returns false if that isn't possible.
+pub fn redraw_last_frame(env: &mut Environment, context: id, quarter_turns: u8) -> bool {
+    if *env
+        .framework_state
+        .opengles
+        .current_ctx_for_thread(env.current_thread)
+        != Some(context)
+    {
+        return false;
+    }
+    unsafe {
+        present_renderbuffer(
+            env,
+            quarter_turns,
+            /* copy: */ false,
+            /* swap: */ false,
+        )
+    }
+}
+
 /// Copies the pixels in a renderbuffer bound to `GL_RENDERBUFFER_BINDING_OES`
 /// (which should be provided by the app) to a texture and presents it with
 /// [present_frame], trying to avoid noticeably modifying OpenGL ES state while
 /// doing so. The front and back buffers are then swapped.
-unsafe fn present_renderbuffer(env: &mut Environment, quarter_turns: u8) {
+///
+/// If `copy` is false, the frame presented last time is presented again
+/// (see [redraw_last_frame]); returns false if there isn't one. If `swap` is
+/// false, the window's buffers aren't swapped afterwards, so more can be
+/// drawn on top (see [crate::frameworks::core_animation::present_overlays]).
+unsafe fn present_renderbuffer(
+    env: &mut Environment,
+    quarter_turns: u8,
+    copy: bool,
+    swap: bool,
+) -> bool {
     // Save these for when we need to draw the frame
     let viewport = env.window.as_mut().unwrap().viewport();
     let pixel_filter =
         env.window.as_ref().unwrap().filter_mode() == crate::options::FilterMode::Pixel;
     // The layer may be rotated by quarter turns to cover the screen (see
-    // find_fullscreen_eagl_layer_and_rotation), in addition to the rotation
+    // find_fullscreen_eagl_layer_with_overlays), in addition to the rotation
     // for the device orientation.
     let rotation_matrix = env.window.as_mut().unwrap().rotation_matrix().multiply(
         &crate::matrix::Matrix::z_rotation((quarter_turns as f32) * std::f32::consts::FRAC_PI_2),
@@ -600,6 +650,9 @@ unsafe fn present_renderbuffer(env: &mut Environment, quarter_turns: u8) {
         .get(&sharegroup)
         .copied()
         .unwrap_or_default();
+    if !copy && sizes.frame.is_none() {
+        return false;
+    }
 
     let gles_ctx = super::get_thread_context(
         &mut env.framework_state.opengles,
@@ -616,45 +669,62 @@ unsafe fn present_renderbuffer(env: &mut Environment, quarter_turns: u8) {
     // draw to the default framebuffer via a textured quad, which can be
     // rotated, scaled or letterboxed as appropriate.
 
-    let renderbuffer: GLuint = get_int(gles, gles11::RENDERBUFFER_BINDING_OES) as _;
-    let (width, height) = get_renderbuffer_size(gles);
-
     // To avoid confusing the guest app, we need to be able to undo any
     // state changes we make.
     let old_framebuffer: GLuint = get_int(gles, gles11::FRAMEBUFFER_BINDING_OES) as _;
     let old_texture_2d: GLuint = get_int(gles, gles11::TEXTURE_BINDING_2D) as _;
 
-    // Create a framebuffer we can use to read from the renderbuffer
-    let mut src_framebuffer = 0;
-    gles.GenFramebuffersOES(1, &mut src_framebuffer);
-    gles.BindFramebufferOES(gles11::FRAMEBUFFER_OES, src_framebuffer);
-    gles.FramebufferRenderbufferOES(
-        gles11::FRAMEBUFFER_OES,
-        gles11::COLOR_ATTACHMENT0_OES,
-        gles11::RENDERBUFFER_OES,
-        renderbuffer,
-    );
-
-    // Copy the pixels in the framebuffer to a texture. The texture is reused
-    // if it has the right size (glIsTexture() checks it still exists).
     let texture = PRESENT_FRAME_TEXTURE;
-    let reuse = sizes.frame == Some((width, height)) && gles.IsTexture(texture) != 0;
-    gles.BindTexture(gles11::TEXTURE_2D, texture);
-    if reuse {
-        gles.CopyTexSubImage2D(gles11::TEXTURE_2D, 0, 0, 0, 0, 0, width, height);
-    } else {
-        gles.CopyTexImage2D(
-            gles11::TEXTURE_2D,
-            0,
-            gles11::RGB as _,
-            0,
-            0,
-            width,
-            height,
-            0,
+    let (width, height) = if copy {
+        let renderbuffer: GLuint = get_int(gles, gles11::RENDERBUFFER_BINDING_OES) as _;
+        let (width, height) = get_renderbuffer_size(gles);
+
+        // Create a framebuffer we can use to read from the renderbuffer
+        let mut src_framebuffer = 0;
+        gles.GenFramebuffersOES(1, &mut src_framebuffer);
+        gles.BindFramebufferOES(gles11::FRAMEBUFFER_OES, src_framebuffer);
+        gles.FramebufferRenderbufferOES(
+            gles11::FRAMEBUFFER_OES,
+            gles11::COLOR_ATTACHMENT0_OES,
+            gles11::RENDERBUFFER_OES,
+            renderbuffer,
         );
-        sizes.frame = Some((width, height));
-    }
+
+        // Copy the pixels in the framebuffer to a texture. The texture is
+        // reused if it has the right size (glIsTexture() checks it still
+        // exists).
+        let reuse = sizes.frame == Some((width, height)) && gles.IsTexture(texture) != 0;
+        gles.BindTexture(gles11::TEXTURE_2D, texture);
+        if reuse {
+            gles.CopyTexSubImage2D(gles11::TEXTURE_2D, 0, 0, 0, 0, 0, width, height);
+        } else {
+            gles.CopyTexImage2D(
+                gles11::TEXTURE_2D,
+                0,
+                gles11::RGB as _,
+                0,
+                0,
+                width,
+                height,
+                0,
+            );
+            sizes.frame = Some((width, height));
+        }
+
+        // Clean up the framebuffer object since we no longer need it.
+        // This also sets the framebuffer bindings back to zero, so rendering
+        // will go to the default framebuffer (the window).
+        gles.DeleteFramebuffersOES(1, &src_framebuffer);
+        (width, height)
+    } else {
+        // Present the copy made last time again.
+        if gles.IsTexture(texture) == 0 {
+            return false;
+        }
+        gles.BindTexture(gles11::TEXTURE_2D, texture);
+        gles.BindFramebufferOES(gles11::FRAMEBUFFER_OES, 0);
+        sizes.frame.unwrap()
+    };
     // The texture will not have any mip levels so we must ensure the filter
     // does not use them, else rendering will fail.
     gles.TexParameteri(
@@ -674,11 +744,6 @@ unsafe fn present_renderbuffer(env: &mut Environment, quarter_turns: u8) {
             gles11::NEAREST as _,
         );
     }
-
-    // Clean up the framebuffer object since we no longer need it.
-    // This also sets the framebuffer bindings back to zero, so rendering
-    // will go to the default framebuffer (the window).
-    gles.DeleteFramebuffersOES(1, &src_framebuffer);
 
     // Reset various things that could affect the quad or virtual cursor we're
     // going to draw. Back up the old state while doing so, so it can be
@@ -808,6 +873,7 @@ unsafe fn present_renderbuffer(env: &mut Environment, quarter_turns: u8) {
             (0, 0, up_width as u32, up_height as u32),
             crate::matrix::Matrix::identity(),
             None,
+            /* clear: */ true,
         );
 
         gles.BindFramebufferOES(gles11::FRAMEBUFFER_OES, 0);
@@ -815,7 +881,13 @@ unsafe fn present_renderbuffer(env: &mut Environment, quarter_turns: u8) {
     }
 
     // Draw the quad
-    present_frame(gles, viewport, rotation_matrix, virtual_cursor_visible_at);
+    present_frame(
+        gles,
+        viewport,
+        rotation_matrix,
+        virtual_cursor_visible_at,
+        /* clear: */ true,
+    );
 
     env.framework_state
         .opengles
@@ -888,7 +960,9 @@ unsafe fn present_renderbuffer(env: &mut Environment, quarter_turns: u8) {
 
     // SDL2's documentation warns 0 should be bound to the draw framebuffer
     // when swapping the window, so this is the perfect moment.
-    env.window.as_ref().unwrap().swap_window();
+    if swap {
+        env.window.as_ref().unwrap().swap_window();
+    }
 
     let mut gles_boxed = gles_ctx.make_current(env.window.as_mut().unwrap());
     let gles = gles_boxed.as_mut();
@@ -898,4 +972,5 @@ unsafe fn present_renderbuffer(env: &mut Environment, quarter_turns: u8) {
     gles.BindFramebufferOES(gles11::FRAMEBUFFER_OES, old_framebuffer);
 
     // { let err = gles.GetError(); if err != 0 { panic!("{:#x}", err); } }
+    true
 }
