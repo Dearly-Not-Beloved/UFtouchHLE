@@ -71,7 +71,7 @@ pub struct ObjC {
     /// Mapping of known (guest) object pointers to their host objects.
     ///
     /// If an object isn't in this map, we will consider it not to exist.
-    objects: HashMap<id, HostObjectEntry>,
+    objects: crate::fast_hash::FastHashMap<id, HostObjectEntry>,
 
     /// Known classes.
     ///
@@ -79,10 +79,10 @@ pub struct ObjC {
     classes: HashMap<String, Class>,
 
     /// Mutexes used in @synchronized blocks (objc_sync_enter/exit).
-    sync_mutexes: HashMap<id, MutexId>,
+    sync_mutexes: crate::fast_hash::FastHashMap<id, MutexId>,
 
     /// Mutexes for running the +initialize function.
-    initializer_threads: HashMap<id, ThreadInitializer>,
+    initializer_threads: crate::fast_hash::FastHashMap<id, ThreadInitializer>,
 
     /// Temporary storage for optional type information when sending a message.
     /// Type information isn't part of the `objc_msgSend` ABI, so an alternative
@@ -94,10 +94,10 @@ impl ObjC {
     pub fn new() -> ObjC {
         ObjC {
             selectors: HashMap::new(),
-            objects: HashMap::new(),
+            objects: Default::default(),
             classes: HashMap::new(),
-            sync_mutexes: HashMap::new(),
-            initializer_threads: HashMap::new(),
+            sync_mutexes: Default::default(),
+            initializer_threads: Default::default(),
             message_type_info: None,
         }
     }

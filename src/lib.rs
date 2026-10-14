@@ -34,6 +34,7 @@ mod cpu;
 mod debug;
 mod dyld;
 mod environment;
+mod fast_hash;
 mod font;
 mod frameworks;
 mod fs;

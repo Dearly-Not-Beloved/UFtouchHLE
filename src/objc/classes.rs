@@ -38,8 +38,8 @@ pub(super) struct ClassHostObject {
     pub(super) name: String,
     pub(super) is_metaclass: bool,
     pub(super) superclass: Class,
-    pub(super) methods: HashMap<SEL, IMP>,
-    pub(super) guest_method_signatures: HashMap<SEL, ConstPtr<u8>>,
+    pub(super) methods: crate::fast_hash::FastHashMap<SEL, IMP>,
+    pub(super) guest_method_signatures: crate::fast_hash::FastHashMap<SEL, ConstPtr<u8>>,
     /// Maps ivar name to a tuple of an offset (as pointer) and an alignment.
     /// (Alignment is used during ivar reconciliation.)
     pub(super) ivars: HashMap<String, (ConstPtr<GuestUSize>, u32)>,
@@ -417,8 +417,8 @@ impl ClassHostObject {
             name,
             is_metaclass,
             superclass,
-            methods: HashMap::new(),
-            guest_method_signatures: HashMap::new(),
+            methods: Default::default(),
+            guest_method_signatures: Default::default(),
             instance_start,
             instance_size,
             ivars: HashMap::new(),
