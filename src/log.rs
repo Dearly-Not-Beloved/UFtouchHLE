@@ -74,35 +74,76 @@ macro_rules! log_once {
 /// Prefer use [log] or [log_dbg] for errors and warnings during emulation.
 macro_rules! echo {
     ($($arg:tt)+) => {
-        {
-            let formatted_str = format!($($arg)+);
-
-            #[cfg(target_os = "android")]
-            {
-                sdl2::log::log(&formatted_str);
-            }
-            #[cfg(not(target_os = "android"))]
-            eprintln!("{}", formatted_str);
-
-            use std::io::Write;
-            let mut log_file = $crate::log::get_log_file();
-            let _ = log_file.write_all(formatted_str.as_bytes());
-            let _ = log_file.write_all(b"\n");
-        }
+        $crate::log::echo_line(&format!($($arg)+))
     };
     () => {
-        {
-            #[cfg(target_os = "android")]
-            {
-                sdl2::log::log("");
-            }
-            #[cfg(not(target_os = "android"))]
-            eprintln!("");
-
-            use std::io::Write;
-            let _ = $crate::log::get_log_file().write_all(b"\n");
-        }
+        $crate::log::echo_line("")
     }
+}
+
+/// Write a line to the terminal (or on Android, logcat) and the log file.
+/// Use [echo] rather than calling this directly.
+///
+/// Apps sometimes trigger the same warning on every frame (e.g. by calling an
+/// unimplemented function). Writing it out every time slows touchHLE down,
+/// especially on Android, and makes the log file huge, so after a few
+/// identical lines in a row, the rest are only counted.
+pub fn echo_line(line: &str) {
+    use std::hash::{Hash, Hasher};
+    use std::sync::Mutex;
+
+    /// How many times in a row the same line is written out before further
+    /// repeats are only counted.
+    const MAX_REPEATS: u32 = 5;
+    /// Hash of the last line and how many times in a row it has been seen.
+    static LAST_LINE: Mutex<(u64, u32)> = Mutex::new((0, 0));
+
+    let mut hasher = std::hash::DefaultHasher::new();
+    line.hash(&mut hasher);
+    let hash = hasher.finish();
+
+    let previous_hidden = {
+        let Ok(mut last) = LAST_LINE.lock() else {
+            write_line(line);
+            return;
+        };
+        if last.0 == hash && last.1 > 0 {
+            last.1 += 1;
+            if last.1 > MAX_REPEATS + 1 {
+                return;
+            } else if last.1 == MAX_REPEATS + 1 {
+                drop(last);
+                write_line("(The previous line is being repeated; further repeats are hidden.)");
+                return;
+            }
+            None
+        } else {
+            let hidden = last.1.saturating_sub(MAX_REPEATS);
+            *last = (hash, 1);
+            (hidden > 0).then_some(hidden)
+        }
+    };
+    if let Some(hidden) = previous_hidden {
+        write_line(&format!(
+            "(The previous line was repeated {} more times.)",
+            hidden
+        ));
+    }
+    write_line(line);
+}
+
+fn write_line(line: &str) {
+    #[cfg(target_os = "android")]
+    {
+        sdl2::log::log(line);
+    }
+    #[cfg(not(target_os = "android"))]
+    eprintln!("{}", line);
+
+    use std::io::Write;
+    let mut log_file = get_log_file();
+    let _ = log_file.write_all(line.as_bytes());
+    let _ = log_file.write_all(b"\n");
 }
 
 /// Same as [echo], but silently fails on panic instead of
