@@ -356,11 +356,13 @@ pub const CLASSES: ClassExports = objc_classes! {
             crate::frameworks::core_animation::note_overlay_present(env, drawable, this);
         }
     } else {
-        if fullscreen_layer != nil {
+        if fullscreen_layer != nil && overlays.is_empty() {
             // If there's a single layer that covers the screen, and this isn't
             // it, there's no point in presenting the output because it won't be
-            // seen. Using a noisy log because it's a weird scenario and might
-            // indicate a bug.
+            // seen. (If there are overlays, this might be one of them, e.g. a
+            // second OpenGL ES view, so it's presented the slow way.) Using a
+            // noisy log because it's a weird scenario and might indicate a
+            // bug.
             log!(
                 "Layer {:?} is not the fullscreen layer {:?}, skipping presentation of renderbuffer {:?}!",
                 drawable,
