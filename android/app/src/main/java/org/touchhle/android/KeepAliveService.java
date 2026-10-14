@@ -47,12 +47,6 @@ public class KeepAliveService extends Service {
         return START_NOT_STICKY;
     }
 
-    @Override
-    public void onTaskRemoved(Intent rootIntent) {
-        // touchHLE was swiped away from the recent apps screen.
-        stopSelf();
-    }
-
     @SuppressWarnings("deprecation")
     private Notification buildNotification() {
         Notification.Builder builder;

@@ -52,12 +52,15 @@ public class MainActivity extends SDLActivity {
 
     @Override
     protected void onDestroy() {
+        // SDLActivity tells touchHLE to quit and waits for it, which gives the
+        // app a chance to save (applicationWillTerminate:). The service keeps
+        // the process alive meanwhile, so only stop it afterwards.
+        super.onDestroy();
         try {
             stopService(new Intent(this, KeepAliveService.class));
         } catch (Throwable e) {
             // Not essential.
         }
-        super.onDestroy();
     }
 
     // iPhone OS apps never run at more than 60 frames per second, and
