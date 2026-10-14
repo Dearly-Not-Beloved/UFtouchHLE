@@ -587,6 +587,54 @@ fn app_picker_inner(
     let mut quick_options_analog_stick_tilt_controls = true;
     let mut quick_options_network = false;
 
+    // Restore the quick options chosen last time (saved when an app is
+    // launched), so they don't have to be chosen again every time.
+    let quick_options_file = paths::user_data_base_path().join(QUICK_OPTIONS_FILE);
+    if let Ok(saved) = std::fs::read_to_string(&quick_options_file) {
+        for arg in saved.lines().map(str::trim) {
+            if let Some(v) = arg.strip_prefix("--scale-hack=") {
+                quick_options_scale_hack = v.parse().ok().filter(|v: &NonZeroU32| v.get() <= 4);
+            } else if let Some(v) = arg.strip_prefix("--aspect=") {
+                quick_options_aspect = QUICK_ASPECT_VALUES
+                    .iter()
+                    .position(|&x| x == Some(v))
+                    .unwrap_or(0);
+            } else if let Some(v) = arg.strip_prefix("--filter=") {
+                quick_options_filter = QUICK_FILTER_VALUES
+                    .iter()
+                    .position(|&x| x == Some(v))
+                    .unwrap_or(0);
+            } else {
+                match arg {
+                    "--landscape-left" => {
+                        quick_options_orientation = Some(DeviceOrientation::LandscapeLeft)
+                    }
+                    "--landscape-right" => {
+                        quick_options_orientation = Some(DeviceOrientation::LandscapeRight)
+                    }
+                    "--upside-down" => {
+                        quick_options_orientation = Some(DeviceOrientation::PortraitUpsideDown)
+                    }
+                    "--fullscreen" => quick_options_fullscreen = Some(()),
+                    "--disable-analog-stick-tilt-controls" => {
+                        quick_options_analog_stick_tilt_controls = false
+                    }
+                    "--allow-network-access" => quick_options_network = true,
+                    _ => (),
+                }
+            }
+        }
+    }
+    for &(selector, switch) in &quick_options_stuff.switches {
+        let on = match selector {
+            "network:" => quick_options_network,
+            "analogStickTiltControls:" => quick_options_analog_stick_tilt_controls,
+            "fullscreen:" => quick_options_fullscreen.is_some(),
+            _ => continue,
+        };
+        () = msg![env; switch setOn:on];
+    }
+
     fn update_quick_option_buttons(env: &mut Environment, buttons: &[id], selected_idx: usize) {
         for (idx, &button) in buttons.iter().enumerate() {
             let color: id = if idx == selected_idx {
@@ -841,6 +889,10 @@ fn app_picker_inner(
     }
     if quick_options_network {
         option_args.push("--allow-network-access".to_string());
+    }
+
+    if let Err(e) = std::fs::write(&quick_options_file, option_args.join("\n")) {
+        log!("Warning: couldn't save quick options: {}", e);
     }
 
     // Return the environment so some parts of it can be salvaged.
@@ -1454,8 +1506,13 @@ fn change_copyright_page(
     () = msg![env; next_page_button setHidden:(Some(page_idx) == *last_page_idx)];
 }
 
+/// Where the quick options are remembered, in the user data directory.
+const QUICK_OPTIONS_FILE: &str = "touchHLE_quick_options.txt";
+
 struct QuickOptionsStuff {
     main_view: id,
+    /// `UISwitch*`es and their action selectors.
+    switches: Vec<(&'static str, id)>,
     scale_hack_buttons: [id; 5],
     orientation_buttons: [id; 4],
     aspect_buttons: [id; 4],
@@ -1576,6 +1633,7 @@ fn setup_quick_options(
     };
 
     let mut button_rows = Vec::new();
+    let mut switches = Vec::new();
     for (i, row) in rows.iter().enumerate() {
         let row_center = divider
             + ((1 + i) as CGFloat)
@@ -1629,6 +1687,7 @@ fn setup_quick_options(
                 let switch: id = msg_class![env; UISwitch alloc];
                 let switch: id = msg![env; switch initWithFrame:switch_frame];
                 () = msg![env; switch setOn:default_state];
+                switches.push((selector, switch));
                 let selector = env.objc.lookup_selector(selector).unwrap();
                 () = msg![env; switch addTarget:delegate
                                          action:selector
@@ -1640,6 +1699,7 @@ fn setup_quick_options(
 
     QuickOptionsStuff {
         main_view,
+        switches,
         scale_hack_buttons: button_rows[0][..].try_into().unwrap(),
         orientation_buttons: button_rows[1][..].try_into().unwrap(),
         aspect_buttons: button_rows[2][..].try_into().unwrap(),
