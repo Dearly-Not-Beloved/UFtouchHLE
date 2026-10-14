@@ -16,11 +16,11 @@ use crate::frameworks::core_graphics::cg_image::{self, kCGImageAlphaPremultiplie
 use crate::frameworks::core_graphics::{CGFloat, CGPoint, CGRect, CGSize};
 use crate::frameworks::foundation::ns_run_loop::run_run_loop_single_iteration;
 use crate::frameworks::foundation::ns_string;
-use crate::frameworks::uikit::ui_font::{UITextAlignmentCenter, UITextAlignmentRight};
-use crate::frameworks::uikit::ui_graphics::{UIGraphicsPopContext, UIGraphicsPushContext};
-use crate::frameworks::uikit::ui_view::ui_control::ui_button::{
-    UIButtonTypeCustom, UIButtonTypeRoundedRect,
+use crate::frameworks::uikit::ui_font::{
+    UITextAlignment, UITextAlignmentCenter, UITextAlignmentLeft,
 };
+use crate::frameworks::uikit::ui_graphics::{UIGraphicsPopContext, UIGraphicsPushContext};
+use crate::frameworks::uikit::ui_view::ui_control::ui_button::UIButtonTypeCustom;
 use crate::frameworks::uikit::ui_view::ui_control::{
     UIControlEventTouchUpInside, UIControlEventValueChanged, UIControlStateNormal,
 };
@@ -51,12 +51,15 @@ pub fn app_picker(options: Options) -> Result<(PathBuf, Vec<String>), String> {
     let apps_dir = paths::user_data_base_path().join(paths::APPS_DIR);
 
     let apps: Result<Vec<AppInfo>, String> = if !apps_dir.is_dir() {
-        Err(format!("The {} directory couldn't be found. Check you're running touchHLE from the right directory.", apps_dir.display()))
+        Err(format!(
+            "找不到 {} 文件夹。请确认 touchHLE 是从正确的位置启动的。",
+            apps_dir.display()
+        ))
     } else {
         enumerate_apps(&apps_dir)
             .map_err(|err| {
                 format!(
-                    "Couldn't get list of apps in the {} directory: {}.",
+                    "无法读取 {} 文件夹里的应用列表：{}",
                     apps_dir.display(),
                     err
                 )
@@ -64,7 +67,7 @@ pub fn app_picker(options: Options) -> Result<(PathBuf, Vec<String>), String> {
             .and_then(|apps| {
                 if apps.is_empty() {
                     Err(format!(
-                        "No apps were found in the {} directory.",
+                        "{} 文件夹里还没有应用。\n\n点击下方的「文件管理」，把 .ipa 文件或 .app 文件夹放进 touchHLE_apps 文件夹即可。",
                         apps_dir.display()
                     ))
                 } else {
@@ -316,6 +319,9 @@ fn app_picker_inner(
     );
     () = msg![env; ui_application setDelegate:delegate];
 
+    // Use the whole screen, the status bar would just be an empty black bar.
+    () = msg![env; ui_application setStatusBarHidden:true];
+
     let screen: id = msg_class![env; UIScreen mainScreen];
     let bounds: CGRect = msg![env; screen bounds];
 
@@ -327,48 +333,27 @@ fn app_picker_inner(
     let main_view: id = msg![env; main_view initWithFrame:app_frame];
     () = msg![env; window addSubview:main_view];
 
-    // Wallpaper
-    let mut found_wallpaper = false;
-    let mut have_wallpaper = false;
+    // Wallpaper: the user's own if there is one, otherwise the built-in
+    // background.
+    let mut user_wallpaper = None;
     for candidate in paths::WALLPAPER_FILES {
         let candidate = paths::user_data_base_path().join(candidate);
         if !candidate.exists() {
             continue;
         }
-        found_wallpaper = true;
-
-        let image = match std::fs::read(&candidate) {
-            Ok(image) => image,
+        match std::fs::read(&candidate)
+            .map_err(|e| e.to_string())
+            .and_then(|bytes| {
+                Image::from_bytes(&bytes).map_err(|e| format!("couldn't decode: {}", e))
+            }) {
+            Ok(image) => user_wallpaper = Some(image),
             Err(e) => {
                 log!("Warning: couldn't read {}: {}", candidate.display(), e);
-                break;
             }
-        };
-        let image = match Image::from_bytes(&image) {
-            Ok(image) => image,
-            Err(e) => {
-                log!("Warning: couldn't decode {}: {}", candidate.display(), e);
-                break;
-            }
-        };
-
-        let image = cg_image::from_image(env, image);
-        let image: id = msg_class![env; UIImage imageWithCGImage:image];
-        let wallpaper: id = msg_class![env; UIImageView alloc];
-        let wallpaper: id = msg![env; wallpaper initWithImage:image];
-        () = msg![env; wallpaper setFrame:(CGRect {
-            origin: CGPoint {
-                x: 0.0,
-                y: 0.0,
-            },
-            size: app_frame.size,
-        })];
-        () = msg![env; wallpaper setAlpha:(0.5 as CGFloat)];
-        () = msg![env; main_view addSubview:wallpaper];
-        have_wallpaper = true;
+        }
         break;
     }
-    if !found_wallpaper {
+    if user_wallpaper.is_none() {
         let CGSize { width, height } = app_frame.size;
         log!(
             "No wallpaper found; filename can be one of: {}; ideal size is {}×{} pixels",
@@ -377,51 +362,120 @@ fn app_picker_inner(
             height,
         );
     }
+    {
+        let is_user_wallpaper = user_wallpaper.is_some();
+        let image = user_wallpaper.unwrap_or_else(|| {
+            Image::from_bytes(include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/res/picker_background.png"
+            )))
+            .unwrap()
+        });
+        let image = cg_image::from_image(env, image);
+        let image: id = msg_class![env; UIImage imageWithCGImage:image];
+        let wallpaper: id = msg_class![env; UIImageView alloc];
+        let wallpaper: id = msg![env; wallpaper initWithImage:image];
+        () = msg![env; wallpaper setFrame:(CGRect {
+            origin: CGPoint { x: 0.0, y: 0.0 },
+            size: app_frame.size,
+        })];
+        if is_user_wallpaper {
+            () = msg![env; wallpaper setAlpha:(0.5 as CGFloat)];
+        }
+        () = msg![env; main_view addSubview:wallpaper];
+    }
+    let have_wallpaper = true;
+
+    // Header: icon, name and a hint
+    {
+        let icon_bytes: &[u8] = match crate::branding() {
+            "UF" => include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/res/icon_uf.png")),
+            "PREVIEW" => {
+                include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/res/icon_preview.png"))
+            }
+            _ => include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/res/icon.png")),
+        };
+        let mut icon = Image::from_bytes(icon_bytes).unwrap();
+        icon.round_corners(
+            (10.0 / 57.0) * (icon.dimensions().0 as f32),
+            /* four_corners: */ true,
+            /* add_sheen: */ false,
+        );
+        let icon = cg_image::from_image(env, icon);
+        let icon: id = msg_class![env; UIImage imageWithCGImage:icon];
+        let icon_view: id = msg_class![env; UIImageView alloc];
+        let icon_view: id = msg![env; icon_view initWithImage:icon];
+        () = msg![env; icon_view setFrame:(CGRect {
+            origin: CGPoint { x: 14.0, y: 16.0 },
+            size: CGSize { width: 36.0, height: 36.0 },
+        })];
+        () = msg![env; main_view addSubview:icon_view];
+
+        let title = format!(
+            "touchHLE{}{}",
+            if crate::branding().is_empty() {
+                ""
+            } else {
+                " "
+            },
+            crate::branding()
+        );
+        add_label(
+            env,
+            main_view,
+            (58.0, 14.0, 248.0, 24.0),
+            &title,
+            19.0,
+            true,
+            (1.0, 1.0, 1.0, 1.0),
+            UITextAlignmentLeft,
+        );
+        add_label(
+            env,
+            main_view,
+            (58.0, 38.0, 248.0, 16.0),
+            "点击图标启动游戏",
+            11.0,
+            false,
+            SUBTLE_TEXT_COLOR,
+            UITextAlignmentLeft,
+        );
+
+        let divider: id = msg_class![env; UIView alloc];
+        let divider: id = msg![env; divider initWithFrame:(CGRect {
+            origin: CGPoint { x: 14.0, y: 64.0 },
+            size: CGSize { width: app_frame.size.width - 28.0, height: 1.0 },
+        })];
+        let color: id =
+            msg_class![env; UIColor colorWithWhite:(1.0 as CGFloat) alpha:(0.2 as CGFloat)];
+        () = msg![env; divider setBackgroundColor:color];
+        () = msg![env; main_view addSubview:divider];
+    }
 
     // Version label
     {
-        let label_frame = CGRect {
-            origin: CGPoint {
-                x: 0.0,
-                y: app_frame.size.height - 20.0,
-            },
-            size: CGSize {
-                width: app_frame.size.width - 5.0,
-                height: 15.0,
-            },
+        let edition = match crate::branding() {
+            "UF" => " · 非官方版本",
+            "PREVIEW" => " · 预览版",
+            _ => "",
         };
-        let label: id = msg_class![env; UILabel alloc];
-        let label: id = msg![env; label initWithFrame:label_frame];
-        let text = ns_string::from_rust_string(
+        let text = format!("{}{}", crate::VERSION, edition);
+        add_label(
             env,
-            format!(
-                "touchHLE {}{}{}",
-                crate::branding(),
-                if crate::branding().is_empty() {
-                    ""
-                } else {
-                    " "
-                },
-                crate::VERSION
+            main_view,
+            (
+                0.0,
+                app_frame.size.height - 20.0,
+                app_frame.size.width,
+                14.0,
             ),
+            &text,
+            10.0,
+            false,
+            SUBTLE_TEXT_COLOR,
+            UITextAlignmentCenter,
         );
-        () = msg![env; label setText:text];
-        () = msg![env; label setTextAlignment:UITextAlignmentRight];
-        let font_size: CGFloat = 12.0;
-        let font: id = msg_class![env; UIFont systemFontOfSize:font_size];
-        () = msg![env; label setFont:font];
-        let text_color: id = if have_wallpaper {
-            msg_class![env; UIColor whiteColor]
-        } else {
-            msg_class![env; UIColor lightGrayColor]
-        };
-        () = msg![env; label setTextColor:text_color];
-        let bg_color: id = msg_class![env; UIColor clearColor];
-        () = msg![env; label setBackgroundColor:bg_color];
-        () = msg![env; main_view addSubview:label];
     }
-
-    let divider = app_frame.size.height - 100.0;
 
     let mut icon_grid_stuff = match &mut apps {
         Ok(ref mut apps) => {
@@ -438,10 +492,10 @@ fn app_picker_inner(
         }
         Err(e) => {
             let label_frame = CGRect {
-                origin: CGPoint { x: 10.0, y: 10.0 },
+                origin: CGPoint { x: 20.0, y: 80.0 },
                 size: CGSize {
-                    width: app_frame.size.width - 20.0,
-                    height: divider - 20.0,
+                    width: app_frame.size.width - 40.0,
+                    height: app_frame.size.height - 128.0 - 90.0,
                 },
             };
             let label: id = msg_class![env; UILabel alloc];
@@ -450,7 +504,7 @@ fn app_picker_inner(
             () = msg![env; label setText:text];
             () = msg![env; label setTextAlignment:UITextAlignmentCenter];
             () = msg![env; label setNumberOfLines:0]; // unlimited
-            let text_color: id = msg_class![env; UIColor lightGrayColor];
+            let text_color: id = msg_class![env; UIColor whiteColor];
             () = msg![env; label setTextColor:text_color];
             let bg_color: id = msg_class![env; UIColor clearColor];
             () = msg![env; label setBackgroundColor:bg_color];
@@ -459,32 +513,49 @@ fn app_picker_inner(
         }
     };
 
-    let buttons_row_center = divider + (app_frame.size.height - divider) / 4.0;
-    let buttons_row2_center = divider + (app_frame.size.height - divider) / 1.6;
-    make_button_row(
-        env,
-        delegate,
-        main_view,
-        app_frame.size,
-        buttons_row_center,
-        &[
-            ("File manager", "openFileManager"),
-            ("Quick options", "quickOptionsShow"),
-        ],
-        None,
-    );
-    make_button_row(
-        env,
-        delegate,
-        main_view,
-        app_frame.size,
-        buttons_row2_center,
-        &[
-            ("Copyright info", "copyrightInfoShow"),
-            ("touchHLE.org", "visitWebsite"),
-        ],
-        None,
-    );
+    // Buttons, in a translucent card at the bottom
+    {
+        let card_frame = CGRect {
+            origin: CGPoint {
+                x: 10.0,
+                y: app_frame.size.height - 128.0,
+            },
+            size: CGSize {
+                width: app_frame.size.width - 20.0,
+                height: 100.0,
+            },
+        };
+        let card: id = msg_class![env; UIView alloc];
+        let card: id = msg![env; card initWithFrame:card_frame];
+        let color: id =
+            msg_class![env; UIColor colorWithWhite:(0.0 as CGFloat) alpha:(0.27 as CGFloat)];
+        () = msg![env; card setBackgroundColor:color];
+        let layer: id = msg![env; card layer];
+        () = msg![env; layer setCornerRadius:(14.0 as CGFloat)];
+        () = msg![env; main_view addSubview:card];
+
+        let buttons = [
+            ("文件管理", "openFileManager"),
+            ("快捷设置", "quickOptionsShow"),
+            ("版权信息", "copyrightInfoShow"),
+            ("官方网站", "visitWebsite"),
+        ];
+        let gap = 8.0;
+        let size = CGSize {
+            width: (card_frame.size.width - gap * 3.0) / 2.0,
+            height: (card_frame.size.height - gap * 3.0) / 2.0,
+        };
+        for (i, (title, selector)) in buttons.into_iter().enumerate() {
+            let frame = CGRect {
+                origin: CGPoint {
+                    x: card_frame.origin.x + gap + (i % 2) as CGFloat * (size.width + gap),
+                    y: card_frame.origin.y + gap + (i / 2) as CGFloat * (size.height + gap),
+                },
+                size,
+            };
+            make_styled_button(env, delegate, main_view, frame, title, selector, 14.0);
+        }
+    }
 
     let copyright_info_text = crate::licenses::get_text();
     let mut copyright_info_stuff = setup_copyright_info(env, delegate, main_view, app_frame);
@@ -500,9 +571,12 @@ fn app_picker_inner(
     fn update_quick_option_buttons(env: &mut Environment, buttons: &[id], selected_idx: usize) {
         for (idx, &button) in buttons.iter().enumerate() {
             let color: id = if idx == selected_idx {
-                msg_class![env; UIColor magentaColor]
+                msg_class![env; UIColor colorWithRed:(0.2 as CGFloat)
+                                               green:(0.62 as CGFloat)
+                                                blue:(0.86 as CGFloat)
+                                               alpha:(1.0 as CGFloat)]
             } else {
-                msg_class![env; UIColor grayColor]
+                msg_class![env; UIColor colorWithWhite:(1.0 as CGFloat) alpha:(0.15 as CGFloat)]
             };
             () = msg![env; button setBackgroundColor:color];
         }
@@ -744,7 +818,7 @@ fn make_icon_grid(
 ) -> IconGridStuff {
     let num_cols = 4;
     let num_cols_f = num_cols as CGFloat;
-    let num_rows = 4;
+    let num_rows = 3;
     let label_size = CGSize {
         width: 74.0,
         height: 13.0,
@@ -754,7 +828,7 @@ fn make_icon_grid(
     let icon_grid_width = (ICON_SIZE.width * num_cols_f) + icon_gap_x * (num_cols_f - 1.0);
     let icon_grid_origin = CGPoint {
         x: (app_frame.size.width - icon_grid_width) / 2.0,
-        y: 12.0,
+        y: 80.0,
     };
 
     let icon_tapped_sel = env.objc.lookup_selector("iconTapped:").unwrap();
@@ -978,6 +1052,75 @@ fn update_icon_grid(
     }
 }
 
+const SUBTLE_TEXT_COLOR: (CGFloat, CGFloat, CGFloat, CGFloat) = (0.75, 0.8, 0.9, 1.0);
+
+#[allow(clippy::too_many_arguments)]
+fn add_label(
+    env: &mut Environment,
+    super_view: id,
+    (x, y, width, height): (CGFloat, CGFloat, CGFloat, CGFloat),
+    text: &str,
+    font_size: CGFloat,
+    bold: bool,
+    (r, g, b, a): (CGFloat, CGFloat, CGFloat, CGFloat),
+    alignment: UITextAlignment,
+) -> id {
+    let label: id = msg_class![env; UILabel alloc];
+    let label: id = msg![env; label initWithFrame:(CGRect {
+        origin: CGPoint { x, y },
+        size: CGSize { width, height },
+    })];
+    let text = ns_string::from_rust_string(env, text.to_string());
+    () = msg![env; label setText:text];
+    let font: id = if bold {
+        msg_class![env; UIFont boldSystemFontOfSize:font_size]
+    } else {
+        msg_class![env; UIFont systemFontOfSize:font_size]
+    };
+    () = msg![env; label setFont:font];
+    let color: id = msg_class![env; UIColor colorWithRed:r green:g blue:b alpha:a];
+    () = msg![env; label setTextColor:color];
+    let bg_color: id = msg_class![env; UIColor clearColor];
+    () = msg![env; label setBackgroundColor:bg_color];
+    () = msg![env; label setTextAlignment:alignment];
+    () = msg![env; super_view addSubview:label];
+    label
+}
+
+/// A translucent rounded button with white text, for use on the dark
+/// background.
+fn make_styled_button(
+    env: &mut Environment,
+    delegate: id,
+    super_view: id,
+    frame: CGRect,
+    title: &str,
+    selector: &str,
+    font_size: CGFloat,
+) -> id {
+    let button: id = msg_class![env; UIButton buttonWithType:UIButtonTypeCustom];
+    () = msg![env; button setFrame:frame];
+    let bg: id = msg_class![env; UIColor colorWithWhite:(1.0 as CGFloat) alpha:(0.15 as CGFloat)];
+    () = msg![env; button setBackgroundColor:bg];
+    let layer: id = msg![env; button layer];
+    () = msg![env; layer setCornerRadius:(10.0 as CGFloat)];
+    let text = ns_string::from_rust_string(env, title.to_string());
+    () = msg![env; button setTitle:text forState:UIControlStateNormal];
+    let white: id = msg_class![env; UIColor whiteColor];
+    () = msg![env; button setTitleColor:white forState:UIControlStateNormal];
+    // FIXME: manually calling layoutSubviews shouldn't be needed?
+    () = msg![env; button layoutSubviews];
+    let label: id = msg![env; button titleLabel];
+    let font: id = msg_class![env; UIFont boldSystemFontOfSize:font_size];
+    () = msg![env; label setFont:font];
+    let selector = env.objc.lookup_selector(selector).unwrap();
+    () = msg![env; button addTarget:delegate
+                             action:selector
+                   forControlEvents:UIControlEventTouchUpInside];
+    () = msg![env; super_view addSubview:button];
+    button
+}
+
 fn make_button_row(
     env: &mut Environment,
     delegate: id,
@@ -1002,26 +1145,16 @@ fn make_button_row(
     };
 
     let mut ui_buttons = Vec::new();
-    for (title_text, selector) in buttons {
-        let button: id = msg_class![env; UIButton buttonWithType:UIButtonTypeRoundedRect];
-        let text = ns_string::get_static_str(env, title_text);
-        () = msg![env; button setTitle:text forState:UIControlStateNormal];
-        () = msg![env; button setFrame:button_frame];
-        // FIXME: manually calling layoutSubviews shouldn't be needed?
-        () = msg![env; button layoutSubviews];
-
-        if let Some(font_size) = font_size {
-            let label: id = msg![env; button titleLabel];
-            let font: id = msg_class![env; UIFont systemFontOfSize:font_size];
-            () = msg![env; label setFont:font];
-        }
-
-        let selector = env.objc.lookup_selector(selector).unwrap();
-        () = msg![env; button addTarget:delegate
-                                 action:selector
-                       forControlEvents:UIControlEventTouchUpInside];
-        () = msg![env; super_view addSubview:button];
-
+    for &(title_text, selector) in buttons {
+        let button = make_styled_button(
+            env,
+            delegate,
+            super_view,
+            button_frame,
+            title_text,
+            selector,
+            font_size.unwrap_or(14.0),
+        );
         button_frame.origin.x += button_size.width + margin;
         ui_buttons.push(button);
     }
@@ -1056,8 +1189,10 @@ fn setup_copyright_info(
 
     let main_view: id = msg_class![env; UIView alloc];
     let main_view: id = msg![env; main_view initWithFrame:main_frame];
-    // TODO: Isn't white the default?
-    let bg_color: id = msg_class![env; UIColor whiteColor];
+    let bg_color: id = msg_class![env; UIColor colorWithRed:(0.11 as CGFloat)
+                                                      green:(0.12 as CGFloat)
+                                                       blue:(0.28 as CGFloat)
+                                                      alpha:(1.0 as CGFloat)];
     () = msg![env; main_view setBackgroundColor:bg_color];
     // This main_view is hidden until the copyright info button is tapped.
     () = msg![env; main_view setHidden:true];
@@ -1080,7 +1215,8 @@ fn setup_copyright_info(
     let text_label: id = msg_class![env; UILabel alloc];
     let text_label: id = msg![env; text_label initWithFrame:text_frame];
     () = msg![env; text_label setNumberOfLines:0]; // unlimited
-    let text_color: id = msg_class![env; UIColor blackColor];
+    let text_color: id =
+        msg_class![env; UIColor colorWithWhite:(0.92 as CGFloat) alpha:(1.0 as CGFloat)];
     () = msg![env; text_label setTextColor:text_color];
     let bg_color: id = msg_class![env; UIColor clearColor];
     () = msg![env; text_label setBackgroundColor:bg_color];
@@ -1099,11 +1235,11 @@ fn setup_copyright_info(
         main_frame.size,
         buttons_row_center,
         &[
-            ("↑", "copyrightInfoPrevPage"),
-            ("↓", "copyrightInfoNextPage"),
-            ("×", "copyrightInfoHide"),
+            ("上一页", "copyrightInfoPrevPage"),
+            ("下一页", "copyrightInfoNextPage"),
+            ("关闭", "copyrightInfoHide"),
         ],
-        Some(30.0),
+        None,
     );
 
     CopyrightInfoStuff {
@@ -1246,8 +1382,10 @@ fn setup_quick_options(
 
     let main_view: id = msg_class![env; UIView alloc];
     let main_view: id = msg![env; main_view initWithFrame:main_frame];
-    // TODO: Isn't white the default?
-    let bg_color: id = msg_class![env; UIColor whiteColor];
+    let bg_color: id = msg_class![env; UIColor colorWithRed:(0.11 as CGFloat)
+                                                      green:(0.12 as CGFloat)
+                                                       blue:(0.28 as CGFloat)
+                                                      alpha:(1.0 as CGFloat)];
     () = msg![env; main_view setBackgroundColor:bg_color];
     // This main_view is hidden until the copyright info button is tapped.
     () = msg![env; main_view setHidden:true];
@@ -1255,36 +1393,35 @@ fn setup_quick_options(
 
     let divider = 40.0;
 
-    // Close button
-    {
-        let button_frame = CGRect {
+    // Title and close button
+    add_label(
+        env,
+        main_view,
+        (14.0, 10.0, 200.0, 24.0),
+        "快捷设置",
+        17.0,
+        true,
+        (1.0, 1.0, 1.0, 1.0),
+        UITextAlignmentLeft,
+    );
+    make_styled_button(
+        env,
+        delegate,
+        main_view,
+        CGRect {
             origin: CGPoint {
-                x: main_frame.size.width - 30.0,
-                y: 10.0,
+                x: main_frame.size.width - 74.0,
+                y: 8.0,
             },
             size: CGSize {
-                width: 20.0,
-                height: 20.0,
+                width: 64.0,
+                height: 28.0,
             },
-        };
-
-        let button: id = msg_class![env; UIButton buttonWithType:UIButtonTypeRoundedRect];
-        let text = ns_string::get_static_str(env, "×");
-        () = msg![env; button setTitle:text forState:UIControlStateNormal];
-        () = msg![env; button setFrame:button_frame];
-        // FIXME: manually calling layoutSubviews shouldn't be needed?
-        () = msg![env; button layoutSubviews];
-
-        let label: id = msg![env; button titleLabel];
-        let font: id = msg_class![env; UIFont systemFontOfSize:(30.0 as CGFloat)];
-        () = msg![env; label setFont:font];
-
-        let selector = env.objc.lookup_selector("quickOptionsHide").unwrap();
-        () = msg![env; button addTarget:delegate
-                                 action:selector
-                       forControlEvents:UIControlEventTouchUpInside];
-        () = msg![env; main_view addSubview:button];
-    }
+        },
+        "关闭",
+        "quickOptionsHide",
+        13.0,
+    );
 
     enum RowKind {
         Label(&'static str),
@@ -1292,27 +1429,27 @@ fn setup_quick_options(
         Switch(&'static str, bool),
     }
     let rows = [
-        RowKind::Label("Scale hack"),
+        RowKind::Label("放大渲染（实验性）"),
         RowKind::Buttons(&[
-            ("Default", "scaleHackDefault"),
-            ("Off", "scaleHack1"),
+            ("默认", "scaleHackDefault"),
+            ("关", "scaleHack1"),
             ("2×", "scaleHack2"),
             ("3×", "scaleHack3"),
             ("4×", "scaleHack4"),
         ]),
-        RowKind::Label("Orientation"),
+        RowKind::Label("屏幕方向"),
         RowKind::Buttons(&[
-            ("Default", "orientationDefault"),
+            ("默认", "orientationDefault"),
             ("←", "orientationLandscapeLeft"),
             ("→", "orientationLandscapeRight"),
             ("↓", "orientationPortraitUpsideDown"),
         ]),
-        RowKind::Label("Network access"),
+        RowKind::Label("允许联网"),
         RowKind::Switch("network:", false),
-        RowKind::Label("Use analog sticks for tilt controls"),
+        RowKind::Label("用摇杆模拟重力感应"),
         RowKind::Switch("analogStickTiltControls:", true),
         // ---- (divider for stuff skipped below)
-        RowKind::Label("Fullscreen (override)"),
+        RowKind::Label("强制全屏"),
         RowKind::Switch("fullscreen:", false),
     ];
     let rows_len_full = rows.len();
@@ -1342,12 +1479,17 @@ fn setup_quick_options(
                     },
                 };
 
-                let label: id = msg_class![env; UILabel alloc];
-                let label: id = msg![env; label initWithFrame:frame];
-                let text = ns_string::get_static_str(env, text);
-                () = msg![env; label setText:text];
-                () = msg![env; label setTextAlignment:UITextAlignmentCenter];
-                () = msg![env; main_view addSubview:label];
+                let CGRect { origin, size } = frame;
+                add_label(
+                    env,
+                    main_view,
+                    (origin.x, origin.y, size.width, size.height),
+                    text,
+                    15.0,
+                    false,
+                    SUBTLE_TEXT_COLOR,
+                    UITextAlignmentCenter,
+                );
             }
             RowKind::Buttons(buttons) => {
                 button_rows.push(make_button_row(

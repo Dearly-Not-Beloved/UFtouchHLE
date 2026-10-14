@@ -21,6 +21,8 @@ pub(super) struct State {
     fonts: HashMap<FontKind, Font>,
     sans_regular_ja: Option<Font>,
     sans_bold_ja: Option<Font>,
+    sans_regular_sc: Option<Font>,
+    sans_bold_sc: Option<Font>,
     /// `UIFont` objects are cached and never freed, as on iOS. Some apps rely
     /// on this and don't retain the fonts they get from convenience methods.
     instances: HashMap<(FontKind, u32), id>,
@@ -199,34 +201,47 @@ fn get_font<'a>(state: &'a mut State, kind: FontKind, text: &str) -> &'a Font {
     // The default fonts (see font.rs) are the Liberation family, which are a
     // good substitute for Helvetica, the iPhone OS system font. Unfortunately,
     // there is no CJK support in these fonts. To support Super Monkey Ball in
-    // Japanese, let's fall back to Noto Sans JP when necessary.
+    // Japanese, let's fall back to Noto Sans JP when necessary, and to Noto
+    // Sans SC for (simplified) Chinese characters the Japanese font lacks.
     // FIXME: This heuristic is incomplete and a proper font fallback system
     // should be used instead.
-    for c in text.chars() {
+    let is_cjk = |c: char| {
         let c = c as u32;
-        if (0x3000..=0x30FF).contains(&c) || // JA punctuation, kana
-           (0xFF00..=0xFFEF).contains(&c) || // full-width/half-width chars
-           (0x4e00..=0x9FA0).contains(&c) || // various kanji
-           (0x3400..=0x4DBF).contains(&c) { // more kanji
-            match kind {
-                // CJK has no italic equivalent
-                FontKind::MonoRegular | FontKind::MonoItalic | FontKind::SansRegular | FontKind::SansItalic | FontKind::SerifRegular | FontKind::SerifItalic => {
-                    if state.sans_regular_ja.is_none() {
-                        state.sans_regular_ja = Some(Font::sans_regular_ja());
-                    }
-                    return state.sans_regular_ja.as_ref().unwrap();
-                },
-                FontKind::MonoBold | FontKind::MonoBoldItalic | FontKind::SansBold | FontKind::SansBoldItalic | FontKind::SerifBold | FontKind::SerifBoldItalic => {
-                    if state.sans_bold_ja.is_none() {
-                        state.sans_bold_ja = Some(Font::sans_bold_ja());
-                    }
-                    return state.sans_bold_ja.as_ref().unwrap();
-                },
-            }
-        }
+        (0x3000..=0x30FF).contains(&c) || // JA punctuation, kana
+        (0xFF00..=0xFFEF).contains(&c) || // full-width/half-width chars
+        (0x4e00..=0x9FA0).contains(&c) || // various kanji
+        (0x3400..=0x4DBF).contains(&c) // more kanji
+    };
+    if !text.chars().any(is_cjk) {
+        return state.get_font_by_kind(kind);
     }
-
-    state.get_font_by_kind(kind)
+    // CJK has no italic equivalent
+    let bold = matches!(
+        kind,
+        FontKind::MonoBold
+            | FontKind::MonoBoldItalic
+            | FontKind::SansBold
+            | FontKind::SansBoldItalic
+            | FontKind::SerifBold
+            | FontKind::SerifBoldItalic
+    );
+    let ja = if bold {
+        state.sans_bold_ja.get_or_insert_with(Font::sans_bold_ja)
+    } else {
+        state.sans_regular_ja.get_or_insert_with(Font::sans_regular_ja)
+    };
+    if text.chars().filter(|&c| is_cjk(c)).all(|c| ja.has_glyph(c)) {
+        return if bold {
+            state.sans_bold_ja.as_ref().unwrap()
+        } else {
+            state.sans_regular_ja.as_ref().unwrap()
+        };
+    }
+    if bold {
+        state.sans_bold_sc.get_or_insert_with(Font::sans_bold_sc)
+    } else {
+        state.sans_regular_sc.get_or_insert_with(Font::sans_regular_sc)
+    }
 }
 
 /// Called by the `sizeWithFont:` method family on `NSString`.

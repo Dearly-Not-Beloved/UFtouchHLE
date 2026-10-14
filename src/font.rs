@@ -154,6 +154,19 @@ impl Font {
     pub fn sans_bold_ja() -> Font {
         Self::from_resource_file("NotoSansJP-Bold.otf")
     }
+    /// Simplified Chinese, subset to the GB2312 characters.
+    pub fn sans_regular_sc() -> Font {
+        Self::from_resource_file("NotoSansSC-Regular.otf")
+    }
+    /// Simplified Chinese, subset to the GB2312 characters.
+    pub fn sans_bold_sc() -> Font {
+        Self::from_resource_file("NotoSansSC-Bold.otf")
+    }
+
+    /// Whether the font has a glyph for a character.
+    pub fn has_glyph(&self, c: char) -> bool {
+        self.font.glyph(c).id().0 != 0
+    }
 
     pub fn units_per_em(&self) -> u16 {
         self.font.units_per_em()
