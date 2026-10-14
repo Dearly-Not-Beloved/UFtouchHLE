@@ -27,6 +27,9 @@ pub fn branding() -> &'static str {
     if (GITHUB_REPOSITORY, GITHUB_REF_NAME) == (Some("touchHLE/touchHLE"), Some("trunk")) {
         "PREVIEW"
     } else {
-        "UNOFFICIAL"
+        // Short for "unofficial". Note that the Android package name and
+        // documents provider still use "unofficial", see
+        // android/app/build.gradle.kts and src/paths.rs.
+        "UF"
     }
 }

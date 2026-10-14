@@ -574,10 +574,9 @@ unsafe fn composite_layer_recursive(
         } else if let Some(cg_context) = host_obj.cg_context {
             // Make sure this is in sync with the code in ca_layer.rs that
             // sets up the context!
-            let (width, height, data) = cg_bitmap_context::get_data(&env.objc, cg_context);
-            let size = width * height * 4;
-            let pixels = env.mem.bytes_at(data.cast(), size);
-            upload_rgba8_pixels(gles.as_mut(), pixels, (width, height));
+            let (width, height, pixels) =
+                cg_bitmap_context::get_rgba8_pixels(&env.objc, &env.mem, cg_context);
+            upload_rgba8_pixels(gles.as_mut(), &pixels, (width, height));
         }
     }
 

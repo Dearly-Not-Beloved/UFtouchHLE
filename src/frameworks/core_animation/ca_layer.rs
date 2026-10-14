@@ -20,7 +20,7 @@ use crate::frameworks::core_graphics::cg_context::{
     CGContextClearRect, CGContextRef, CGContextRelease, CGContextTranslateCTM,
 };
 use crate::frameworks::core_graphics::cg_image::{
-    kCGImageAlphaPremultipliedLast, kCGImageByteOrder32Big,
+    kCGImageAlphaPremultipliedFirst, kCGImageByteOrder32Little,
 };
 use crate::frameworks::core_graphics::{CGFloat, CGPoint, CGRect, CGSize};
 use crate::frameworks::foundation::ns_string::{self, get_static_str, to_rust_string};
@@ -473,7 +473,9 @@ pub const CLASSES: ClassExports = objc_classes! {
             8, // bpp
             int_width.checked_mul(4).unwrap(),
             color_space,
-            kCGImageByteOrder32Big | kCGImageAlphaPremultipliedLast
+            // Same format as iOS uses for layer backing stores (BGRA in
+            // memory). Some apps write pixels directly and rely on this.
+            kCGImageByteOrder32Little | kCGImageAlphaPremultipliedFirst
         );
         set_y_down(&mut env.objc, cg_context);
         env.objc.borrow_mut::<CALayerHostObject>(this).cg_context = Some(cg_context);

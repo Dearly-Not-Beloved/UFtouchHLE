@@ -18,7 +18,8 @@ use super::cg_image::{
     self, kCGBitmapAlphaInfoMask, kCGBitmapByteOrderMask, kCGImageAlphaFirst, kCGImageAlphaLast,
     kCGImageAlphaNone, kCGImageAlphaNoneSkipFirst, kCGImageAlphaNoneSkipLast, kCGImageAlphaOnly,
     kCGImageAlphaPremultipliedFirst, kCGImageAlphaPremultipliedLast, kCGImageByteOrder32Big,
-    kCGImageByteOrderDefault, CGBitmapInfo, CGImageAlphaInfo, CGImageRef,
+    kCGImageByteOrder32Little, kCGImageByteOrderDefault, CGBitmapInfo, CGImageAlphaInfo,
+    CGImageRef,
 };
 use super::{CGFloat, CGPoint, CGRect};
 use crate::dyld::{export_c_func, FunctionExports};
@@ -37,6 +38,9 @@ pub(super) struct CGBitmapContextData {
     bytes_per_row: GuestUSize,
     color_space: &'static str,
     alpha_info: CGImageAlphaInfo,
+    /// If true, 32-bit pixels are stored little-endian (e.g. ARGB is stored as
+    /// BGRA in memory), as with `kCGBitmapByteOrder32Little`.
+    little_endian: bool,
     /// If true, drawing co-ordinates already point down (as for a layer's
     /// backing store, where UIKit's flip is implied), so CG's y=0 maps to the
     /// first row in memory. This matches the memory layout on iOS, where the
@@ -88,6 +92,7 @@ pub fn CGBitmapContextCreate(
             bytes_per_row,
             color_space,
             alpha_info: bitmap_info & kCGBitmapAlphaInfoMask,
+            little_endian: bitmap_info & kCGBitmapByteOrderMask == kCGImageByteOrder32Little,
             y_down: false,
         }),
         // TODO: is this the correct default?
@@ -134,39 +139,61 @@ fn CGBitmapContextGetBytesPerRow(env: &mut Environment, context: CGContextRef) -
 pub fn CGBitmapContextCreateImage(env: &mut Environment, context: CGContextRef) -> CGImageRef {
     // TODO: Image::from_pixel_vec() should not exist, and this function should
     // support any bitmap format.
-    let host_obj = env.objc.borrow::<CGContextHostObject>(context);
+    let (width, height, pixels) = get_rgba8_pixels(&env.objc, &env.mem, context);
+    cg_image::from_image(env, Image::from_pixel_vec(pixels, (width, height)))
+}
+
+/// Get a copy of a 32-bit RGB bitmap context's pixels, converted to RGBA8
+/// (big-endian) order if needed.
+pub fn get_rgba8_pixels(
+    objc: &ObjC,
+    mem: &Mem,
+    context: CGContextRef,
+) -> (GuestUSize, GuestUSize, Vec<u8>) {
+    let host_obj = objc.borrow::<CGContextHostObject>(context);
     let CGContextSubclass::CGBitmapContext(bitmap_data) = host_obj.subclass;
     assert!(
         bitmap_data.bits_per_component == 8
             && bitmap_data.bytes_per_row == bitmap_data.width * 4
             && bitmap_data.color_space == kCGColorSpaceGenericRGB
-            && matches!(
-                bitmap_data.alpha_info,
-                kCGImageAlphaNoneSkipLast | kCGImageAlphaPremultipliedLast
-            )
+            && bytes_per_pixel(&bitmap_data) == 4
     );
-    let pixels = env
-        .mem
-        .bytes_at(
-            bitmap_data.data.cast(),
-            bitmap_data.bytes_per_row * bitmap_data.height,
-        )
-        .to_vec();
-    cg_image::from_image(
-        env,
-        Image::from_pixel_vec(pixels, (bitmap_data.width, bitmap_data.height)),
-    )
+    let bytes = mem.bytes_at(
+        bitmap_data.data.cast(),
+        bitmap_data.bytes_per_row * bitmap_data.height,
+    );
+    let offsets = pixel_offsets(&bitmap_data);
+    let pixels = if offsets == (0, 1, 2, Some(3)) {
+        bytes.to_vec()
+    } else {
+        let (r, g, b, a) = offsets;
+        bytes
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .flat_map(|p| [p[r], p[g], p[b], a.map_or(255, |a| p[a])])
+            .collect()
+    };
+    (bitmap_data.width, bitmap_data.height, pixels)
 }
 
 fn components_for_rgb(bitmap_info: CGBitmapInfo) -> Result<GuestUSize, ()> {
     let byte_order = bitmap_info & kCGBitmapByteOrderMask;
-    if byte_order != kCGImageByteOrderDefault && byte_order != kCGImageByteOrder32Big {
+    if byte_order != kCGImageByteOrderDefault
+        && byte_order != kCGImageByteOrder32Big
+        && byte_order != kCGImageByteOrder32Little
+    {
         return Err(()); // TODO: handle other byte orders
     }
 
     let alpha_info = bitmap_info & kCGBitmapAlphaInfoMask;
     if (alpha_info | byte_order) != bitmap_info {
         return Err(()); // TODO: handle other cases (float)
+    }
+    if byte_order == kCGImageByteOrder32Little
+        && matches!(alpha_info, kCGImageAlphaNone | kCGImageAlphaOnly)
+    {
+        return Err(()); // 32-bit byte order needs 32-bit pixels
     }
     match alpha_info & kCGBitmapAlphaInfoMask {
         kCGImageAlphaNone => Ok(3), // RGB
@@ -292,6 +319,15 @@ fn blend_premultiplied(
 
 /// per component offsets (r, g, b, a)
 fn pixel_offsets(data: &CGBitmapContextData) -> (usize, usize, usize, Option<usize>) {
+    let (r, g, b, a) = pixel_offsets_big_endian(data);
+    if data.little_endian {
+        // 32-bit pixel stored little-endian: byte order is reversed.
+        (3 - r, 3 - g, 3 - b, a.map(|a| 3 - a))
+    } else {
+        (r, g, b, a)
+    }
+}
+fn pixel_offsets_big_endian(data: &CGBitmapContextData) -> (usize, usize, usize, Option<usize>) {
     match data.color_space {
         kCGColorSpaceGenericRGB => {
             match data.alpha_info {
@@ -555,6 +591,7 @@ fn test_iter_transformed_pixels() {
                 bytes_per_row: 3 * width,
                 color_space: "kCGColorSpaceGenericRGB",
                 alpha_info: 0,
+                little_endian: false,
                 y_down: false,
             },
             rgb_fill_color: (0.0, 0.0, 0.0, 0.0),
@@ -721,12 +758,6 @@ pub fn set_y_down(objc: &mut ObjC, context: CGContextRef) {
     let host_obj = objc.borrow_mut::<CGContextHostObject>(context);
     let CGContextSubclass::CGBitmapContext(ref mut bitmap_data) = host_obj.subclass;
     bitmap_data.y_down = true;
-}
-
-pub fn get_data(objc: &ObjC, context: CGContextRef) -> (GuestUSize, GuestUSize, MutVoidPtr) {
-    let host_obj = objc.borrow::<CGContextHostObject>(context);
-    let CGContextSubclass::CGBitmapContext(bitmap_data) = host_obj.subclass;
-    (bitmap_data.width, bitmap_data.height, bitmap_data.data)
 }
 
 pub const FUNCTIONS: FunctionExports = &[
