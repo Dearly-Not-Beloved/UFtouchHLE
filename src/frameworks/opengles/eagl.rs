@@ -7,7 +7,7 @@
 
 use crate::dyld::{ConstantExports, HostConstant};
 use crate::frameworks::core_animation::ca_eagl_layer::{
-    find_fullscreen_eagl_layer, get_pixels_vec_for_presenting, present_pixels,
+    find_fullscreen_eagl_layer_and_rotation, get_pixels_vec_for_presenting, present_pixels,
 };
 use crate::frameworks::core_graphics::{CGRect, CGSize};
 use crate::frameworks::foundation::ns_string::get_static_str;
@@ -302,7 +302,7 @@ pub const CLASSES: ClassExports = objc_classes! {
             .count_frame(format_args!("EAGLContext {this:?}"));
     }
 
-    let fullscreen_layer = find_fullscreen_eagl_layer(env);
+    let (fullscreen_layer, quarter_turns) = find_fullscreen_eagl_layer_and_rotation(env);
 
     // Unclear from documentation if this method requires the context to be
     // current, but it would be weird if it didn't?
@@ -337,7 +337,7 @@ pub const CLASSES: ClassExports = objc_classes! {
         );
         // re-borrow
         unsafe {
-            present_renderbuffer(env);
+            present_renderbuffer(env, quarter_turns);
         }
     } else {
         if fullscreen_layer != nil {
@@ -571,12 +571,17 @@ unsafe fn read_renderbuffer(gles: &mut dyn GLES, mut pixel_buffer: Vec<u8>) -> (
 /// (which should be provided by the app) to a texture and presents it with
 /// [present_frame], trying to avoid noticeably modifying OpenGL ES state while
 /// doing so. The front and back buffers are then swapped.
-unsafe fn present_renderbuffer(env: &mut Environment) {
+unsafe fn present_renderbuffer(env: &mut Environment, quarter_turns: u8) {
     // Save these for when we need to draw the frame
     let viewport = env.window.as_mut().unwrap().viewport();
     let pixel_filter =
         env.window.as_ref().unwrap().filter_mode() == crate::options::FilterMode::Pixel;
-    let rotation_matrix = env.window.as_mut().unwrap().rotation_matrix();
+    // The layer may be rotated by quarter turns to cover the screen (see
+    // find_fullscreen_eagl_layer_and_rotation), in addition to the rotation
+    // for the device orientation.
+    let rotation_matrix = env.window.as_mut().unwrap().rotation_matrix().multiply(
+        &crate::matrix::Matrix::z_rotation((quarter_turns as f32) * std::f32::consts::FRAC_PI_2),
+    );
     let virtual_cursor_visible_at = env.window.as_mut().unwrap().virtual_cursor_visible_at();
     let sharp_upscale = env.window.as_ref().unwrap().sharp_upscale_factor();
 
