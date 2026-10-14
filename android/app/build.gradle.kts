@@ -82,9 +82,27 @@ android {
     kotlinOptions {
         jvmTarget = "11"
     }
+    // Release builds are signed with a fixed key when one is provided (see the
+    // GitHub Actions workflow), so newer APKs can be installed over older ones.
+    // Otherwise the debug key is used, which differs between machines.
+    val releaseKeystore = System.getenv("TOUCHHLE_KEYSTORE_FILE")
+    signingConfigs {
+        if (!releaseKeystore.isNullOrEmpty()) {
+            create("release") {
+                storeFile = file(releaseKeystore)
+                storePassword = System.getenv("TOUCHHLE_KEYSTORE_PASSWORD")
+                keyAlias = "touchhle-uf"
+                keyPassword = System.getenv("TOUCHHLE_KEYSTORE_PASSWORD")
+            }
+        }
+    }
     buildTypes {
         release {
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (!releaseKeystore.isNullOrEmpty()) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
             isMinifyEnabled = false
             isDebuggable = true // allow use of ADB to manage files, etc
         }
