@@ -50,8 +50,10 @@ impl GLESContext for GLES1NativeContext {
         unsafe {
             window.make_gl_context_current(&self.gl_ctx);
         }
-        gles11::load_with(|s| window.gl_get_proc_address(s));
-        self.is_loaded = true;
+        if !self.is_loaded || super::FUNCTION_POINTERS_ARE_PER_CONTEXT {
+            gles11::load_with(|s| window.gl_get_proc_address(s));
+            self.is_loaded = true;
+        }
         Box::new(GLES1Native {
             _gl_lifetime: PhantomData,
         })
@@ -69,8 +71,10 @@ impl GLESContext for GLES1NativeContext {
         }
 
         make_current_fn(&self.gl_ctx);
-        gles11::load_with(loader_fn);
-        self.is_loaded = true;
+        if !self.is_loaded || super::FUNCTION_POINTERS_ARE_PER_CONTEXT {
+            gles11::load_with(loader_fn);
+            self.is_loaded = true;
+        }
         Box::new(GLES1Native {
             _gl_lifetime: PhantomData,
         })

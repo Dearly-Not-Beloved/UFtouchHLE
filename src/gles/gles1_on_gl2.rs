@@ -428,8 +428,10 @@ impl GLESContext for GLES1OnGL2Context {
         unsafe {
             window.make_gl_context_current(&self.gl_ctx);
         }
-        gl21::load_with(|s| window.gl_get_proc_address(s));
-        self.is_loaded = true;
+        if !self.is_loaded || super::FUNCTION_POINTERS_ARE_PER_CONTEXT {
+            gl21::load_with(|s| window.gl_get_proc_address(s));
+            self.is_loaded = true;
+        }
 
         Box::new(GLES1OnGL2 {
             state: &mut self.state,
@@ -448,8 +450,10 @@ impl GLESContext for GLES1OnGL2Context {
         }
 
         make_current_fn(&self.gl_ctx);
-        gl21::load_with(loader_fn);
-        self.is_loaded = true;
+        if !self.is_loaded || super::FUNCTION_POINTERS_ARE_PER_CONTEXT {
+            gl21::load_with(loader_fn);
+            self.is_loaded = true;
+        }
 
         Box::new(GLES1OnGL2 {
             state: &mut self.state,

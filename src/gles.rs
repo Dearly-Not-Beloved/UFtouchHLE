@@ -63,6 +63,13 @@
 //!   - [EXT_texture_filter_anisotropic](https://registry.khronos.org/OpenGL/extensions/EXT/EXT_texture_filter_anisotropic.txt)
 //!   - [EXT_texture_lod_bias](https://registry.khronos.org/OpenGL/extensions/EXT/EXT_texture_lod_bias.txt)
 
+/// Whether OpenGL (ES) function pointers may differ between contexts, so that
+/// they have to be loaded again whenever a different context is made current.
+/// This is only the case with WGL (Windows). With EGL (Android), CGL (macOS)
+/// and GLX, the same pointers work for every context, and re-loading them on
+/// every context switch (several times per frame for some apps) is slow.
+const FUNCTION_POINTERS_ARE_PER_CONTEXT: bool = cfg!(target_os = "windows");
+
 pub mod gles1_native;
 pub mod gles1_on_gl2;
 mod gles_generic;
