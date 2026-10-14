@@ -36,6 +36,21 @@ pub(super) struct State {
     /// Whether layer textures are sampled with nearest-neighbour filtering
     /// (see [crate::options::FilterMode]).
     layer_nearest: bool,
+    /// Size of each layer texture's storage, so it can be updated with
+    /// glTexSubImage2D when the size is unchanged (cheaper on mobile GPUs).
+    layer_texture_sizes: crate::fast_hash::FastHashMap<GLuint, (u32, u32)>,
+    /// Textures of deallocated layers, deleted at the next composition (when
+    /// the right GL context is current).
+    textures_to_delete: Vec<GLuint>,
+}
+
+/// Called when a layer with a texture is deallocated.
+pub(super) fn queue_texture_deletion(env: &mut Environment, texture: GLuint) {
+    env.framework_state
+        .core_animation
+        .composition
+        .textures_to_delete
+        .push(texture);
 }
 
 struct MiscGlObjects {
@@ -169,6 +184,12 @@ pub fn recomposite_if_necessary(env: &mut Environment, force: bool) -> Option<In
 
     let window = env.window.as_mut().unwrap();
     let mut gles = window.make_internal_gl_ctx_current();
+
+    let composition = &mut env.framework_state.core_animation.composition;
+    for texture in std::mem::take(&mut composition.textures_to_delete) {
+        composition.layer_texture_sizes.remove(&texture);
+        unsafe { gles.DeleteTextures(1, &texture) };
+    }
 
     // Set up GL objects needed for render-to-texture. We could draw directly
     // to the screen instead, but this way we can reuse the code for scaling and
@@ -603,7 +624,9 @@ unsafe fn composite_layer_recursive(
                 }
             }
 
-            upload_rgba8_pixels(gles.as_mut(), pixels, (width, height));
+            let texture = original_host_obj.gles_texture.unwrap();
+            let sizes = &mut env.framework_state.core_animation.composition.layer_texture_sizes;
+            upload_layer_pixels(gles.as_mut(), sizes, texture, pixels, (width, height));
         }
     }
 
@@ -614,13 +637,17 @@ unsafe fn composite_layer_recursive(
 
             // No special handling for opacity is needed here: the alpha channel
             // on an image is meaningful and won't be ignored.
-            upload_rgba8_pixels(gles.as_mut(), image.pixels(), image.dimensions());
+            let texture = env.objc.borrow::<CALayerHostObject>(layer).gles_texture.unwrap();
+            let sizes = &mut env.framework_state.core_animation.composition.layer_texture_sizes;
+            upload_layer_pixels(gles.as_mut(), sizes, texture, image.pixels(), image.dimensions());
         } else if let Some(cg_context) = host_obj.cg_context {
             // Make sure this is in sync with the code in ca_layer.rs that
             // sets up the context!
             let (width, height, pixels) =
                 cg_bitmap_context::get_rgba8_pixels(&env.objc, &env.mem, cg_context);
-            upload_rgba8_pixels(gles.as_mut(), &pixels, (width, height));
+            let texture = env.objc.borrow::<CALayerHostObject>(layer).gles_texture.unwrap();
+            let sizes = &mut env.framework_state.core_animation.composition.layer_texture_sizes;
+            upload_layer_pixels(gles.as_mut(), sizes, texture, &pixels, (width, height));
         }
     }
 
@@ -756,6 +783,33 @@ unsafe fn upload_slice<T: SafeWrite>(
         data.as_ptr() as *const _,
         usage,
     )
+}
+
+/// [upload_rgba8_pixels] for a layer's texture (which must be bound), reusing
+/// the texture's storage if the size hasn't changed.
+unsafe fn upload_layer_pixels(
+    gles: &mut dyn GLES,
+    sizes: &mut crate::fast_hash::FastHashMap<GLuint, (u32, u32)>,
+    texture: GLuint,
+    pixels: &[u8],
+    dimensions: (u32, u32),
+) {
+    if sizes.get(&texture) == Some(&dimensions) {
+        gles.TexSubImage2D(
+            gles11::TEXTURE_2D,
+            0,
+            0,
+            0,
+            dimensions.0 as _,
+            dimensions.1 as _,
+            gles11::RGBA,
+            gles11::UNSIGNED_BYTE,
+            pixels.as_ptr() as *const _,
+        );
+    } else {
+        upload_rgba8_pixels(gles, pixels, dimensions);
+        sizes.insert(texture, dimensions);
+    }
 }
 
 unsafe fn upload_rgba8_pixels(gles: &mut dyn GLES, pixels: &[u8], dimensions: (u32, u32)) {

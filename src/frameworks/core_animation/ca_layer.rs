@@ -152,10 +152,15 @@ pub const CLASSES: ClassExports = objc_classes! {
         contents,
         superlayer,
         cg_context,
+        gles_texture,
         ref mut sublayers,
         ..
     } = env.objc.borrow_mut(this);
     let sublayers = std::mem::take(sublayers);
+
+    if let Some(texture) = gles_texture {
+        super::composition::queue_texture_deletion(env, texture);
+    }
 
     if drawable_properties != nil {
         release(env, drawable_properties);
