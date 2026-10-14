@@ -48,9 +48,15 @@ struct AppInfo {
 }
 
 pub fn app_picker(options: Options) -> Result<(PathBuf, Vec<String>), String> {
+    let apps = load_apps();
+    show_app_picker_gui(options, apps)
+}
+
+/// Find the apps in the apps directory. The error is a message to display.
+fn load_apps() -> Result<Vec<AppInfo>, String> {
     let apps_dir = paths::user_data_base_path().join(paths::APPS_DIR);
 
-    let apps: Result<Vec<AppInfo>, String> = if !apps_dir.is_dir() {
+    if !apps_dir.is_dir() {
         Err(format!(
             "找不到 {} 文件夹。请确认 touchHLE 是从正确的位置启动的。",
             apps_dir.display()
@@ -74,9 +80,7 @@ pub fn app_picker(options: Options) -> Result<(PathBuf, Vec<String>), String> {
                     Ok(apps)
                 }
             })
-    };
-
-    show_app_picker_gui(options, apps)
+    }
 }
 
 fn enumerate_apps(apps_dir: &Path) -> Result<Vec<AppInfo>, std::io::Error> {
@@ -150,6 +154,9 @@ struct AppPickerDelegateHostObject {
     analog_stick_tilt_controls: Option<bool>,
     network: Option<bool>,
     fullscreen: Option<bool>,
+    /// Set when touchHLE returns from the background (e.g. after using the
+    /// file manager), so the app list can be reloaded.
+    became_active: bool,
 }
 impl HostObject for AppPickerDelegateHostObject {}
 
@@ -239,6 +246,10 @@ const CLASSES: ClassExports = objc_classes! {
     env.objc.borrow_mut::<AppPickerDelegateHostObject>(this).fullscreen = Some(switch_state);
 }
 
+- (())applicationDidBecomeActive:(id)_application {
+    env.objc.borrow_mut::<AppPickerDelegateHostObject>(this).became_active = true;
+}
+
 - (())openFileManager {
     // Assert (see above).
     let _ = env.objc.borrow_mut::<AppPickerDelegateHostObject>(this);
@@ -250,7 +261,14 @@ const CLASSES: ClassExports = objc_classes! {
             let url_res = crate::window::open_url(env, &url);
             if let Err(e) = url_res {
                 echo!("Couldn't open file manager at {:?}: {}", url, e);
+            } else if crate::window::Window::rotatable_fullscreen() {
+                // On Android, touchHLE is paused while the file manager is
+                // open, and the app list is reloaded when it returns.
+                echo!("Opened file manager at {:?}.", url);
             } else {
+                // Elsewhere touchHLE stays in the foreground, so there's no
+                // good moment to reload the app list; exit so it's fresh
+                // next time.
                 echo!("Opened file manager at {:?}, exiting.", url);
                 std::process::exit(0);
             }
@@ -477,41 +495,34 @@ fn app_picker_inner(
         );
     }
 
-    let mut icon_grid_stuff = match &mut apps {
-        Ok(ref mut apps) => {
-            let mut icon_grid_stuff = make_icon_grid(
-                env,
-                delegate,
-                main_view,
-                app_frame,
-                apps.len(),
-                have_wallpaper,
-            );
-            update_icon_grid(env, &mut icon_grid_stuff, apps, 0);
-            Some(icon_grid_stuff)
-        }
-        Err(e) => {
-            let label_frame = CGRect {
-                origin: CGPoint { x: 20.0, y: 80.0 },
-                size: CGSize {
-                    width: app_frame.size.width - 40.0,
-                    height: app_frame.size.height - 128.0 - 90.0,
-                },
-            };
-            let label: id = msg_class![env; UILabel alloc];
-            let label: id = msg![env; label initWithFrame:label_frame];
-            let text = ns_string::from_rust_string(env, e.clone());
-            () = msg![env; label setText:text];
-            () = msg![env; label setTextAlignment:UITextAlignmentCenter];
-            () = msg![env; label setNumberOfLines:0]; // unlimited
-            let text_color: id = msg_class![env; UIColor whiteColor];
-            () = msg![env; label setTextColor:text_color];
-            let bg_color: id = msg_class![env; UIColor clearColor];
-            () = msg![env; label setBackgroundColor:bg_color];
-            () = msg![env; main_view addSubview:label];
-            None
-        }
+    let mut icon_grid_stuff = make_icon_grid(
+        env,
+        delegate,
+        main_view,
+        app_frame,
+        apps.as_ref().map_or(0, |apps| apps.len()),
+        have_wallpaper,
+    );
+    let message_label = {
+        let label_frame = CGRect {
+            origin: CGPoint { x: 20.0, y: 80.0 },
+            size: CGSize {
+                width: app_frame.size.width - 40.0,
+                height: app_frame.size.height - 128.0 - 90.0,
+            },
+        };
+        let label: id = msg_class![env; UILabel alloc];
+        let label: id = msg![env; label initWithFrame:label_frame];
+        () = msg![env; label setTextAlignment:UITextAlignmentCenter];
+        () = msg![env; label setNumberOfLines:0]; // unlimited
+        let text_color: id = msg_class![env; UIColor whiteColor];
+        () = msg![env; label setTextColor:text_color];
+        let bg_color: id = msg_class![env; UIColor clearColor];
+        () = msg![env; label setBackgroundColor:bg_color];
+        () = msg![env; main_view addSubview:label];
+        label
     };
+    show_apps(env, &mut icon_grid_stuff, message_label, &mut apps);
 
     // Buttons, in a translucent card at the bottom
     {
@@ -619,9 +630,16 @@ fn app_picker_inner(
     let app_path = loop {
         run_run_loop_single_iteration(env, main_run_loop);
         let host_obj = env.objc.borrow_mut::<AppPickerDelegateHostObject>(delegate);
+        if std::mem::take(&mut host_obj.became_active) {
+            log!("Reloading app list.");
+            apps = load_apps();
+            show_apps(env, &mut icon_grid_stuff, message_label, &mut apps);
+            continue;
+        }
+        let host_obj = env.objc.borrow_mut::<AppPickerDelegateHostObject>(delegate);
         let icon_tapped = std::mem::take(&mut host_obj.icon_tapped);
         if icon_tapped != nil {
-            match icon_grid_stuff.as_ref().unwrap().icon_map.get(&icon_tapped) {
+            match icon_grid_stuff.icon_map.get(&icon_tapped) {
                 Some(&TappedIcon::App(app_idx)) => {
                     // Provide visual feedback that the app has been picked
                     // (it may take a while for the splash screen to appear etc)
@@ -641,12 +659,7 @@ fn app_picker_inner(
                     break app_path.clone();
                 }
                 Some(&TappedIcon::ChangePage(page_idx)) => {
-                    update_icon_grid(
-                        env,
-                        icon_grid_stuff.as_mut().unwrap(),
-                        apps.as_mut().unwrap(),
-                        page_idx,
-                    );
+                    update_icon_grid(env, &mut icon_grid_stuff, apps.as_mut().unwrap(), page_idx);
                 }
                 None => (), // Tapped on a black space
             }
@@ -890,10 +903,54 @@ fn make_icon_grid(
     }
 
     // TODO: Use UIScrollView pagination and UIPageControl once available.
+    let pages = compute_pages(icon_buttons_and_labels.len(), total_app_count);
+
+    IconGridStuff {
+        icon_buttons_and_labels,
+        placeholder_icon: None,
+        prev_icon: None,
+        next_icon: None,
+        pages,
+        icon_map: HashMap::new(),
+    }
+}
+
+/// Show the app list in the icon grid, or the error message if there are no
+/// apps.
+fn show_apps(
+    env: &mut Environment,
+    icon_grid_stuff: &mut IconGridStuff,
+    message_label: id,
+    apps: &mut Result<Vec<AppInfo>, String>,
+) {
+    let slots = icon_grid_stuff.icon_buttons_and_labels.len();
+    match apps {
+        Ok(apps) => {
+            icon_grid_stuff.pages = compute_pages(slots, apps.len());
+            update_icon_grid(env, icon_grid_stuff, apps, 0);
+            () = msg![env; message_label setHidden:true];
+        }
+        Err(e) => {
+            // A single empty page, so the grid is blanked.
+            #[allow(clippy::single_range_in_vec_init)]
+            {
+                icon_grid_stuff.pages = vec![0..0];
+            }
+            update_icon_grid(env, icon_grid_stuff, &mut [], 0);
+            let text = ns_string::from_rust_string(env, e.clone());
+            () = msg![env; message_label setText:text];
+            () = msg![env; message_label setHidden:false];
+        }
+    }
+}
+
+/// Split the apps into pages of icons, leaving space for the
+/// "previous"/"next" page icons.
+fn compute_pages(slots: usize, total_app_count: usize) -> Vec<std::ops::Range<usize>> {
     let mut pages = Vec::new();
     let mut start = 0;
     while start < total_app_count {
-        let mut end = start + icon_buttons_and_labels.len();
+        let mut end = start + slots;
         if start > 0 {
             end -= 1; // one icon space taken by "previous" button
         }
@@ -905,15 +962,7 @@ fn make_icon_grid(
         pages.push(start..end);
         start = end;
     }
-
-    IconGridStuff {
-        icon_buttons_and_labels,
-        placeholder_icon: None,
-        prev_icon: None,
-        next_icon: None,
-        pages,
-        icon_map: HashMap::new(),
-    }
+    pages
 }
 
 fn make_icon_from_glyph(
