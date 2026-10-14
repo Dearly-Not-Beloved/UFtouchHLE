@@ -70,6 +70,11 @@ pub fn recomposite_if_necessary(env: &mut Environment, force: bool) -> Option<In
         return None;
     }
 
+    if env.window.as_ref().is_some_and(|w| w.is_minimized()) {
+        // Nothing would be shown, and on Android the surface may be gone.
+        return None;
+    }
+
     if find_fullscreen_eagl_layer(env) != nil {
         // No composition done, EAGLContext will present directly.
         log_dbg!("Using CAEAGLLayer fast path, skipping composition");

@@ -126,6 +126,14 @@ fn set_sdl2_orientation(orientation: DeviceOrientation) {
     );
 }
 
+/// Making a GL context current can fail on Android while touchHLE is going
+/// into the background (the surface is destroyed by the OS), so don't panic.
+fn make_current_or_warn(window: &sdl2::video::Window, gl_ctx: &GLContext) {
+    if let Err(e) = window.gl_make_current(&gl_ctx.0) {
+        log!("Warning: couldn't make OpenGL context current: {}", e);
+    }
+}
+
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub enum FingerId {
     Mouse,
@@ -229,6 +237,9 @@ pub struct Window {
     /// Separate queue for extremely high-priority events (e.g. app about to
     /// terminate).
     high_priority_event: Option<Event>,
+    /// Whether the window is minimized, or (on Android) touchHLE is in the
+    /// background. Nothing is drawn then, as the surface may be gone.
+    minimized: bool,
     enable_event_polling: bool,
     #[cfg(target_os = "macos")]
     max_height: u32,
@@ -380,6 +391,7 @@ impl Window {
             event_queue: VecDeque::new(),
             last_polled: Instant::now() - Duration::from_secs(1),
             high_priority_event: None,
+            minimized: false,
             enable_event_polling: true,
             #[cfg(target_os = "macos")]
             max_height,
@@ -730,6 +742,15 @@ impl Window {
                     // TODO: Add a mechanism for re-enabling polling, if at some
                     // point we support returning touchHLE to the foreground.
                     self.enable_event_polling = false;
+                    continue;
+                }
+                E::Window { win_event, .. } => {
+                    use sdl2::event::WindowEvent as WE;
+                    match win_event {
+                        WE::Minimized | WE::Hidden => self.minimized = true,
+                        WE::Restored | WE::Shown | WE::Maximized => self.minimized = false,
+                        _ => (),
+                    }
                     continue;
                 }
                 E::AppDidEnterForeground { .. } => {
@@ -1240,7 +1261,13 @@ impl Window {
     }
 
     pub unsafe fn make_gl_context_current(&self, gl_ctx: &GLContext) {
-        self.window.gl_make_current(&gl_ctx.0).unwrap();
+        make_current_or_warn(&self.window, gl_ctx);
+    }
+
+    /// Whether drawing should be skipped because the window is minimized or
+    /// touchHLE is in the background.
+    pub fn is_minimized(&self) -> bool {
+        self.minimized
     }
 
     /// Make the internal OpenGL ES context (for splash screen and UI rendering)
@@ -1255,7 +1282,7 @@ impl Window {
                 .as_mut()
                 .unwrap()
                 .make_current_unchecked_for_window(
-                    &mut |gl_ctx| self.window.gl_make_current(&gl_ctx.0).unwrap(),
+                    &mut |gl_ctx| make_current_or_warn(&self.window, gl_ctx),
                     &mut |s| self.video_ctx.gl_get_proc_address(s) as *const _,
                 )
         };
@@ -1279,7 +1306,7 @@ impl Window {
                 .as_mut()
                 .unwrap()
                 .make_current_unchecked_for_window(
-                    &mut |gl_ctx| self.window.gl_make_current(&gl_ctx.0).unwrap(),
+                    &mut |gl_ctx| make_current_or_warn(&self.window, gl_ctx),
                     &mut |s| self.video_ctx.gl_get_proc_address(s) as *const _,
                 );
 
@@ -1330,6 +1357,9 @@ impl Window {
     /// Swap front-buffer and back-buffer so the result of OpenGL rendering is
     /// presented.
     pub fn swap_window(&self) {
+        if self.minimized {
+            return;
+        }
         self.window.gl_swap_window();
     }
 
