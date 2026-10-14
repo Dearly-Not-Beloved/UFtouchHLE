@@ -106,17 +106,22 @@ fn rotate_fullscreen_size(orientation: DeviceOrientation, screen_size: (u32, u32
     }
 }
 /// Tell SDL2 what orientation we want. Only useful on Android.
+///
+/// Both orientations of the same kind (portrait or landscape) are allowed, so
+/// the user can turn the device around 180°. The content is drawn relative to
+/// the window, so it stays upright; see [Window::is_physically_flipped] for
+/// how the accelerometer is corrected.
 fn set_sdl2_orientation(orientation: DeviceOrientation) {
     // Despite the name, this hint works on Android too.
     sdl2::hint::set(
         "SDL_IOS_ORIENTATIONS",
         match orientation {
-            DeviceOrientation::Portrait => "Portrait",
-            // The inversion is deliberate. These probably correspond to
-            // iPhone OS content orientations?
-            DeviceOrientation::PortraitUpsideDown => "PortraitUpsideDown",
-            DeviceOrientation::LandscapeLeft => "LandscapeRight",
-            DeviceOrientation::LandscapeRight => "LandscapeLeft",
+            DeviceOrientation::Portrait | DeviceOrientation::PortraitUpsideDown => {
+                "Portrait PortraitUpsideDown"
+            }
+            DeviceOrientation::LandscapeLeft | DeviceOrientation::LandscapeRight => {
+                "LandscapeLeft LandscapeRight"
+            }
         },
     );
 }
@@ -933,6 +938,26 @@ impl Window {
         }
     }
 
+    /// Whether the real device's screen is rotated 180° from the emulated
+    /// device's orientation. Only possible on Android, see
+    /// [set_sdl2_orientation].
+    fn is_physically_flipped(&self) -> bool {
+        use sdl2::video::Orientation;
+        if !Self::rotatable_fullscreen() {
+            return false;
+        }
+        // The orientation SDL2 reports when the device is held the same way as
+        // the emulated device. (SDL2's "landscape" has the right side up,
+        // like UIDeviceOrientationLandscapeLeft.)
+        let flipped = match self.device_orientation {
+            DeviceOrientation::Portrait => Orientation::PortraitFlipped,
+            DeviceOrientation::PortraitUpsideDown => Orientation::Portrait,
+            DeviceOrientation::LandscapeLeft => Orientation::LandscapeFlipped,
+            DeviceOrientation::LandscapeRight => Orientation::Landscape,
+        };
+        self.video_ctx.display_orientation(0) == flipped
+    }
+
     /// Get the real or simulated accelerometer output.
     /// See also [crate::frameworks::uikit::ui_accelerometer].
     pub fn get_acceleration(&self, options: &Options) -> (f32, f32, f32) {
@@ -950,6 +975,11 @@ impl Window {
                 // SDL2 reports acceleration in units of m/s^2.
                 let gravity: f32 = 9.80665; // SDL_STANDARD_GRAVITY
                 let (x, y, z) = (x / gravity, y / gravity, z / gravity);
+                // If the real device is held the other way around from the
+                // emulated device, the app would see tilting inverted.
+                if self.is_physically_flipped() {
+                    return (-x, -y, z);
+                }
                 return (x, y, z);
             }
         }
