@@ -755,7 +755,12 @@ pub const CLASSES: ClassExports = objc_classes! {
 
     let encode = |env: &mut Environment, location, length| -> Option<Vec<u8>> {
         let sub: id = msg![env; this substringWithRange:(NSRange { location, length })];
-        let data: id = msg![env; sub dataUsingEncoding:encoding allowLossyConversion:lossy];
+        // Lossy conversion is only needed (and logs a warning) if lossless
+        // conversion fails.
+        let mut data: id = msg![env; sub dataUsingEncoding:encoding allowLossyConversion:false];
+        if data == nil && lossy {
+            data = msg![env; sub dataUsingEncoding:encoding allowLossyConversion:true];
+        }
         if data == nil {
             return None;
         }
