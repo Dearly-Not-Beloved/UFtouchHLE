@@ -84,6 +84,11 @@ impl FilterMode {
     }
 }
 
+/// Default for [Options::keep_screen_on]. On Android, if the screen turns off
+/// during play (e.g. in a cutscene, or in a game that's mostly watched), the
+/// game is paused in the background, which players don't expect from a game.
+pub const KEEP_SCREEN_ON_DEFAULT: bool = cfg!(target_os = "android");
+
 /// Struct containing all user-configurable options.
 #[derive(Clone)]
 pub struct Options {
@@ -126,7 +131,7 @@ impl Default for Options {
             fullscreen: false,
             aspect_mode: AspectMode::Fit,
             filter_mode: FilterMode::DEFAULT,
-            keep_screen_on: false,
+            keep_screen_on: KEEP_SCREEN_ON_DEFAULT,
             device_family: None,
             initial_orientation: DeviceOrientation::Portrait,
             scale_hack: NonZeroU32::new(1).unwrap(),
@@ -185,6 +190,8 @@ impl Options {
             };
         } else if arg == "--keep-screen-on" {
             self.keep_screen_on = true;
+        } else if arg == "--no-keep-screen-on" {
+            self.keep_screen_on = false;
         } else if let Some(value) = arg.strip_prefix("--filter=") {
             self.filter_mode = match value {
                 "smooth" => FilterMode::Smooth,

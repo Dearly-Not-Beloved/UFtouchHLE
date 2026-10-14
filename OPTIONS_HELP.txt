@@ -32,9 +32,11 @@ View options:
           pixel art scaling algorithm (Scale2x), rounding off jagged edges.
 
     --keep-screen-on
-        Keep the screen on (prevent the screen saver, or on Android, the
-        screen turning off) while touchHLE is running, even if the app doesn't
-        ask for it.
+    --no-keep-screen-on
+        Whether to keep the screen on (prevent the screen saver, or on Android,
+        the screen turning off) while touchHLE is running, even if the app
+        doesn't ask for it. The default is to keep it on on Android, and
+        otherwise to let the app decide, like iPhone OS does.
 
     --upside-down
     --landscape-left

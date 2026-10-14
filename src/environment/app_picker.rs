@@ -599,7 +599,7 @@ fn app_picker_inner(
         .unwrap();
     let mut quick_options_analog_stick_tilt_controls = true;
     let mut quick_options_network = false;
-    let mut quick_options_keep_screen_on = false;
+    let mut quick_options_keep_screen_on = crate::options::KEEP_SCREEN_ON_DEFAULT;
 
     // Restore the quick options chosen last time (saved when an app is
     // launched), so they don't have to be chosen again every time.
@@ -635,6 +635,7 @@ fn app_picker_inner(
                     }
                     "--allow-network-access" => quick_options_network = true,
                     "--keep-screen-on" => quick_options_keep_screen_on = true,
+                    "--no-keep-screen-on" => quick_options_keep_screen_on = false,
                     _ => (),
                 }
             }
@@ -908,9 +909,14 @@ fn app_picker_inner(
     if quick_options_network {
         option_args.push("--allow-network-access".to_string());
     }
-    if quick_options_keep_screen_on {
-        option_args.push("--keep-screen-on".to_string());
-    }
+    option_args.push(
+        if quick_options_keep_screen_on {
+            "--keep-screen-on"
+        } else {
+            "--no-keep-screen-on"
+        }
+        .to_string(),
+    );
 
     if let Err(e) = std::fs::write(&quick_options_file, option_args.join("\n")) {
         log!("Warning: couldn't save quick options: {}", e);
