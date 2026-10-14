@@ -174,7 +174,7 @@ pub const CLASSES: ClassExports = objc_classes! {
     } else {
         let langs = get_preferred_languages(env);
         // These strings live for the whole app run on iOS, and some apps
-        // (e.g. Inotia 2) over-release them, so make them immortal.
+        // (e.g. Inotia 1) over-release them, so make them immortal.
         let lang_ns_strings = langs.into_iter().map(|lang| {
             let lang: &'static str = Box::leak(lang.into_boxed_str());
             ns_string::get_static_str(env, lang)
