@@ -96,8 +96,8 @@ pub fn find_fullscreen_eagl_layer_and_rotation(env: &mut Environment) -> (id, u8
     let mut parent_size = screen_bounds.size;
     let mut total_turns = 0u8;
 
-    // Descend through the hierarchy, looking only at the last layer in each
-    // list of children, since that should be the one on top.
+    // Descend through the hierarchy, looking only at the last visible layer in
+    // each list of children, since that should be the one on top.
     // TODO: this is not correct once we support zPosition.
     loop {
         assert!(layer != nil);
@@ -136,7 +136,19 @@ pub fn find_fullscreen_eagl_layer_and_rotation(env: &mut Environment) -> (id, u8
         total_turns = (total_turns + turns) % 4;
         parent_size = expected_size;
 
-        if let Some(&next) = layer_host_obj.sublayers.last() {
+        // Layers that are hidden or fully transparent don't affect what's
+        // shown (apps often keep e.g. a hidden menu above their OpenGL view),
+        // so they're skipped.
+        let next = layer_host_obj
+            .sublayers
+            .iter()
+            .rev()
+            .copied()
+            .find(|&sublayer| {
+                let sublayer = env.objc.borrow::<CALayerHostObject>(sublayer);
+                !sublayer.hidden && sublayer.opacity > 0.0
+            });
+        if let Some(next) = next {
             layer = next;
         } else {
             break;
