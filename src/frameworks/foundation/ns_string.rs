@@ -740,6 +740,66 @@ pub const CLASSES: ClassExports = objc_classes! {
           encoding:(NSStringEncoding)encoding {
     get_bytes_buffer_inner(env, this, buffer, buffer_size, encoding, true)
 }
+
+- (bool)getBytes:(MutPtr<u8>)buffer
+       maxLength:(NSUInteger)max_length
+      usedLength:(MutPtr<NSUInteger>)used_length
+        encoding:(NSStringEncoding)encoding
+         options:(NSUInteger)options
+           range:(NSRange)range
+  remainingRange:(MutPtr<NSRange>)remaining_range {
+    // NSStringEncodingConversionAllowLossy
+    let lossy = (options & 1) != 0;
+    let start = range.location;
+    let end = range.location + range.length;
+
+    let encode = |env: &mut Environment, location, length| -> Option<Vec<u8>> {
+        let sub: id = msg![env; this substringWithRange:(NSRange { location, length })];
+        let data: id = msg![env; sub dataUsingEncoding:encoding allowLossyConversion:lossy];
+        if data == nil {
+            return None;
+        }
+        let bytes: ConstVoidPtr = msg![env; data bytes];
+        let len: NSUInteger = msg![env; data length];
+        Some(env.mem.bytes_at(bytes.cast(), len).to_vec())
+    };
+
+    // Fast path: the whole range fits (or no buffer, so only measuring).
+    let (out, pos) = match encode(env, start, end - start) {
+        Some(all) if buffer.is_null() || all.len() <= max_length as usize => (all, end),
+        _ => {
+            // Slow path: convert one character at a time until the buffer is
+            // full or a character can't be converted. Surrogate pairs are
+            // kept together.
+            let mut out = Vec::new();
+            let mut i = start;
+            while i < end {
+                let c: u16 = msg![env; this characterAtIndex:i];
+                let step = if (0xD800..0xDC00).contains(&c) && i + 1 < end { 2 } else { 1 };
+                let Some(bytes) = encode(env, i, step) else { break };
+                if !buffer.is_null() && out.len() + bytes.len() > max_length as usize {
+                    break;
+                }
+                out.extend_from_slice(&bytes);
+                i += step;
+            }
+            (out, i)
+        }
+    };
+
+    let out_len: NSUInteger = out.len().try_into().unwrap();
+    if !buffer.is_null() && out_len > 0 {
+        env.mem.bytes_at_mut(buffer, out_len).copy_from_slice(&out);
+    }
+    if !used_length.is_null() {
+        env.mem.write(used_length, out_len);
+    }
+    if !remaining_range.is_null() {
+        env.mem.write(remaining_range, NSRange { location: pos, length: end - pos });
+    }
+    pos > start || range.length == 0
+}
+
 - (())getCString:(MutPtr<u8>)buffer {
     let encoding: NSStringEncoding = msg_class![env; NSString defaultCStringEncoding];
 
@@ -1391,6 +1451,18 @@ pub const CLASSES: ClassExports = objc_classes! {
     *env.objc.borrow_mut(this) = host_object;
 
     this
+}
+
+- (id)initWithBytesNoCopy:(MutPtr<u8>)bytes
+                   length:(NSUInteger)len
+                 encoding:(NSStringEncoding)encoding
+             freeWhenDone:(bool)free_when_done {
+    // The bytes are always copied, so they can be freed immediately.
+    let new: id = msg![env; this initWithBytes:(bytes.cast_const()) length:len encoding:encoding];
+    if free_when_done && !bytes.is_null() {
+        env.mem.free(bytes.cast());
+    }
+    new
 }
 
 - (id)initWithCharacters:(ConstPtr<unichar>)characters length:(NSUInteger)len {

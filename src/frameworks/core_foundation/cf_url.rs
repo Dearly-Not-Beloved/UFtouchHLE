@@ -20,7 +20,7 @@ use crate::frameworks::foundation::ns_string::{
 };
 use crate::frameworks::foundation::NSUInteger;
 use crate::mem::{ConstPtr, MutPtr, Ptr};
-use crate::objc::{id, msg, msg_class, release};
+use crate::objc::{id, msg, msg_class, nil, release};
 use crate::Environment;
 
 pub type CFURLRef = super::CFTypeRef;
@@ -194,6 +194,43 @@ fn CFURLHasDirectoryPath(env: &mut Environment, url: CFURLRef) -> bool {
         || msg![env; last isEqual:(get_static_str(env, ".."))]
 }
 
+/// Deprecated in iOS 7, but used by some older apps to load resource files.
+/// Only reading the data is supported; properties are not.
+fn CFURLCreateDataAndPropertiesFromResource(
+    env: &mut Environment,
+    _allocator: CFAllocatorRef,
+    url: CFURLRef,
+    resource_data: MutPtr<id>,
+    properties: MutPtr<id>,
+    _desired_properties: id,
+    error_code: MutPtr<i32>,
+) -> bool {
+    const kCFURLResourceNotFoundError: i32 = -12;
+
+    let data: id = if url.is_null() || resource_data.is_null() {
+        nil
+    } else {
+        let data: id = msg_class![env; NSData alloc];
+        msg![env; data initWithContentsOfURL:url]
+    };
+    let success = !data.is_null();
+    if !resource_data.is_null() {
+        env.mem.write(resource_data, data);
+    }
+    if !properties.is_null() {
+        env.mem.write(properties, nil);
+    }
+    if !error_code.is_null() {
+        let code = if success || resource_data.is_null() {
+            0
+        } else {
+            kCFURLResourceNotFoundError
+        };
+        env.mem.write(error_code, code);
+    }
+    success || resource_data.is_null()
+}
+
 pub const FUNCTIONS: FunctionExports = &[
     export_c_func!(CFURLGetFileSystemRepresentation(_, _, _, _)),
     export_c_func!(CFURLCreateFromFileSystemRepresentation(_, _, _, _)),
@@ -205,4 +242,5 @@ pub const FUNCTIONS: FunctionExports = &[
     export_c_func!(CFURLCreateCopyAppendingPathComponent(_, _, _, _)),
     export_c_func!(CFURLCreateCopyDeletingLastPathComponent(_, _)),
     export_c_func!(CFURLHasDirectoryPath(_)),
+    export_c_func!(CFURLCreateDataAndPropertiesFromResource(_, _, _, _, _, _)),
 ];

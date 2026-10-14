@@ -116,7 +116,14 @@ macro_rules! try_get_context {
 // === alc.h ===
 
 fn alcOpenDevice(env: &mut Environment, devicename: ConstPtr<u8>) -> MutPtr<GuestALCdevice> {
-    if !devicename.is_null() {
+    // Some apps hardcode the device names from older Apple/Creative OpenAL
+    // implementations. Treat those as a request for the default device.
+    let is_generic_name = !devicename.is_null()
+        && matches!(
+            env.mem.cstr_at_utf8(devicename),
+            Ok("Generic Hardware" | "Generic Software")
+        );
+    if !devicename.is_null() && !is_generic_name {
         // If device name name is not null, we check if it's the one which was
         // obtained from a call to alcGetString(NULL, ALC_DEVICE_SPECIFIER).
         // And if not, we return NULL.

@@ -63,6 +63,9 @@ pub const CLASSES: ClassExports = objc_classes! {
 - (())setBounces:(id)_bounces {
     // TODO
 }
+- (())setCanCancelContentTouches:(bool)_can_cancel {
+    // TODO
+}
 
 - (bool)scrollEnabled {
     env.objc.borrow::<UIScrollViewHostObject>(this).scroll_enabled

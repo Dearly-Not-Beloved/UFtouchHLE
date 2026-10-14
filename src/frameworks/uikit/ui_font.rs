@@ -11,7 +11,7 @@ use crate::frameworks::core_graphics::cg_bitmap_context::CGBitmapContextDrawer;
 use crate::frameworks::core_graphics::{CGFloat, CGPoint, CGRect, CGSize};
 use crate::frameworks::foundation::ns_string::to_rust_string;
 use crate::frameworks::foundation::NSInteger;
-use crate::objc::{autorelease, id, msg, objc_classes, ClassExports, HostObject};
+use crate::objc::{id, msg, objc_classes, ClassExports, HostObject};
 use crate::Environment;
 use std::collections::HashMap;
 use std::ops::Range;
@@ -21,6 +21,9 @@ pub(super) struct State {
     fonts: HashMap<FontKind, Font>,
     sans_regular_ja: Option<Font>,
     sans_bold_ja: Option<Font>,
+    /// `UIFont` objects are cached and never freed, as on iOS. Some apps rely
+    /// on this and don't retain the fonts they get from convenience methods.
+    instances: HashMap<(FontKind, u32), id>,
 }
 impl State {
     fn get_font_by_kind(&mut self, font_kind: FontKind) -> &Font {
@@ -64,6 +67,23 @@ struct UIFontHostObject {
     kind: FontKind,
 }
 impl HostObject for UIFontHostObject {}
+
+/// Get the shared `UIFont` instance for a font kind and size. The caller does
+/// not own the returned object (like any convenience constructor), but it is
+/// never freed.
+fn get_font_instance(env: &mut Environment, kind: FontKind, size: CGFloat) -> id {
+    let key = (kind, size.to_bits());
+    if let Some(&font) = env.framework_state.uikit.ui_font.instances.get(&key) {
+        return font;
+    }
+    let class = env.objc.get_known_class("UIFont", &mut env.mem);
+    let host_object = UIFontHostObject { size, kind };
+    let new = env
+        .objc
+        .alloc_object(class, Box::new(host_object), &mut env.mem);
+    env.framework_state.uikit.ui_font.instances.insert(key, new);
+    new
+}
 
 /// Line break mode.
 ///
@@ -110,41 +130,27 @@ pub const CLASSES: ClassExports = objc_classes! {
 }
 
 + (id)systemFontOfSize:(CGFloat)size {
-    let host_object = UIFontHostObject {
-        size,
-        kind: FontKind::SansRegular,
-    };
-    let new = env.objc.alloc_object(this, Box::new(host_object), &mut env.mem);
-    autorelease(env, new)
+    get_font_instance(env, FontKind::SansRegular, size)
 }
 + (id)boldSystemFontOfSize:(CGFloat)size {
-    let host_object = UIFontHostObject {
-        size,
-        kind: FontKind::SansBold,
-    };
-    let new = env.objc.alloc_object(this, Box::new(host_object), &mut env.mem);
-    autorelease(env, new)
+    get_font_instance(env, FontKind::SansBold, size)
 }
 + (id)italicSystemFontOfSize:(CGFloat)size {
-    let host_object = UIFontHostObject {
-        size,
-        kind: FontKind::SansItalic,
-    };
-    let new = env.objc.alloc_object(this, Box::new(host_object), &mut env.mem);
-    autorelease(env, new)
+    get_font_instance(env, FontKind::SansItalic, size)
 }
 + (id)fontWithName:(id)fontName // NSString*
             size:(CGFloat)fontSize {
     let font_name = to_rust_string(env, fontName).to_string();
-    let host_object = UIFontHostObject {
-        kind: get_equivalent_font(&font_name).unwrap_or_else(|| {
-            log!("No replacement found for font {}. Using system font instead.", font_name);
-            FontKind::SansRegular
-        }),
-        size: fontSize,
-    };
-    let new = env.objc.alloc_object(this, Box::new(host_object), &mut env.mem);
-    autorelease(env, new)
+    let kind = get_equivalent_font(&font_name).unwrap_or_else(|| {
+        log!("No replacement found for font {}. Using system font instead.", font_name);
+        FontKind::SansRegular
+    });
+    get_font_instance(env, kind, fontSize)
+}
+
+- (id)fontWithSize:(CGFloat)size {
+    let kind = env.objc.borrow::<UIFontHostObject>(this).kind;
+    get_font_instance(env, kind, size)
 }
 
 - (CGFloat)ascender {

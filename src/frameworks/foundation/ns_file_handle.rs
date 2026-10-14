@@ -104,8 +104,10 @@ pub const CLASSES: ClassExports = objc_classes! {
     match posix_io::read(env, fd, buffer, length) {
         -1 => panic!("readDataOfLength: failed"),
         bytes_read => {
-            assert_eq!(length, bytes_read.try_into().unwrap());
-            msg_class![env; NSData dataWithBytesNoCopy:buffer length:length]
+            // Reading at or near the end of the file returns less data (or
+            // none at all), as on Apple's implementation.
+            let bytes_read: NSUInteger = bytes_read.try_into().unwrap();
+            msg_class![env; NSData dataWithBytesNoCopy:buffer length:bytes_read]
         }
     }
 }
@@ -131,6 +133,22 @@ pub const CLASSES: ClassExports = objc_classes! {
     if posix_io::write(env, fd, bytes, length) == -1 {
         panic!("writeData: failed")
     }
+}
+
+- (())synchronizeFile {
+    let fd = env.objc.borrow::<NSFileHandleHostObject>(this).fd;
+    if posix_io::fsync(env, fd) == -1 {
+        panic!("synchronizeFile failed")
+    }
+}
+
+- (())truncateFileAtOffset:(u64)offset {
+    let fd = env.objc.borrow::<NSFileHandleHostObject>(this).fd;
+    if posix_io::ftruncate(env, fd, offset.try_into().unwrap()) == -1 {
+        panic!("truncateFileAtOffset: failed")
+    }
+    // The file pointer is moved to the new end of the file.
+    let _: () = msg![env; this seekToFileOffset:(offset as i64)];
 }
 
 - (())closeFile {

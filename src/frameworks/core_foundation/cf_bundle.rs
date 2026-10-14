@@ -16,7 +16,7 @@ use super::CFTypeRef;
 use crate::dyld::{export_c_func, ConstantExports, FunctionExports, HostConstant};
 use crate::frameworks::foundation::ns_bundle::NSBundleHostObject;
 use crate::frameworks::foundation::{ns_array, ns_string, NSUInteger};
-use crate::objc::{id, msg, msg_class, retain};
+use crate::objc::{id, msg, msg_class, nil, release, retain};
 use crate::Environment;
 
 const kCFBundleVersionKey: &str = "CFBundleVersion";
@@ -105,6 +105,36 @@ fn CFBundleCopyResourceURL(
                                           withExtension:resource_type
                                            subdirectory:sub_dir_name];
     msg![env; url copy]
+}
+
+fn CFBundleCopyResourceURLForLocalization(
+    env: &mut Environment,
+    bundle: CFBundleRef,
+    resource_name: CFStringRef,
+    resource_type: CFStringRef,
+    sub_dir_name: CFStringRef,
+    localization_name: CFStringRef,
+) -> CFURLRef {
+    // Look in the requested localization's .lproj first, then fall back to
+    // the normal resource lookup.
+    if localization_name != nil {
+        let loc = ns_string::to_rust_string(env, localization_name);
+        let lproj_dir = if sub_dir_name != nil {
+            let sub_dir = ns_string::to_rust_string(env, sub_dir_name);
+            format!("{}/{}.lproj", sub_dir, loc)
+        } else {
+            format!("{}.lproj", loc)
+        };
+        let lproj_dir = ns_string::from_rust_string(env, lproj_dir);
+        let url: CFURLRef = msg![env; bundle URLForResource:resource_name
+                                              withExtension:resource_type
+                                               subdirectory:lproj_dir];
+        release(env, lproj_dir);
+        if url != nil {
+            return msg![env; url copy];
+        }
+    }
+    CFBundleCopyResourceURL(env, bundle, resource_name, resource_type, sub_dir_name)
 }
 
 pub fn CFBundleCopyBundleLocalizations(env: &mut Environment, bundle: CFBundleRef) -> CFArrayRef {
@@ -197,6 +227,7 @@ pub const FUNCTIONS: FunctionExports = &[
     export_c_func!(CFBundleCopyExecutableURL(_)),
     export_c_func!(CFBundleCopyResourcesDirectoryURL(_)),
     export_c_func!(CFBundleCopyResourceURL(_, _, _, _)),
+    export_c_func!(CFBundleCopyResourceURLForLocalization(_, _, _, _, _)),
     export_c_func!(CFBundleCopyBundleLocalizations(_)),
     export_c_func!(CFBundleCopyPreferredLocalizationsFromArray(_)),
     export_c_func!(CFBundleCopyLocalizedString(_, _, _, _)),

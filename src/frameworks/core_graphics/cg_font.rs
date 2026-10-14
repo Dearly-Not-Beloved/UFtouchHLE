@@ -41,6 +41,11 @@ pub const CLASSES: ClassExports = objc_classes! {
 fn CGFontCreateWithDataProvider(env: &mut Environment, provider: CGDataProviderRef) -> CGFontRef {
     let bytes = cg_data_provider::borrow_bytes(env, provider);
     let font = Font::from_vec(bytes.to_vec());
+    from_font(env, font)
+}
+
+/// Create a new (retained) `CGFont` wrapping a host font.
+pub(super) fn from_font(env: &mut Environment, font: Font) -> CGFontRef {
     let host_obj = Box::new(CGFontHostObject { font });
     let class = env.objc.get_known_class("_touchHLE_CGFont", &mut env.mem);
     env.objc.alloc_object(class, host_obj, &mut env.mem)

@@ -611,11 +611,12 @@ unsafe fn composite_layer_recursive(
         gles.VertexPointer(2, gles11::FLOAT, 0, 0 as *const GLvoid);
 
         gles.EnableClientState(gles11::TEXTURE_COORD_ARRAY);
-        // Normal images will have top-to-bottom row order, but OpenGL ES
-        // expects bottom-to-top, so flip the UVs in that case.
+        // Normal images and layer backing stores have top-to-bottom row order;
+        // only CAEAGLLayer pixels (from OpenGL ES) are bottom-to-top and
+        // need their UVs flipped.
         gles.BindBuffer(
             gles11::ARRAY_BUFFER,
-            if host_obj.contents != nil {
+            if host_obj.contents != nil || host_obj.cg_context.is_some() {
                 misc.basic_square_buffer
             } else {
                 misc.flipped_square_buffer

@@ -37,6 +37,11 @@ pub(super) struct CGBitmapContextData {
     bytes_per_row: GuestUSize,
     color_space: &'static str,
     alpha_info: CGImageAlphaInfo,
+    /// If true, drawing co-ordinates already point down (as for a layer's
+    /// backing store, where UIKit's flip is implied), so CG's y=0 maps to the
+    /// first row in memory. This matches the memory layout on iOS, where the
+    /// first row of a layer's backing store is its top edge.
+    y_down: bool,
 }
 
 pub fn CGBitmapContextCreate(
@@ -83,6 +88,7 @@ pub fn CGBitmapContextCreate(
             bytes_per_row,
             color_space,
             alpha_info: bitmap_info & kCGBitmapAlphaInfoMask,
+            y_down: false,
         }),
         // TODO: is this the correct default?
         rgb_fill_color: (0.0, 0.0, 0.0, 0.0),
@@ -91,6 +97,7 @@ pub fn CGBitmapContextCreate(
         transform: CGAffineTransformIdentity,
         blend_mode: kCGBlendModeNormal,
         text_transform: None,
+        text_drawing_mode: super::cg_context::kCGTextFill,
         state_stack: Vec::new(),
     };
     let isa = env
@@ -359,7 +366,7 @@ fn put_pixel(
 
     // CG's co-ordinate system puts the origin in the bottom-left corner, but it
     // *seems* like the rows are nonetheless in top-to-bottom order?
-    let y = data.height - 1 - y;
+    let y = if data.y_down { y } else { data.height - 1 - y };
 
     let pixel_size = bytes_per_pixel(data);
     let first_component_idx = (y * data.bytes_per_row + x * pixel_size) as usize;
@@ -548,6 +555,7 @@ fn test_iter_transformed_pixels() {
                 bytes_per_row: 3 * width,
                 color_space: "kCGColorSpaceGenericRGB",
                 alpha_info: 0,
+                y_down: false,
             },
             rgb_fill_color: (0.0, 0.0, 0.0, 0.0),
             blend_mode: kCGBlendModeNormal,
@@ -638,6 +646,18 @@ pub(super) fn fill_rect(env: &mut Environment, context: CGContextRef, rect: CGRe
     }
 }
 
+pub(super) fn fill_ellipse(env: &mut Environment, context: CGContextRef, rect: CGRect) {
+    let mut drawer = CGBitmapContextDrawer::new(&env.objc, &mut env.mem, context);
+    let color = drawer.rgb_fill_color();
+    // TODO: correct anti-aliasing
+    for ((x, y), (u, v)) in drawer.iter_transformed_pixels(rect) {
+        let (du, dv) = (u - 0.5, v - 0.5);
+        if du * du + dv * dv <= 0.25 {
+            drawer.put_pixel((x, y), color, /* blend: */ true)
+        }
+    }
+}
+
 /// Implementation of `CGContextDrawImage` for `CGBitmapContext`.
 pub(super) fn draw_image(
     env: &mut Environment,
@@ -695,6 +715,14 @@ pub(super) fn draw_image(
 /// Shortcut for [crate::frameworks::core_animation::composition]. This is a
 /// workaround for not having a `&mut Environment` that should eventually be
 /// removed somehow (TODO).
+/// Used by Core Animation for layer backing stores. See
+/// [CGBitmapContextData::y_down].
+pub fn set_y_down(objc: &mut ObjC, context: CGContextRef) {
+    let host_obj = objc.borrow_mut::<CGContextHostObject>(context);
+    let CGContextSubclass::CGBitmapContext(ref mut bitmap_data) = host_obj.subclass;
+    bitmap_data.y_down = true;
+}
+
 pub fn get_data(objc: &ObjC, context: CGContextRef) -> (GuestUSize, GuestUSize, MutVoidPtr) {
     let host_obj = objc.borrow::<CGContextHostObject>(context);
     let CGContextSubclass::CGBitmapContext(bitmap_data) = host_obj.subclass;

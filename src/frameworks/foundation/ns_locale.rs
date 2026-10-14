@@ -5,6 +5,7 @@
  */
 //! `NSLocale`.
 
+use super::ns_bundle::LANG_ID_TO_LANG_PROJ;
 use super::{ns_array, ns_string};
 use crate::dyld::{ConstantExports, HostConstant};
 use crate::frameworks::core_foundation::cf_locale::{
@@ -57,6 +58,7 @@ fn get_preferred_languages(env: &mut Environment) -> Vec<String> {
     }
 
     let languages = get_preferred_language_codes(env);
+    let languages = filter_supported_languages(env, languages);
     if languages.is_empty() {
         let lang = "en".to_string();
         log!("The app requested your preferred languages. No information could be retrieved, so {:?} (English) will be reported.", lang);
@@ -64,6 +66,67 @@ fn get_preferred_languages(env: &mut Environment) -> Vec<String> {
     } else {
         log!("The app requested your preferred languages. {:?} will be reported based on your system language preferences.", languages);
         languages
+    }
+}
+
+/// Names of the `.lproj` directories an app could use for a language code.
+fn lproj_names_for_language(code: &str) -> Vec<String> {
+    let base = code.split(['-', '_']).next().unwrap();
+    let mut names: Vec<String> = Vec::new();
+    if base == "zh" {
+        // Chinese needs the script/region to tell Simplified and Traditional
+        // apart.
+        let traditional = ["Hant", "TW", "HK", "MO"].iter().any(|t| code.contains(t));
+        if traditional {
+            names.extend(["zh-Hant", "zh_TW", "zh-TW", "zh_HK"].map(String::from));
+        } else {
+            names.extend(["zh-Hans", "zh_CN", "zh-CN"].map(String::from));
+        }
+    } else if let Some(&(_, lprojs)) = LANG_ID_TO_LANG_PROJ.iter().find(|&&(c, _)| c == base) {
+        names.extend(
+            lprojs
+                .iter()
+                .map(|l| l.strip_suffix(".lproj").unwrap().to_string()),
+        );
+    }
+    names.push(code.to_string());
+    names.push(code.replace('-', "_"));
+    names.push(base.to_string());
+    names.into_iter().map(|n| format!("{n}.lproj")).collect()
+}
+
+/// Keep only the system languages the app is localized for, as most apps
+/// just use the first preferred language and don't handle unsupported ones
+/// well. If the app is localized but supports none of them, report English.
+/// Apps without any localizations get the list unchanged.
+fn filter_supported_languages(env: &Environment, languages: Vec<String>) -> Vec<String> {
+    let bundle_path = env.bundle.bundle_path().to_owned();
+    let is_localized = env
+        .fs
+        .enumerate(&bundle_path)
+        .map(|mut entries| entries.any(|e| e.ends_with(".lproj")))
+        .unwrap_or(false);
+    if !is_localized {
+        return languages;
+    }
+
+    let supported: Vec<String> = languages
+        .iter()
+        .filter(|code| {
+            lproj_names_for_language(code)
+                .iter()
+                .any(|name| env.fs.is_dir(&bundle_path.join(name)))
+        })
+        .cloned()
+        .collect();
+    if supported.is_empty() {
+        log!(
+            "None of your preferred languages {:?} are supported by the app, falling back to English.",
+            languages
+        );
+        vec!["en".to_string()]
+    } else {
+        supported
     }
 }
 
@@ -110,7 +173,12 @@ pub const CLASSES: ClassExports = objc_classes! {
         existing
     } else {
         let langs = get_preferred_languages(env);
-        let lang_ns_strings = langs.into_iter().map(|lang| ns_string::from_rust_string(env, lang)).collect();
+        // These strings live for the whole app run on iOS, and some apps
+        // (e.g. Inotia 2) over-release them, so make them immortal.
+        let lang_ns_strings = langs.into_iter().map(|lang| {
+            let lang: &'static str = Box::leak(lang.into_boxed_str());
+            ns_string::get_static_str(env, lang)
+        }).collect();
         let new = ns_array::from_vec(env, lang_ns_strings);
         State::get(env).preferred_languages = Some(new);
         new

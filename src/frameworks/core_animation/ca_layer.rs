@@ -12,7 +12,7 @@ use crate::frameworks::core_graphics::cg_affine_transform::{
     CGAffineTransform, CGAffineTransformIdentity,
 };
 use crate::frameworks::core_graphics::cg_bitmap_context::{
-    CGBitmapContextCreate, CGBitmapContextGetHeight, CGBitmapContextGetWidth,
+    set_y_down, CGBitmapContextCreate, CGBitmapContextGetHeight, CGBitmapContextGetWidth,
 };
 use crate::frameworks::core_graphics::cg_color::{CGColorHostObject, CGColorRef};
 use crate::frameworks::core_graphics::cg_color_space::CGColorSpaceCreateDeviceRGB;
@@ -475,6 +475,7 @@ pub const CLASSES: ClassExports = objc_classes! {
             color_space,
             kCGImageByteOrder32Big | kCGImageAlphaPremultipliedLast
         );
+        set_y_down(&mut env.objc, cg_context);
         env.objc.borrow_mut::<CALayerHostObject>(this).cg_context = Some(cg_context);
         cg_context
     } else {

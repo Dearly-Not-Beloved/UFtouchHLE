@@ -13,11 +13,14 @@ use super::cg_color::CGColorRef;
 use super::cg_color_space::{
     kCGColorSpaceModelMonochrome, kCGColorSpaceModelRGB, CGColorSpaceGetModel, CGColorSpaceRef,
 };
-use super::cg_font::{CGFontHostObject, CGFontRef, CGFontRelease, CGFontRetain, CGGlyph};
+use super::cg_font::{
+    self as cg_font, CGFontHostObject, CGFontRef, CGFontRelease, CGFontRetain, CGGlyph,
+};
 use super::cg_geometry::CGPointZero;
 use super::cg_image::CGImageRef;
 use super::{cg_bitmap_context, cg_color, CGFloat, CGPoint, CGRect, CGSize};
 use crate::dyld::{export_c_func, FunctionExports};
+use crate::font::Font;
 use crate::frameworks::core_foundation::{CFRelease, CFRetain, CFTypeRef};
 use crate::frameworks::uikit;
 use crate::mem::{ConstPtr, GuestUSize};
@@ -26,9 +29,10 @@ use crate::Environment;
 
 type CGInterpolationQuality = i32;
 
-type CGTextDrawingMode = i32;
-const kCGTextFill: CGTextDrawingMode = 0;
+pub(super) type CGTextDrawingMode = i32;
+pub(super) const kCGTextFill: CGTextDrawingMode = 0;
 const kCGTextFillStroke: CGTextDrawingMode = 2;
+const kCGTextInvisible: CGTextDrawingMode = 3;
 
 pub type CGBlendMode = i32;
 pub const kCGBlendModeNormal: CGBlendMode = 0;
@@ -83,6 +87,7 @@ pub(super) struct CGContextHostObject {
     pub(super) blend_mode: CGBlendMode,
     /// Text transform.
     pub(super) text_transform: Option<CGAffineTransform>,
+    pub(super) text_drawing_mode: CGTextDrawingMode,
     pub(super) state_stack: Vec<ContextState>,
 }
 impl HostObject for CGContextHostObject {}
@@ -202,6 +207,10 @@ fn CGContextSetShadowWithColor(
 
 pub fn CGContextFillRect(env: &mut Environment, context: CGContextRef, rect: CGRect) {
     cg_bitmap_context::fill_rect(env, context, rect, /* clear: */ false);
+}
+
+fn CGContextFillEllipseInRect(env: &mut Environment, context: CGContextRef, rect: CGRect) {
+    cg_bitmap_context::fill_ellipse(env, context, rect);
 }
 
 pub fn CGContextClearRect(env: &mut Environment, context: CGContextRef, rect: CGRect) {
@@ -337,11 +346,88 @@ fn CGContextSetFontSize(env: &mut Environment, context: CGContextRef, size: CGFl
 }
 
 fn CGContextSetTextDrawingMode(
-    _env: &mut Environment,
-    _context: CGContextRef,
+    env: &mut Environment,
+    context: CGContextRef,
     mode: CGTextDrawingMode,
 ) {
-    assert!(mode == kCGTextFill || mode == kCGTextFillStroke); // TODO: support other modes
+    // TODO: support other modes
+    assert!(mode == kCGTextFill || mode == kCGTextFillStroke || mode == kCGTextInvisible);
+    env.objc
+        .borrow_mut::<CGContextHostObject>(context)
+        .text_drawing_mode = mode;
+}
+
+type CGTextEncoding = i32;
+
+/// Deprecated in iOS 7, but used by some older apps.
+fn CGContextSelectFont(
+    env: &mut Environment,
+    context: CGContextRef,
+    name: ConstPtr<u8>,
+    size: CGFloat,
+    _text_encoding: CGTextEncoding,
+) {
+    // There's no font lookup by name here yet, so pick the closest bundled
+    // font based on the name.
+    let name = env
+        .mem
+        .cstr_at_utf8(name)
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let bold = name.contains("bold");
+    let font = if name.contains("courier") || name.contains("mono") {
+        if bold {
+            Font::mono_bold()
+        } else {
+            Font::mono_regular()
+        }
+    } else if name.contains("times") || name.contains("georgia") {
+        if bold {
+            Font::serif_bold()
+        } else {
+            Font::serif_regular()
+        }
+    } else if bold {
+        Font::sans_bold()
+    } else {
+        Font::sans_regular()
+    };
+    let font = cg_font::from_font(env, font);
+    CGContextSetFont(env, context, font);
+    CGFontRelease(env, font);
+    CGContextSetFontSize(env, context, size);
+}
+
+/// Deprecated in iOS 7, but used by some older apps.
+fn CGContextSetCharacterSpacing(_env: &mut Environment, _context: CGContextRef, spacing: CGFloat) {
+    if spacing != 0.0 {
+        log!("TODO: CGContextSetCharacterSpacing({}) (ignored)", spacing);
+    }
+}
+
+/// Deprecated in iOS 7, but used by some older apps.
+fn CGContextShowTextAtPoint(
+    env: &mut Environment,
+    context: CGContextRef,
+    x: CGFloat,
+    y: CGFloat,
+    string: ConstPtr<u8>,
+    length: GuestUSize,
+) {
+    let host_obj = env.objc.borrow::<CGContextHostObject>(context);
+    if host_obj.text_drawing_mode == kCGTextInvisible || host_obj.font.is_null() {
+        return;
+    }
+    // The text encoding is usually kCGEncodingMacRoman, which is the same as
+    // Latin-1 for ASCII. Other bytes are mapped as Latin-1 too.
+    // TODO: proper MacRoman support
+    let bytes = env.mem.bytes_at(string, length).to_vec();
+    let font = &env.objc.borrow::<CGFontHostObject>(host_obj.font).font;
+    let glyph_ids = bytes
+        .iter()
+        .map(|&b| font.glyph_id_for_char(b as u16))
+        .collect();
+    show_glyphs_at_point(env, context, x, y, glyph_ids);
 }
 
 fn CGContextSetTextMatrix(
@@ -368,7 +454,16 @@ fn CGContextShowGlyphsAtPoint(
         let glyph_id = env.mem.read(glyphs + i);
         glyph_ids.push(rusttype::GlyphId(glyph_id));
     }
+    show_glyphs_at_point(env, context, x, y, glyph_ids);
+}
 
+fn show_glyphs_at_point(
+    env: &mut Environment,
+    context: CGContextRef,
+    x: CGFloat,
+    y: CGFloat,
+    glyph_ids: Vec<rusttype::GlyphId>,
+) {
     let font = env.objc.borrow::<CGContextHostObject>(context).font;
     let font_size = env.objc.borrow::<CGContextHostObject>(context).font_size;
     let text_transform = env
@@ -456,6 +551,10 @@ pub const FUNCTIONS: FunctionExports = &[
     export_c_func!(CGContextSetFont(_, _)),
     export_c_func!(CGContextSetFontSize(_, _)),
     export_c_func!(CGContextSetTextDrawingMode(_, _)),
+    export_c_func!(CGContextSelectFont(_, _, _, _)),
+    export_c_func!(CGContextSetCharacterSpacing(_, _)),
+    export_c_func!(CGContextShowTextAtPoint(_, _, _, _, _)),
+    export_c_func!(CGContextFillEllipseInRect(_, _)),
     export_c_func!(CGContextSetTextMatrix(_, _)),
     export_c_func!(CGContextShowGlyphsAtPoint(_, _, _, _, _)),
     export_c_func!(CGContextShowGlyphsAtPositions(_, _, _, _)),
