@@ -70,17 +70,22 @@ public class MainActivity extends SDLActivity {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
             return;
         }
-        Display display = getWindowManager().getDefaultDisplay();
-        Display.Mode current = display.getMode();
-        for (Display.Mode mode : display.getSupportedModes()) {
-            if (mode.getPhysicalWidth() == current.getPhysicalWidth()
-                && mode.getPhysicalHeight() == current.getPhysicalHeight()
-                && Math.abs(mode.getRefreshRate() - 60.0f) < 1.0f) {
-                WindowManager.LayoutParams attrs = getWindow().getAttributes();
-                attrs.preferredDisplayModeId = mode.getModeId();
-                getWindow().setAttributes(attrs);
-                return;
+        try {
+            Display display = getWindowManager().getDefaultDisplay();
+            Display.Mode current = display.getMode();
+            for (Display.Mode mode : display.getSupportedModes()) {
+                if (mode.getPhysicalWidth() == current.getPhysicalWidth()
+                    && mode.getPhysicalHeight() == current.getPhysicalHeight()
+                    && Math.abs(mode.getRefreshRate() - 60.0f) < 1.0f) {
+                    WindowManager.LayoutParams attrs = getWindow().getAttributes();
+                    attrs.preferredDisplayModeId = mode.getModeId();
+                    getWindow().setAttributes(attrs);
+                    return;
+                }
             }
+        } catch (Throwable e) {
+            // Not essential, and this runs during startup, so never let it
+            // crash touchHLE.
         }
     }
 
