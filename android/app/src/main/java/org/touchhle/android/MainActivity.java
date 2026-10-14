@@ -10,7 +10,9 @@ package org.touchhle.android;
 
 import android.os.Build;
 import android.os.Bundle;
+import android.os.SystemClock;
 import android.view.WindowManager;
+import android.widget.Toast;
 
 import org.libsdl.app.SDLActivity;
 
@@ -38,14 +40,28 @@ public class MainActivity extends SDLActivity {
     // the home button instead: touchHLE goes into the background (where the
     // app is paused) and can be resumed. It can still be closed from the
     // recent apps screen.
+    //
+    // With gesture navigation, swiping in from the side of the screen is
+    // "back", which is easy to do by accident while playing. So back has to be
+    // pressed twice in quick succession.
+    private static final long BACK_CONFIRM_MS = 2000;
+    private long lastBackPressTime = 0;
+
     @Override
     public void onBackPressed() {
-        moveTaskToBack(true);
+        long now = SystemClock.uptimeMillis();
+        if (now - lastBackPressTime < BACK_CONFIRM_MS) {
+            lastBackPressTime = 0;
+            moveTaskToBack(true);
+        } else {
+            lastBackPressTime = now;
+            Toast.makeText(this, "再按一次返回键退到后台", Toast.LENGTH_SHORT).show();
+        }
     }
 
     @Override
     public void superOnBackPressed() {
-        moveTaskToBack(true);
+        onBackPressed();
     }
 
     @Override
