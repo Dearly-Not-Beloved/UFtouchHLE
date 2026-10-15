@@ -81,6 +81,21 @@ pub(super) fn sharegroup_key(host_obj: &EAGLContextHostObject) -> usize {
 pub(super) struct PresentTextureSizes {
     frame: Option<(GLsizei, GLsizei)>,
     upscaled: Option<(GLsizei, GLsizei)>,
+    /// See [read_framebuffer] (0 if none yet).
+    read_framebuffer: GLuint,
+}
+
+/// Get the framebuffer object used for reading from the app's renderbuffers,
+/// creating it if it doesn't exist (yet). It's kept rather than deleted after
+/// use, because that's faster, and because deleting framebuffers crashes the
+/// Android emulator's OpenGL ES 1.1 implementation. (Unlike the objects
+/// below, it can't just be given a reserved name, as that emulator only
+/// accepts names from glGenFramebuffersOES.)
+unsafe fn read_framebuffer(gles: &mut dyn GLES, cached: &mut GLuint) -> GLuint {
+    if *cached == 0 || gles.IsFramebufferOES(*cached) == 0 {
+        gles.GenFramebuffersOES(1, cached);
+    }
+    *cached
 }
 
 // Names of the objects [present_renderbuffer] keeps between frames, rather
@@ -399,13 +414,17 @@ pub const CLASSES: ClassExports = objc_classes! {
             crate::frameworks::core_animation::forget_overlay_present(env);
         }
         let pixels_vec = get_pixels_vec_for_presenting(env, drawable);
+        let sharegroup = sharegroup_key(env.objc.borrow::<EAGLContextHostObject>(this));
+        let mut sizes = env.framework_state.opengles.present_texture_sizes.get(&sharegroup).copied().unwrap_or_default();
         // re-borrow
         let (pixels_vec, width, height) = {
             let mut gles = super::sync_context(&mut env.framework_state.opengles, &mut env.objc, env.window.as_mut().unwrap(), env.current_thread);
             unsafe {
-                read_renderbuffer(gles.as_mut(), pixels_vec)
+                let framebuffer = read_framebuffer(gles.as_mut(), &mut sizes.read_framebuffer);
+                read_renderbuffer(gles.as_mut(), pixels_vec, framebuffer)
             }
         };
+        env.framework_state.opengles.present_texture_sizes.insert(sharegroup, sizes);
         present_pixels(env, drawable, pixels_vec, width, height);
     }
 
@@ -542,7 +561,11 @@ unsafe fn get_renderbuffer_size(gles: &mut dyn GLES) -> (GLsizei, GLsizei) {
 /// The returned values are the [Vec], the width and height.
 ///
 /// The provided context must be current.
-unsafe fn read_renderbuffer(gles: &mut dyn GLES, mut pixel_buffer: Vec<u8>) -> (Vec<u8>, u32, u32) {
+unsafe fn read_renderbuffer(
+    gles: &mut dyn GLES,
+    mut pixel_buffer: Vec<u8>,
+    src_framebuffer: GLuint,
+) -> (Vec<u8>, u32, u32) {
     let renderbuffer: GLuint = get_int(gles, gles11::RENDERBUFFER_BINDING_OES) as _;
     let (width, height) = get_renderbuffer_size(gles);
     let width_u32: u32 = width.try_into().unwrap();
@@ -552,9 +575,7 @@ unsafe fn read_renderbuffer(gles: &mut dyn GLES, mut pixel_buffer: Vec<u8>) -> (
     // state changes we make.
     let old_framebuffer: GLuint = get_int(gles, gles11::FRAMEBUFFER_BINDING_OES) as _;
 
-    // Create a framebuffer we can use to read from the renderbuffer
-    let mut src_framebuffer = 0;
-    gles.GenFramebuffersOES(1, &mut src_framebuffer);
+    // Use a framebuffer to read from the renderbuffer
     gles.BindFramebufferOES(gles11::FRAMEBUFFER_OES, src_framebuffer);
     gles.FramebufferRenderbufferOES(
         gles11::FRAMEBUFFER_OES,
@@ -588,9 +609,6 @@ unsafe fn read_renderbuffer(gles: &mut dyn GLES, mut pixel_buffer: Vec<u8>) -> (
         Instant::now().saturating_duration_since(before)
     );
     pixel_buffer.set_len(size);
-
-    // Clean up the framebuffer object since we no longer need it.
-    gles.DeleteFramebuffersOES(1, &src_framebuffer);
 
     // Restore the framebuffer binding
     gles.BindFramebufferOES(gles11::FRAMEBUFFER_OES, old_framebuffer);
@@ -712,9 +730,8 @@ unsafe fn present_renderbuffer(
         let renderbuffer: GLuint = get_int(gles, gles11::RENDERBUFFER_BINDING_OES) as _;
         let (width, height) = get_renderbuffer_size(gles);
 
-        // Create a framebuffer we can use to read from the renderbuffer
-        let mut src_framebuffer = 0;
-        gles.GenFramebuffersOES(1, &mut src_framebuffer);
+        // Use a framebuffer to read from the renderbuffer
+        let src_framebuffer = read_framebuffer(gles, &mut sizes.read_framebuffer);
         gles.BindFramebufferOES(gles11::FRAMEBUFFER_OES, src_framebuffer);
         gles.FramebufferRenderbufferOES(
             gles11::FRAMEBUFFER_OES,
@@ -744,10 +761,9 @@ unsafe fn present_renderbuffer(
             sizes.frame = Some((width, height));
         }
 
-        // Clean up the framebuffer object since we no longer need it.
-        // This also sets the framebuffer bindings back to zero, so rendering
-        // will go to the default framebuffer (the window).
-        gles.DeleteFramebuffersOES(1, &src_framebuffer);
+        // Set the framebuffer binding back to zero, so rendering will go to
+        // the default framebuffer (the window).
+        gles.BindFramebufferOES(gles11::FRAMEBUFFER_OES, 0);
         (width, height)
     } else {
         // Present the copy made last time again.

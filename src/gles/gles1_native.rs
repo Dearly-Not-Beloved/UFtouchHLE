@@ -19,11 +19,57 @@ use super::util::{try_decode_pvrtc, PalettedTextureFormat};
 use super::GLESContext;
 use crate::window::{GLContext, GLVersion, Window};
 use std::ffi::CStr;
-use std::marker::PhantomData;
 
 pub struct GLES1NativeContext {
     gl_ctx: GLContext,
     is_loaded: bool,
+    arrays: ArrayTracking,
+}
+
+/// Number of texture units whose texture coordinate arrays are tracked.
+const TRACKED_TEXTURE_UNITS: usize = 2;
+
+/// Tracks which vertex arrays are enabled without any data, for
+/// [GLES1Native::without_empty_arrays].
+///
+/// Some apps (e.g. Inotia 2) enable a vertex array, typically the colour
+/// array, without ever setting a pointer for it, and draw anyway. That works
+/// on iPhone OS and most drivers, but the Android emulator's OpenGL ES 1.1
+/// implementation refuses to draw then ("a vertex attribute array is enabled
+/// with no data bound"), so nothing is shown. Such arrays are disabled while
+/// drawing, which doesn't change the result.
+#[derive(Default)]
+struct ArrayTracking {
+    /// Current `GL_ARRAY_BUFFER` binding.
+    array_buffer: GLuint,
+    /// Current `glClientActiveTexture` unit (0-based).
+    client_active_texture: usize,
+    /// (enabled, has data) for the color, normal and vertex arrays.
+    color: (bool, bool),
+    normal: (bool, bool),
+    vertex: (bool, bool),
+    /// (enabled, has data) for the texture coordinate array of each unit.
+    tex_coord: [(bool, bool); TRACKED_TEXTURE_UNITS],
+}
+
+impl ArrayTracking {
+    fn array_mut(&mut self, array: GLenum) -> Option<&mut (bool, bool)> {
+        match array {
+            gles11::COLOR_ARRAY => Some(&mut self.color),
+            gles11::NORMAL_ARRAY => Some(&mut self.normal),
+            gles11::VERTEX_ARRAY => Some(&mut self.vertex),
+            gles11::TEXTURE_COORD_ARRAY => self.tex_coord.get_mut(self.client_active_texture),
+            _ => None,
+        }
+    }
+
+    fn set_pointer(&mut self, array: GLenum, pointer: *const GLvoid) {
+        // A null pointer is an offset of 0 if a buffer is bound.
+        let has_data = !pointer.is_null() || self.array_buffer != 0;
+        if let Some(state) = self.array_mut(array) {
+            state.1 = has_data;
+        }
+    }
 }
 impl GLESContext for GLES1NativeContext {
     fn description() -> &'static str {
@@ -34,6 +80,7 @@ impl GLESContext for GLES1NativeContext {
         Ok(Self {
             gl_ctx: window.create_gl_context(GLVersion::GLES11)?,
             is_loaded: false,
+            arrays: Default::default(),
         })
     }
 
@@ -43,7 +90,7 @@ impl GLESContext for GLES1NativeContext {
     ) -> Box<dyn GLES + 'gl_ctx> {
         if self.gl_ctx.is_current() && self.is_loaded {
             return Box::new(GLES1Native {
-                _gl_lifetime: PhantomData,
+                arrays: &mut self.arrays,
             });
         }
 
@@ -55,7 +102,7 @@ impl GLESContext for GLES1NativeContext {
             self.is_loaded = true;
         }
         Box::new(GLES1Native {
-            _gl_lifetime: PhantomData,
+            arrays: &mut self.arrays,
         })
     }
 
@@ -66,7 +113,7 @@ impl GLESContext for GLES1NativeContext {
     ) -> Box<dyn GLES + 'gl_ctx> {
         if self.gl_ctx.is_current() && self.is_loaded {
             return Box::new(GLES1Native {
-                _gl_lifetime: PhantomData,
+                arrays: &mut self.arrays,
             });
         }
 
@@ -76,13 +123,62 @@ impl GLESContext for GLES1NativeContext {
             self.is_loaded = true;
         }
         Box::new(GLES1Native {
-            _gl_lifetime: PhantomData,
+            arrays: &mut self.arrays,
         })
     }
 }
 
 pub struct GLES1Native<'gl_ctx> {
-    _gl_lifetime: PhantomData<&'gl_ctx ()>,
+    arrays: &'gl_ctx mut ArrayTracking,
+}
+
+impl GLES1Native<'_> {
+    /// Run `draw` with any vertex arrays that are enabled without data
+    /// disabled (see [ArrayTracking]).
+    unsafe fn without_empty_arrays(&mut self, draw: impl FnOnce()) {
+        let arrays = &*self.arrays;
+        let empty = |&(enabled, has_data): &(bool, bool)| enabled && !has_data;
+        let plain: Vec<GLenum> = [
+            (gles11::COLOR_ARRAY, arrays.color),
+            (gles11::NORMAL_ARRAY, arrays.normal),
+            (gles11::VERTEX_ARRAY, arrays.vertex),
+        ]
+        .into_iter()
+        .filter(|(_, state)| empty(state))
+        .map(|(array, _)| array)
+        .collect();
+        let units: Vec<usize> = (0..TRACKED_TEXTURE_UNITS)
+            .filter(|&unit| empty(&arrays.tex_coord[unit]))
+            .collect();
+        if plain.is_empty() && units.is_empty() {
+            draw();
+            return;
+        }
+        let set_tex_coord_arrays = |enable: bool| {
+            for &unit in &units {
+                gles11::ClientActiveTexture(gles11::TEXTURE0 + unit as GLenum);
+                if enable {
+                    gles11::EnableClientState(gles11::TEXTURE_COORD_ARRAY);
+                } else {
+                    gles11::DisableClientState(gles11::TEXTURE_COORD_ARRAY);
+                }
+            }
+            if !units.is_empty() {
+                gles11::ClientActiveTexture(
+                    gles11::TEXTURE0 + arrays.client_active_texture as GLenum,
+                );
+            }
+        };
+        for &array in &plain {
+            gles11::DisableClientState(array);
+        }
+        set_tex_coord_arrays(false);
+        draw();
+        for &array in &plain {
+            gles11::EnableClientState(array);
+        }
+        set_tex_coord_arrays(true);
+    }
 }
 
 impl GLES for GLES1Native<'_> {
@@ -114,12 +210,19 @@ impl GLES for GLES1Native<'_> {
         gles11::Disable(cap)
     }
     unsafe fn ClientActiveTexture(&mut self, texture: GLenum) {
+        self.arrays.client_active_texture = texture.wrapping_sub(gles11::TEXTURE0) as usize;
         gles11::ClientActiveTexture(texture);
     }
     unsafe fn EnableClientState(&mut self, array: GLenum) {
+        if let Some(state) = self.arrays.array_mut(array) {
+            state.0 = true;
+        }
         gles11::EnableClientState(array)
     }
     unsafe fn DisableClientState(&mut self, array: GLenum) {
+        if let Some(state) = self.arrays.array_mut(array) {
+            state.0 = false;
+        }
         gles11::DisableClientState(array)
     }
     unsafe fn GetBooleanv(&mut self, pname: GLenum, params: *mut GLboolean) {
@@ -320,10 +423,20 @@ impl GLES for GLES1Native<'_> {
         gles11::GenBuffers(n, buffers)
     }
     unsafe fn DeleteBuffers(&mut self, n: GLsizei, buffers: *const GLuint) {
+        // Deleting the bound buffer unbinds it.
+        if n > 0 && !buffers.is_null() {
+            let deleted = std::slice::from_raw_parts(buffers, n as usize);
+            if deleted.contains(&self.arrays.array_buffer) {
+                self.arrays.array_buffer = 0;
+            }
+        }
         gles11::DeleteBuffers(n, buffers)
     }
     unsafe fn BindBuffer(&mut self, target: GLenum, buffer: GLuint) {
         assert!(target == gles11::ARRAY_BUFFER || target == gles11::ELEMENT_ARRAY_BUFFER);
+        if target == gles11::ARRAY_BUFFER {
+            self.arrays.array_buffer = buffer;
+        }
         gles11::BindBuffer(target, buffer)
     }
     unsafe fn BufferData(
@@ -373,9 +486,11 @@ impl GLES for GLES1Native<'_> {
         stride: GLsizei,
         pointer: *const GLvoid,
     ) {
+        self.arrays.set_pointer(gles11::COLOR_ARRAY, pointer);
         gles11::ColorPointer(size, type_, stride, pointer)
     }
     unsafe fn NormalPointer(&mut self, type_: GLenum, stride: GLsizei, pointer: *const GLvoid) {
+        self.arrays.set_pointer(gles11::NORMAL_ARRAY, pointer);
         gles11::NormalPointer(type_, stride, pointer)
     }
     unsafe fn TexCoordPointer(
@@ -385,6 +500,8 @@ impl GLES for GLES1Native<'_> {
         stride: GLsizei,
         pointer: *const GLvoid,
     ) {
+        self.arrays
+            .set_pointer(gles11::TEXTURE_COORD_ARRAY, pointer);
         gles11::TexCoordPointer(size, type_, stride, pointer)
     }
     unsafe fn VertexPointer(
@@ -394,12 +511,13 @@ impl GLES for GLES1Native<'_> {
         stride: GLsizei,
         pointer: *const GLvoid,
     ) {
+        self.arrays.set_pointer(gles11::VERTEX_ARRAY, pointer);
         gles11::VertexPointer(size, type_, stride, pointer)
     }
 
     // Drawing
     unsafe fn DrawArrays(&mut self, mode: GLenum, first: GLint, count: GLsizei) {
-        gles11::DrawArrays(mode, first, count)
+        self.without_empty_arrays(|| gles11::DrawArrays(mode, first, count))
     }
     unsafe fn DrawElements(
         &mut self,
@@ -408,7 +526,7 @@ impl GLES for GLES1Native<'_> {
         type_: GLenum,
         indices: *const GLvoid,
     ) {
-        gles11::DrawElements(mode, count, type_, indices)
+        self.without_empty_arrays(|| gles11::DrawElements(mode, count, type_, indices))
     }
 
     // Clearing
