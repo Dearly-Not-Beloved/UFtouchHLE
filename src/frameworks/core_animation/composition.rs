@@ -509,8 +509,13 @@ unsafe fn render_and_present(
     // Set up GL objects needed for render-to-texture. We could draw directly
     // to the screen instead, but this way we can reuse the code for scaling and
     // rotating the screen and drawing the virtual cursor.
-    // The render target needs replacing if its size changed (e.g. the window
-    // was resized or rotated while using sharp filtering).
+    // The render target needs resizing if the size changed (e.g. the window
+    // was resized or rotated while using sharp filtering). This resizes the
+    // texture in place rather than deleting the framebuffer and making a new
+    // one, because deleting a framebuffer crashes Android emulator's OpenGL ES
+    // 1.1 implementation (in GLClientState::removeFramebuffers()), which
+    // happened when an app started in a different orientation than the
+    // launcher's.
     if let Some((texture, framebuffer, size)) = env
         .framework_state
         .core_animation
@@ -519,13 +524,32 @@ unsafe fn render_and_present(
     {
         if size != (fb_width, fb_height) {
             unsafe {
-                gles.DeleteFramebuffersOES(1, &framebuffer);
-                gles.DeleteTextures(1, &texture);
+                gles.BindTexture(gles11::TEXTURE_2D, texture);
+                gles.TexImage2D(
+                    gles11::TEXTURE_2D,
+                    0,
+                    gles11::RGBA as _,
+                    fb_width as _,
+                    fb_height as _,
+                    0,
+                    gles11::RGBA,
+                    gles11::UNSIGNED_BYTE,
+                    std::ptr::null(),
+                );
+                gles.BindFramebufferOES(gles11::FRAMEBUFFER_OES, framebuffer);
+                gles.FramebufferTexture2DOES(
+                    gles11::FRAMEBUFFER_OES,
+                    gles11::COLOR_ATTACHMENT0_OES,
+                    gles11::TEXTURE_2D,
+                    texture,
+                    0,
+                );
+                warn_on_gl_error(gles.as_mut(), "resizing the render target");
             }
             env.framework_state
                 .core_animation
                 .composition
-                .texture_framebuffer = None;
+                .texture_framebuffer = Some((texture, framebuffer, (fb_width, fb_height)));
         }
     }
     let texture = if let Some((texture, framebuffer, _)) = env
