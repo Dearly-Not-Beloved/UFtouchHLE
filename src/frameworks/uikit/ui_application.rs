@@ -526,6 +526,7 @@ pub(super) fn exit(env: &mut Environment) {
         let _: () = msg![env; pool drain];
     };
 
+    crate::objc::TERMINATING.store(true, std::sync::atomic::Ordering::Relaxed);
     {
         let pool: id = msg_class![env; NSAutoreleasePool new];
         let delegate: id = msg![env; ui_application delegate];

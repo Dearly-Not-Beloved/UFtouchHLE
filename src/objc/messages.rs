@@ -34,6 +34,13 @@ pub(super) struct ThreadInitializer {
     waiters: u32,
 }
 
+/// Set while the app is being terminated (see `ui_application::exit`). Some
+/// apps clean up twice at that point (e.g. both in `applicationWillTerminate:`
+/// and in response to the notification), and so message objects they already
+/// freed. On a real device that usually goes unnoticed because the process
+/// exits straight afterwards, so it's tolerated then.
+pub static TERMINATING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 fn maybe_initialize_class(env: &mut Environment, receiver: id) {
     let class_host_object = env.objc.get_host_object(receiver).unwrap();
     let Some(&super::ClassHostObject {
@@ -187,6 +194,19 @@ fn objc_msgSend_inner(
     if receiver == nil {
         // https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/ObjectiveC/Chapters/ocObjectsClasses.html#//apple_ref/doc/uid/TP30001163-CH11-SW7
         log_dbg!("[nil {}]", selector.as_str(&env.mem));
+        env.cpu.regs_mut()[0..2].fill(0);
+        return;
+    }
+
+    if TERMINATING.load(std::sync::atomic::Ordering::Relaxed)
+        && super2.is_none()
+        && env.objc.get_host_object(receiver).is_none()
+    {
+        log!(
+            "Warning: [{:?} {}] sent to a deallocated object while terminating, ignoring it",
+            receiver,
+            selector.as_str(&env.mem)
+        );
         env.cpu.regs_mut()[0..2].fill(0);
         return;
     }

@@ -33,7 +33,7 @@ mod synchronization;
 pub use classes::{objc_classes, Class, ClassExports, ClassTemplate};
 pub use messages::{
     autorelease, msg, msg_class, msg_send, msg_send_no_initialize, msg_send_no_type_checking,
-    msg_send_super2, msg_super, objc_super, release, retain,
+    msg_send_super2, msg_super, objc_super, release, retain, TERMINATING,
 };
 pub use methods::{HostIMP, IMP};
 pub use objects::{
