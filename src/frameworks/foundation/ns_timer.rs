@@ -123,6 +123,19 @@ pub const CLASSES: ClassExports = objc_classes! {
     env.objc.borrow::<NSTimerHostObject>(this).due_by.is_some()
 }
 
+- (id)fireDate {
+    // NSDate*
+    let due_by = env.objc.borrow::<NSTimerHostObject>(this).due_by;
+    let in_seconds = due_by.map_or(0.0, |due_by| {
+        due_by.saturating_duration_since(Instant::now()).as_secs_f64()
+    });
+    msg_class![env; NSDate dateWithTimeIntervalSinceNow:in_seconds]
+}
+- (())setFireDate:(id)date { // NSDate*
+    let fire_date: NSTimeInterval = msg![env; date timeIntervalSinceReferenceDate];
+    set_fire_date(env, this, fire_date);
+}
+
 - (())invalidate {
     let timer = env.objc.borrow_mut::<NSTimerHostObject>(this);
     // Timer might already be invalid, don't try to remove it twice.
@@ -266,4 +279,22 @@ pub(super) fn handle_timer(env: &mut Environment, timer: id) -> Option<Instant> 
     release(env, pool);
 
     new_due_by
+}
+
+/// Set when a timer will next fire. `fire_date` is an absolute time, i.e.
+/// seconds since the reference date (as for `CFAbsoluteTime` and
+/// `-[NSDate timeIntervalSinceReferenceDate]`). This does nothing for a timer
+/// that was invalidated.
+pub fn set_fire_date(env: &mut Environment, timer: id, fire_date: NSTimeInterval) {
+    let now = crate::frameworks::core_foundation::time::apple_epoch()
+        .elapsed()
+        .map_or(0.0, |elapsed| elapsed.as_secs_f64());
+    // Apps sometimes "pause" a timer by setting a fire date in the distant
+    // future, which wouldn't fit in an Instant.
+    const MAX_DELAY: f64 = 10.0 * 365.0 * 24.0 * 60.0 * 60.0;
+    let delay = Duration::from_secs_f64((fire_date - now).clamp(0.0, MAX_DELAY));
+    let host_object = env.objc.borrow_mut::<NSTimerHostObject>(timer);
+    if host_object.due_by.is_some() {
+        host_object.due_by = Some(Instant::now() + delay);
+    }
 }
