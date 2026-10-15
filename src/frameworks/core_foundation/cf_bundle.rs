@@ -31,6 +31,23 @@ pub const CONSTANTS: ConstantExports = &[
         "_kCFBundleExecutableKey",
         HostConstant::NSString(kCFBundleExecutableKey),
     ),
+    (
+        "_kCFBundleIdentifierKey",
+        HostConstant::NSString("CFBundleIdentifier"),
+    ),
+    ("_kCFBundleNameKey", HostConstant::NSString("CFBundleName")),
+    (
+        "_kCFBundleInfoDictionaryVersionKey",
+        HostConstant::NSString("CFBundleInfoDictionaryVersion"),
+    ),
+    (
+        "_kCFBundleLocalizationsKey",
+        HostConstant::NSString("CFBundleLocalizations"),
+    ),
+    (
+        "_kCFBundleDevelopmentRegionKey",
+        HostConstant::NSString("CFBundleDevelopmentRegion"),
+    ),
 ];
 
 pub type CFBundleRef = CFTypeRef;

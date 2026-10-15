@@ -39,6 +39,8 @@ pub(crate) const LANG_ID_TO_LANG_PROJ: &[(&str, &[&str])] = &[
     ("ru", &["Russian.lproj", "ru.lproj"]),
     ("es", &["Spanish.lproj", "es.lproj"]),
     ("sv", &["Swedish.lproj", "sv.lproj"]),
+    ("zh-Hans", &["zh-Hans.lproj", "zh_CN.lproj"]),
+    ("zh-Hant", &["zh-Hant.lproj", "zh_TW.lproj"]),
 ];
 
 #[derive(Default)]
@@ -48,8 +50,10 @@ pub struct State {
 }
 
 pub struct NSBundleHostObject {
-    /// If this is [None], this is the main bundle's NSBundle instance and the
-    /// [Bundle] is stored in [crate::Environment], not here.
+    /// If this is [None], the [Bundle] used is the main bundle's, which is
+    /// stored in [crate::Environment], not here. This is also the case for
+    /// other bundles created with `initWithPath:` (usually resource bundles
+    /// inside the main bundle), which is an approximation.
     pub bundle: Option<Bundle>,
     /// NSString with bundle path.
     bundle_path: id,
@@ -68,6 +72,23 @@ pub const CLASSES: ClassExports = objc_classes! {
 
 @implementation NSBundle: NSObject
 
++ (id)allocWithZone:(NSZonePtr)_zone {
+    let host_object = NSBundleHostObject {
+        bundle: None,
+        bundle_path: nil,
+        bundle_identifier: nil,
+        bundle_url: None,
+        info_dictionary: None,
+    };
+    env.objc.alloc_object(this, Box::new(host_object), &mut env.mem)
+}
+
++ (id)bundleWithPath:(id)path { // NSString*
+    let new: id = msg![env; this alloc];
+    let new: id = msg![env; new initWithPath:path];
+    autorelease(env, new)
+}
+
 + (id)mainBundle {
     if let Some(bundle) = env.framework_state.foundation.ns_bundle.main_bundle {
         bundle
@@ -83,14 +104,52 @@ pub const CLASSES: ClassExports = objc_classes! {
     autorelease(env, preferredLocalizations)
 }
 
+- (id)initWithPath:(id)path { // NSString*
+    // Only directories can be bundles.
+    let mut is_dir = false;
+    let exists: bool = if path == nil {
+        false
+    } else {
+        let file_manager: id = msg_class![env; NSFileManager defaultManager];
+        let is_dir_ptr = env.mem.alloc_and_write(false);
+        let exists: bool = msg![env; file_manager fileExistsAtPath:path isDirectory:is_dir_ptr];
+        is_dir = env.mem.read(is_dir_ptr);
+        env.mem.free(is_dir_ptr.cast());
+        exists
+    };
+    if !exists || !is_dir {
+        log!(
+            "Warning: [NSBundle initWithPath:{:?}]: not a directory, returning nil",
+            path
+        );
+        release(env, this);
+        return nil;
+    }
+
+    let path: id = msg![env; path copy];
+    env.objc.borrow_mut::<NSBundleHostObject>(this).bundle_path = path;
+    let info_dict: id = msg![env; this infoDictionary];
+    if info_dict != nil {
+        let key = ns_string::get_static_str(env, "CFBundleIdentifier");
+        let identifier: id = msg![env; info_dict objectForKey:key];
+        retain(env, identifier);
+        env.objc.borrow_mut::<NSBundleHostObject>(this).bundle_identifier = identifier;
+    }
+    this
+}
+
 - (())dealloc {
     let &NSBundleHostObject {
         bundle: _,
-        bundle_path: _, // FIXME?
-        bundle_identifier: _, // FIXME?
+        bundle_path,
+        bundle_identifier,
         bundle_url,
         info_dictionary,
     } = env.objc.borrow(this);
+    // The main bundle is never deallocated, so these were all retained by
+    // initWithPath:.
+    release(env, bundle_path);
+    release(env, bundle_identifier);
     if let Some(bundle_url) = bundle_url {
         release(env, bundle_url);
     }
@@ -262,9 +321,23 @@ pub const CLASSES: ClassExports = objc_classes! {
     } else {
         table_name
     };
-    // TODO: support arbitrary bundles, not only main one
-    assert_eq!(this, env.framework_state.foundation.ns_bundle.main_bundle.unwrap());
-    let dict = if let Some(&table_dict) = env.framework_state.foundation.ns_bundle.localization_tables.get(&name) {
+    // Only the main bundle's tables are cached.
+    let is_main_bundle = Some(this) == env.framework_state.foundation.ns_bundle.main_bundle;
+    let dict = if !is_main_bundle {
+        let extension = ns_string::get_static_str(env, "strings");
+        let dict_url: id = msg![env; this URLForResource:name withExtension:extension];
+        if dict_url == nil {
+            nil
+        } else {
+            let dict: id = msg_class![env; NSDictionary dictionaryWithContentsOfURL:dict_url];
+            if dict != nil {
+                dict
+            } else {
+                let dict = load_strings_as_standard_format(env, dict_url);
+                autorelease(env, dict)
+            }
+        }
+    } else if let Some(&table_dict) = env.framework_state.foundation.ns_bundle.localization_tables.get(&name) {
         table_dict
     } else {
         let extension = ns_string::get_static_str(env, "strings");
