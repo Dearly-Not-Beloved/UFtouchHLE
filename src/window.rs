@@ -1840,16 +1840,35 @@ pub fn get_battery_status() -> (i32, BatteryState) {
 /// (e.g. before one exists).
 pub fn system_language_codes() -> Vec<String> {
     sdl2::locale::get_preferred_locales()
-        .map(|loc| loc.lang)
+        .map(ios_language_code)
         .collect()
 }
 
 pub fn get_preferred_language_codes(env: &mut Environment) -> Vec<String> {
     env.on_parent_stack_in_coroutine(|_, _| {
         sdl2::locale::get_preferred_locales()
-            .map(|loc| loc.lang)
+            .map(ios_language_code)
             .collect()
     })
+}
+
+/// The language code iPhone OS would use for a locale. This matters for
+/// Chinese: iPhone OS reports "zh-Hans" or "zh-Hant", and apps (e.g. Inotia 2)
+/// compare against those, but on some systems (e.g. Android) SDL only gives
+/// "zh" and a region.
+fn ios_language_code(locale: sdl2::locale::Locale) -> String {
+    if locale.lang != "zh" {
+        return locale.lang;
+    }
+    let traditional = locale
+        .country
+        .as_deref()
+        .is_some_and(|country| ["TW", "HK", "MO"].contains(&country));
+    if traditional {
+        "zh-Hant".to_string()
+    } else {
+        "zh-Hans".to_string()
+    }
 }
 
 pub fn get_preferred_country_codes(env: &mut Environment) -> Vec<String> {
