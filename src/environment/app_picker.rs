@@ -732,7 +732,9 @@ fn app_picker_inner(
         let host_obj = env.objc.borrow_mut::<AppPickerDelegateHostObject>(delegate);
         if std::mem::take(&mut host_obj.became_active) {
             log!("Reloading app list.");
-            apps = load_apps(&env.options);
+            // This uses Android APIs via JNI (e.g. to get the system
+            // languages), which crashes if done on a coroutine's stack.
+            apps = env.on_parent_stack_in_coroutine(|_, options| load_apps(options));
             show_apps(env, &mut icon_grid_stuff, message_label, &mut apps);
             continue;
         }
