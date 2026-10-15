@@ -6,10 +6,11 @@
 //! Native functions for the Android launcher (LauncherActivity.java).
 //!
 //! The launcher is a normal Android activity, so it can use the whole screen
-//! at its real resolution, unlike the app picker (src/environment/app_picker.rs),
-//! which is an emulated iPhone OS app. It runs in a different process from
-//! touchHLE proper, where SDL isn't initialized, so nothing here may use SDL
-//! (e.g. [crate::paths::user_data_base_path]).
+//! at its real resolution, unlike the app picker
+//! (src/environment/app_picker.rs), which is an emulated iPhone OS app. It
+//! runs in a different process from touchHLE proper, where SDL isn't
+//! initialized, so nothing here may use SDL (e.g.
+//! [crate::paths::user_data_base_path]).
 
 use crate::bundle::Bundle;
 use crate::fs::BundleData;
