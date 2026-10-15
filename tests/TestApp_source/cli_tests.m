@@ -6404,6 +6404,30 @@ int test_NSNotificationCenter_addObserver_nilName_removeObserver() {
   return 0;
 }
 
+int test_NSSet_setWithObjects_count() {
+  NSAutoreleasePool *pool = [NSAutoreleasePool new];
+
+  // Duplicate objects are only included once.
+  id objects[] = {@1, @2, @1};
+  NSSet *set = [NSSet setWithObjects:objects count:3];
+  if ([set count] != 2 || ![set containsObject:@1] ||
+      ![set containsObject:@2]) {
+    [pool drain];
+    return -1;
+  }
+
+  // The mutable subclass gives a mutable set.
+  NSMutableSet *mutableSet = [NSMutableSet setWithObjects:objects count:2];
+  [mutableSet addObject:@3];
+  if ([mutableSet count] != 3 || ![mutableSet containsObject:@3]) {
+    [pool drain];
+    return -2;
+  }
+
+  [pool drain];
+  return 0;
+}
+
 int test_NSMutableArray_removeObjectsInArray_otherArray() {
   NSAutoreleasePool *pool = [NSAutoreleasePool new];
 
@@ -6771,6 +6795,7 @@ struct {
     FUNC_DEF(test_malloc_zone_struct_dispatch),
     FUNC_DEF(test_fcvt),
     FUNC_DEF(test_tempfile),
+    FUNC_DEF(test_NSSet_setWithObjects_count),
 };
 // clang-format on
 

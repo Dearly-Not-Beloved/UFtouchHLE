@@ -91,7 +91,15 @@ static inline NSRange NSMakeRange(NSUInteger loc, NSUInteger len) {
 @end
 
 @interface NSSet<ObjectType> : NSObject
++ (instancetype)setWithObjects:(const ObjectType[])objects
+                         count:(NSUInteger)count;
 - (ObjectType)anyObject;
+- (NSUInteger)count;
+- (BOOL)containsObject:(ObjectType)object;
+@end
+
+@interface NSMutableSet<ObjectType> : NSSet
+- (void)addObject:(ObjectType)object;
 @end
 
 typedef enum {
