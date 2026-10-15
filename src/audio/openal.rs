@@ -41,6 +41,15 @@ pub fn pause_all_devices() {
 /// Undo [pause_all_devices].
 pub fn resume_all_devices() {
     for &d in OPEN_DEVICES.lock().unwrap().iter() {
+        // The OpenSL ES backend (used on Android) of our version of OpenAL
+        // Soft frees its buffer when the device is paused, but expects it to
+        // still exist when it's resumed, so resuming crashed touchHLE (when
+        // returning from the background). Resetting the device first (with
+        // its current settings, and without starting it, since it's paused)
+        // creates a new buffer.
+        if cfg!(target_os = "android") {
+            unsafe { al_sys::alcResetDeviceSOFT(d as *mut ALCdevice, std::ptr::null()) };
+        }
         unsafe { al_sys::alcDeviceResumeSOFT(d as *mut ALCdevice) };
     }
 }

@@ -88,6 +88,9 @@ extern "C" {
     // ALC_SOFT_pause_device
     pub fn alcDevicePauseSOFT(device: *mut ALCdevice);
     pub fn alcDeviceResumeSOFT(device: *mut ALCdevice);
+
+    // ALC_SOFT_HRTF
+    pub fn alcResetDeviceSOFT(device: *mut ALCdevice, attribs: *const ALCint) -> ALCboolean;
 }
 
 // === al.h ===
