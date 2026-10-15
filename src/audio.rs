@@ -18,6 +18,14 @@ mod symphonia_formats;
 
 pub use ima4::decode_ima4;
 
+/// Decode the audio track of a file (e.g. the AAC track of an MPEG-4 movie)
+/// to 16-bit little-endian interleaved PCM. Returns the samples, the sample
+/// rate and the channel count.
+pub fn decode_audio_track_to_pcm(bytes: Vec<u8>) -> Option<(Vec<u8>, u32, u32)> {
+    let pcm = symphonia_formats::decode_symphonia_to_pcm(Cursor::new(bytes)).ok()?;
+    Some((pcm.bytes, pcm.sample_rate, pcm.channels))
+}
+
 use crate::fs::{Fs, GuestPath};
 use std::io::Cursor;
 

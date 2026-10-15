@@ -5,9 +5,22 @@
  */
 //! `MPMoviePlayerController` etc.
 
+use super::movie_decoder::{MovieDecoder, Subtitle};
+use crate::audio::openal::al_types::*;
+use crate::audio::openal::{
+    AL_BUFFER, AL_FORMAT_MONO16, AL_FORMAT_STEREO16, AL_SOURCE_STATE, AL_STOPPED,
+};
 use crate::dyld::{ConstantExports, HostConstant};
+use crate::frameworks::core_graphics::cg_affine_transform::CGAffineTransform;
+use crate::frameworks::core_graphics::{cg_image, CGFloat, CGPoint, CGRect, CGSize};
 use crate::frameworks::foundation::{ns_string, ns_url, NSInteger, NSTimeInterval};
 use crate::frameworks::uikit::ui_device::UIDeviceOrientation;
+use crate::frameworks::uikit::ui_device::{
+    UIDeviceOrientationLandscapeLeft, UIDeviceOrientationLandscapeRight,
+    UIDeviceOrientationPortraitUpsideDown,
+};
+use crate::frameworks::uikit::ui_font::{UILineBreakModeWordWrap, UITextAlignmentCenter};
+use crate::image::Image;
 use crate::objc::{
     id, msg, msg_class, nil, objc_classes, release, retain, todo_objc_setter, ClassExports,
     HostObject, NSZonePtr,
@@ -16,9 +29,36 @@ use crate::Environment;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
+/// A movie that's being played.
+struct Playback {
+    /// `MPMoviePlayerController*`
+    player: id,
+    decoder: MovieDecoder,
+    /// Full-screen black view on top of the app's window, which can be tapped
+    /// to skip the movie (like the "Done" button on iPhone OS).
+    view: id,
+    /// The view showing the video frames.
+    video_view: id,
+    /// OpenAL source and buffer for the audio, if there is any.
+    audio: Option<(ALuint, ALuint)>,
+    started: Instant,
+    /// Subtitles in the user's language (or English), if there are any.
+    subtitles: Vec<Subtitle>,
+    /// `UILabel*` showing the current subtitle.
+    subtitle_label: id,
+    /// Index in `subtitles` of the subtitle being shown.
+    current_subtitle: Option<usize>,
+}
+
+const SUBTITLE_FONT_SIZE: CGFloat = 15.0;
+
+/// `AL_SEC_OFFSET`
+const AL_SEC_OFFSET: ALenum = 0x1024;
+
 #[derive(Default)]
 pub struct State {
     active_player: Option<id>,
+    playback: Option<Playback>,
     /// Various apps (e.g. Crash Bandicoot Nitro Kart 3D and Spore Origins)
     /// create or start a player and await some kind of notification, but can't
     /// handle it if that notification happens immediately. This queue lets us
@@ -47,6 +87,8 @@ pub const MPMoviePlayerContentPreloadDidFinishNotification: &str =
     "MPMoviePlayerContentPreloadDidFinishNotification";
 pub const MPMoviePlayerScalingModeDidChangeNotification: &str =
     "MPMoviePlayerScalingModeDidChangeNotification";
+pub const MPMoviePlayerDidExitFullscreenNotification: &str =
+    "MPMoviePlayerDidExitFullscreenNotification";
 // TODO: More notifications?
 const MPMoviePlayerPlaybackDidFinishReasonUserInfoKey: &str =
     "MPMoviePlayerPlaybackDidFinishReasonUserInfoKey";
@@ -64,6 +106,10 @@ pub const CONSTANTS: ConstantExports = &[
     (
         "_MPMoviePlayerScalingModeDidChangeNotification",
         HostConstant::NSString(MPMoviePlayerScalingModeDidChangeNotification),
+    ),
+    (
+        "_MPMoviePlayerDidExitFullscreenNotification",
+        HostConstant::NSString(MPMoviePlayerDidExitFullscreenNotification),
     ),
     (
         "_MPMoviePlayerPlaybackDidFinishReasonUserInfoKey",
@@ -167,7 +213,7 @@ pub const CLASSES: ClassExports = objc_classes! {
 
 // MPMediaPlayback implementation
 - (())play {
-    log!("TODO: [(MPMoviePlayerController*){:?} play]", this);
+    log!("[(MPMoviePlayerController*){:?} play]", this);
     if let Some(old) = env.framework_state.media_player.movie_player.active_player {
         let _: () = msg![env; old stop];
     }
@@ -176,8 +222,13 @@ pub const CLASSES: ClassExports = objc_classes! {
     retain(env, this);
     env.framework_state.media_player.movie_player.active_player = Some(this);
 
-    // Act as if playback immediately completed after 1 second
-    // (various apps wait for this, such as BIA and Hero of Sparta).
+    if start_playback(env, this) {
+        return;
+    }
+
+    // If the movie can't be played, act as if playback immediately completed
+    // after 1 second (various apps wait for this, such as BIA and Hero of
+    // Sparta).
     let notif = (MPMoviePlayerPlaybackDidFinishNotification, this, Instant::now().checked_add(Duration::from_millis(1000)).unwrap());
     for (name, obj, _) in &mut State::get(env).pending_notifications {
         // De-duplicate similar notifications. This can happen if app is calling
@@ -194,13 +245,29 @@ pub const CLASSES: ClassExports = objc_classes! {
 }
 
 - (())stop {
-    log!("TODO: [(MPMoviePlayerController*){:?} stop]", this);
+    log!("[(MPMoviePlayerController*){:?} stop]", this);
+    if State::get(env).playback.as_ref().is_some_and(|p| p.player == this) {
+        let playback = State::get(env).playback.take().unwrap();
+        finish_playback(env, playback, /* notify: */ false);
+    }
     if env.framework_state.media_player.movie_player.active_player.is_some() {
         // Some applications (like NOVA2) may send 2 `stop` messages for each
         // 1 `play` message for the player. In that case, we want to release
         // the active player only once.
         assert!(this == env.framework_state.media_player.movie_player.active_player.take().unwrap());
         release(env, this);
+    }
+}
+
+@end
+
+// The full-screen view shown while a movie plays, see [Playback].
+@implementation _touchHLE_MoviePlayerView: UIView
+
+- (())touchesEnded:(id)_touches withEvent:(id)_event {
+    log!("Movie skipped by tapping");
+    if let Some(playback) = State::get(env).playback.take() {
+        finish_playback(env, playback, /* notify: */ true);
     }
 }
 
@@ -223,9 +290,263 @@ pub const CLASSES: ClassExports = objc_classes! {
 
 };
 
+/// Start playing the movie of `player`. Returns `false` if it can't be played.
+fn start_playback(env: &mut Environment, player: id) -> bool {
+    let url = env
+        .objc
+        .borrow::<MPMoviePlayerControllerHostObject>(player)
+        .content_url;
+    if url == nil {
+        return false;
+    }
+    let path = ns_url::to_rust_path(env, url);
+    let Ok(bytes) = env.fs.read(&path) else {
+        log!("Warning: couldn't read movie {:?}, not playing it", path);
+        return false;
+    };
+    let (decoder, audio) = match MovieDecoder::new(bytes) {
+        Ok(movie) => movie,
+        Err(e) => {
+            log!("Warning: can't play movie {:?}: {}", path, e);
+            return false;
+        }
+    };
+    let ui_application: id = msg_class![env; UIApplication sharedApplication];
+    let window: id = msg![env; ui_application keyWindow];
+    if window == nil {
+        log!("Warning: no key window to show movie {:?} in", path);
+        return false;
+    }
+    log!("Playing movie {:?}", path);
+
+    let bounds: CGRect = msg![env; window bounds];
+    let view: id = msg_class![env; _touchHLE_MoviePlayerView alloc];
+    let view: id = msg![env; view initWithFrame:bounds];
+    let black: id = msg_class![env; UIColor blackColor];
+    () = msg![env; view setBackgroundColor:black];
+
+    // Movies are shown in landscape, in the same orientation as the app if
+    // it's a landscape app.
+    let orientation: NSInteger = msg![env; ui_application statusBarOrientation];
+    let angle: CGFloat = match orientation {
+        // These are interface orientations, whose values are swapped
+        // compared to the device orientation constants for landscape.
+        UIDeviceOrientationLandscapeLeft => std::f32::consts::FRAC_PI_2,
+        UIDeviceOrientationLandscapeRight => -std::f32::consts::FRAC_PI_2,
+        UIDeviceOrientationPortraitUpsideDown => -std::f32::consts::FRAC_PI_2,
+        _ => std::f32::consts::FRAC_PI_2,
+    };
+    let (screen_width, screen_height) = (bounds.size.height, bounds.size.width);
+    let (video_width, video_height) = decoder.dimensions();
+    let scale =
+        (screen_width / video_width as CGFloat).min(screen_height / video_height as CGFloat);
+    let video_view: id = msg_class![env; UIView alloc];
+    let video_view: id = msg![env; video_view initWithFrame:(CGRect {
+        origin: CGPoint { x: 0.0, y: 0.0 },
+        size: CGSize {
+            width: video_width as CGFloat * scale,
+            height: video_height as CGFloat * scale,
+        },
+    })];
+    () = msg![env; video_view setUserInteractionEnabled:false];
+    () = msg![env; video_view setCenter:(CGPoint {
+        x: bounds.origin.x + bounds.size.width / 2.0,
+        y: bounds.origin.y + bounds.size.height / 2.0,
+    })];
+    () = msg![env; video_view setTransform:(CGAffineTransform::make_rotation(angle))];
+    // Subtitles, at the bottom of the video.
+    let languages = crate::window::get_preferred_language_codes(env);
+    let subtitles = decoder
+        .subtitles_for(&languages)
+        .map(<[Subtitle]>::to_vec)
+        .unwrap_or_default();
+    let subtitle_label: id = msg_class![env; UILabel alloc];
+    let subtitle_label: id = msg![env; subtitle_label init];
+    () = msg![env; subtitle_label setNumberOfLines:(0 as NSInteger)];
+    let font: id = msg_class![env; UIFont systemFontOfSize:SUBTITLE_FONT_SIZE];
+    () = msg![env; subtitle_label setFont:font];
+    let white: id = msg_class![env; UIColor whiteColor];
+    () = msg![env; subtitle_label setTextColor:white];
+    let shade: id =
+        msg_class![env; UIColor colorWithWhite:(0.0 as CGFloat) alpha:(0.55 as CGFloat)];
+    () = msg![env; subtitle_label setBackgroundColor:shade];
+    () = msg![env; subtitle_label setTextAlignment:UITextAlignmentCenter];
+    () = msg![env; subtitle_label setHidden:true];
+    () = msg![env; video_view addSubview:subtitle_label];
+
+    () = msg![env; view addSubview:video_view];
+    () = msg![env; window addSubview:view];
+
+    let audio = audio.map(|audio| {
+        let format = if audio.channels == 1 {
+            AL_FORMAT_MONO16
+        } else {
+            AL_FORMAT_STEREO16
+        };
+        let al = env
+            .framework_state
+            .audio_toolbox
+            .make_al_context_current(&mut env.openal_manager);
+        let mut source: ALuint = 0;
+        let mut buffer: ALuint = 0;
+        unsafe {
+            al.GenBuffers(1, &mut buffer);
+            al.BufferData(
+                buffer,
+                format,
+                audio.pcm.as_ptr().cast(),
+                audio.pcm.len() as ALsizei,
+                audio.sample_rate as ALsizei,
+            );
+            al.GenSources(1, &mut source);
+            al.Sourcei(source, AL_BUFFER, buffer as ALint);
+            al.SourcePlay(source);
+        }
+        (source, buffer)
+    });
+
+    State::get(env).playback = Some(Playback {
+        player,
+        decoder,
+        view,
+        video_view,
+        audio,
+        started: Instant::now(),
+        subtitles,
+        subtitle_label,
+        current_subtitle: None,
+    });
+    true
+}
+
+/// Show the subtitle for `time`, if any.
+fn update_subtitle(env: &mut Environment, playback: &mut Playback, time: Duration) {
+    let index = playback
+        .subtitles
+        .iter()
+        .position(|subtitle| subtitle.start <= time && time < subtitle.end);
+    if index == playback.current_subtitle {
+        return;
+    }
+    playback.current_subtitle = index;
+    let label = playback.subtitle_label;
+    let Some(index) = index else {
+        () = msg![env; label setHidden:true];
+        return;
+    };
+
+    let text = ns_string::from_rust_string(env, playback.subtitles[index].text.clone());
+    () = msg![env; label setText:text];
+    let font: id = msg![env; label font];
+    let bounds: CGRect = msg![env; (playback.video_view) bounds];
+    let max_width = bounds.size.width - 24.0;
+    let size: CGSize = msg![env; text sizeWithFont:font
+                                 constrainedToSize:(CGSize { width: max_width, height: bounds.size.height })
+                                     lineBreakMode:UILineBreakModeWordWrap];
+    release(env, text);
+    let (width, height) = (size.width.ceil() + 12.0, size.height.ceil() + 6.0);
+    () = msg![env; label setFrame:(CGRect {
+        origin: CGPoint {
+            x: (bounds.size.width - width) / 2.0,
+            y: bounds.size.height - height - 10.0,
+        },
+        size: CGSize { width, height },
+    })];
+    () = msg![env; label setHidden:false];
+}
+
+/// Show the movie's current frame, and finish playback if it's over.
+fn update_playback(env: &mut Environment) {
+    let Some(mut playback) = State::get(env).playback.take() else {
+        return;
+    };
+
+    // The audio is the clock if there is any, so that the video stays in
+    // sync with it, including when touchHLE is paused.
+    let (time, audio_finished) = if let Some((source, _)) = playback.audio {
+        let al = env
+            .framework_state
+            .audio_toolbox
+            .make_al_context_current(&mut env.openal_manager);
+        let mut seconds: ALfloat = 0.0;
+        let mut state: ALint = 0;
+        unsafe {
+            al.GetSourcef(source, AL_SEC_OFFSET, &mut seconds);
+            al.GetSourcei(source, AL_SOURCE_STATE, &mut state);
+        }
+        (
+            Duration::from_secs_f32(seconds.max(0.0)),
+            state == AL_STOPPED,
+        )
+    } else {
+        (playback.started.elapsed(), false)
+    };
+
+    let mut latest_frame = None;
+    let mut video_finished = false;
+    loop {
+        match playback.decoder.next_frame_time() {
+            None => {
+                video_finished = true;
+                break;
+            }
+            Some(frame_time) if frame_time <= time => {
+                if let Some(Some(frame)) = playback.decoder.decode_next_frame() {
+                    latest_frame = Some(frame);
+                }
+            }
+            Some(_) => break,
+        }
+    }
+    update_subtitle(env, &mut playback, time);
+
+    if let Some(frame) = latest_frame {
+        let image = Image::from_pixel_vec(frame.pixels, (frame.width, frame.height));
+        let image = cg_image::from_image(env, image);
+        let layer: id = msg![env; (playback.video_view) layer];
+        () = msg![env; layer setContents:image];
+        release(env, image);
+    }
+
+    if audio_finished || (video_finished && playback.audio.is_none()) {
+        finish_playback(env, playback, /* notify: */ true);
+    } else {
+        State::get(env).playback = Some(playback);
+    }
+}
+
+/// Stop showing and playing the movie, and tell the app if `notify` is set.
+fn finish_playback(env: &mut Environment, playback: Playback, notify: bool) {
+    log!("Movie playback finished");
+    () = msg![env; (playback.view) removeFromSuperview];
+    release(env, playback.subtitle_label);
+    release(env, playback.video_view);
+    release(env, playback.view);
+    if let Some((source, buffer)) = playback.audio {
+        let al = env
+            .framework_state
+            .audio_toolbox
+            .make_al_context_current(&mut env.openal_manager);
+        unsafe {
+            al.SourceStop(source);
+            al.DeleteSources(1, &source);
+            al.DeleteBuffers(1, &buffer);
+        }
+    }
+    if notify {
+        State::get(env).pending_notifications.push_back((
+            MPMoviePlayerPlaybackDidFinishNotification,
+            playback.player,
+            Instant::now(),
+        ));
+    }
+}
+
 /// For use by `NSRunLoop` via [super::handle_players]: check movie players'
 /// status, send notifications if necessary.
 pub(super) fn handle_players(env: &mut Environment) {
+    update_playback(env);
+
     let mut notifs_to_run = Vec::new();
     let pending_notifs = &mut State::get(env).pending_notifications;
     let mut i = 0;
