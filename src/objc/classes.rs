@@ -465,6 +465,9 @@ fn substitute_classes(
         || name.starts_with("AltAds")
         || name.starts_with("FB") // Facebook
         || name.starts_with("Flurry")
+        // Com2uS Hub (Inotia 2 and other Com2uS games), whose servers no
+        // longer exist and which needs UITableView.
+        || name.starts_with("Hub")
         || name.starts_with("Mobclix")
         || name.starts_with("OpenFeint")
         || name.starts_with("Tapjoy"))

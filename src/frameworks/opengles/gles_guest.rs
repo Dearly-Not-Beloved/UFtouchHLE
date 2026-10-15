@@ -195,6 +195,26 @@ fn glGetFloatv(env: &mut Environment, pname: GLenum, params: MutPtr<GLfloat>) {
         unsafe { gles.GetFloatv(pname, params) };
     });
 }
+fn glGetFixedv(env: &mut Environment, pname: GLenum, params: MutPtr<GLfixed>) {
+    assert_ne!(gles11::NUM_COMPRESSED_TEXTURE_FORMATS, pname);
+    assert_ne!(gles11::COMPRESSED_TEXTURE_FORMATS, pname);
+    // How many values are returned depends on pname, so fill the buffer with
+    // a value OpenGL ES never returns, and only write back the values that
+    // were replaced, so nothing after the app's buffer is overwritten.
+    const UNSET: u32 = 0x7fc0_dead; // a NaN
+    let mut floats = [f32::from_bits(UNSET); 16 /* upper bound */];
+    with_ctx_and_mem(env, |gles, _mem| unsafe {
+        gles.GetFloatv(pname, floats.as_mut_ptr())
+    });
+    for (i, &value) in floats.iter().enumerate() {
+        if value.to_bits() == UNSET {
+            break;
+        }
+        // 16.16 fixed point (the cast saturates)
+        let fixed = (value * 65536.0).round() as GLfixed;
+        env.mem.write(params + i as GuestUSize, fixed);
+    }
+}
 fn glGetIntegerv(env: &mut Environment, pname: GLenum, params: MutPtr<GLint>) {
     with_ctx_and_mem(env, |gles, mem| {
         match pname {
@@ -1482,6 +1502,7 @@ pub const FUNCTIONS: FunctionExports = &[
     export_c_func!(glDisableClientState(_)),
     export_c_func!(glGetBooleanv(_, _)),
     export_c_func!(glGetFloatv(_, _)),
+    export_c_func!(glGetFixedv(_, _)),
     export_c_func!(glGetIntegerv(_, _)),
     export_c_func!(glGetPointerv(_, _)),
     export_c_func!(glGetTexEnviv(_, _, _)),

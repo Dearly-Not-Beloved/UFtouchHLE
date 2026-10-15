@@ -17,11 +17,13 @@ type AudioSessionInterruptionListener = GuestFunction;
 type AudioSessionPropertyListener = GuestFunction;
 
 const kAudioSessionBadPropertySizeError: OSStatus = fourcc(b"!siz") as _;
+const kAudioSessionUnsupportedPropertyError: OSStatus = fourcc(b"pty?") as _;
 
 /// Usually a FourCC.
 type AudioSessionPropertyID = u32;
 const kAudioSessionProperty_OtherAudioIsPlaying: AudioSessionPropertyID = fourcc(b"othr");
 const kAudioSessionProperty_AudioCategory: AudioSessionPropertyID = fourcc(b"acat");
+const kAudioSessionProperty_AudioInputAvailable: AudioSessionPropertyID = fourcc(b"aiav");
 const kAudioSessionProperty_CurrentHardwareSampleRate: AudioSessionPropertyID = fourcc(b"chsr");
 const kAudioSessionProperty_CurrentHardwareOutputNumberChannels: AudioSessionPropertyID =
     fourcc(b"choc");
@@ -80,7 +82,9 @@ fn AudioSessionGetPropertySize(
     in_ID: AudioSessionPropertyID,
     out_data_size: MutPtr<u32>,
 ) -> OSStatus {
-    let size = get_audio_session_property_size(in_ID);
+    let Some(size) = get_audio_session_property_size(in_ID) else {
+        return kAudioSessionUnsupportedPropertyError;
+    };
     env.mem.write(out_data_size, size);
     0 // Success
 }
@@ -91,7 +95,9 @@ fn AudioSessionGetProperty(
     io_data_size: MutPtr<u32>,
     out_data: MutVoidPtr,
 ) -> OSStatus {
-    let required_size = get_audio_session_property_size(in_ID);
+    let Some(required_size) = get_audio_session_property_size(in_ID) else {
+        return kAudioSessionUnsupportedPropertyError;
+    };
     let io_data_size_value = env.mem.read(io_data_size);
     if io_data_size_value != required_size {
         log!("Warning: AudioSessionGetProperty() failed");
@@ -101,6 +107,11 @@ fn AudioSessionGetProperty(
     let state = &env.framework_state.audio_toolbox.audio_session;
     match in_ID {
         kAudioSessionProperty_OtherAudioIsPlaying => {
+            let value: u32 = 0;
+            env.mem.write(out_data.cast(), value);
+        }
+        kAudioSessionProperty_AudioInputAvailable => {
+            // There's no microphone support.
             let value: u32 = 0;
             env.mem.write(out_data.cast(), value);
         }
@@ -221,17 +232,25 @@ fn AudioSessionRemovePropertyListenerWithUserData(
     result
 }
 
-/// Helper function to get AudioSession Property size by id
-fn get_audio_session_property_size(in_ID: AudioSessionPropertyID) -> GuestUSize {
-    match in_ID {
+/// Helper function to get AudioSession Property size by id. [None] if the
+/// property isn't supported (a warning is logged).
+fn get_audio_session_property_size(in_ID: AudioSessionPropertyID) -> Option<GuestUSize> {
+    Some(match in_ID {
         kAudioSessionProperty_OtherAudioIsPlaying => guest_size_of::<u32>(),
         kAudioSessionProperty_AudioCategory => guest_size_of::<u32>(),
+        kAudioSessionProperty_AudioInputAvailable => guest_size_of::<u32>(),
         kAudioSessionProperty_CurrentHardwareSampleRate => guest_size_of::<f64>(),
         kAudioSessionProperty_CurrentHardwareOutputNumberChannels => guest_size_of::<u32>(),
         kAudioSessionProperty_CurrentHardwareOutputVolume => guest_size_of::<f32>(),
         kAudioSessionProperty_CurrentHardwareIOBufferDuration => guest_size_of::<f32>(),
-        _ => unimplemented!("Unimplemented property ID: {}", debug_fourcc(in_ID)),
-    }
+        _ => {
+            log!(
+                "Warning: unsupported audio session property {}",
+                debug_fourcc(in_ID)
+            );
+            return None;
+        }
+    })
 }
 
 pub const FUNCTIONS: FunctionExports = &[
