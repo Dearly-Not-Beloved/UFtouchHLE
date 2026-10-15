@@ -417,6 +417,14 @@ impl Window {
         launch_image: Option<Image>,
         options: &Options,
     ) -> Window {
+        if env::consts::OS == "android" {
+            // Don't block the event loop while the app is paused (touchHLE
+            // pauses the app itself, see Window::wait_until_active). SDL reads
+            // this when the video subsystem is initialized, so it has to be
+            // set before that.
+            sdl2::hint::set("SDL_ANDROID_BLOCK_ON_PAUSE", "0");
+        }
+
         let sdl_ctx = sdl2::init().unwrap();
         let video_ctx = sdl_ctx.video().unwrap();
 
@@ -433,9 +441,6 @@ impl Window {
             let attr = video_ctx.gl_attr();
             attr.set_context_version(1, 1);
             attr.set_context_profile(sdl2::video::GLProfile::GLES);
-
-            // Disable blocking of event loop when app is paused.
-            sdl2::hint::set("SDL_ANDROID_BLOCK_ON_PAUSE", "0");
         }
 
         // Separate mouse and touch events
@@ -462,9 +467,16 @@ impl Window {
             set_sdl2_orientation(device_orientation);
             let screen_size = video_ctx.display_bounds(0).unwrap().size();
             let (width, height) = rotate_fullscreen_size(device_orientation, screen_size);
+            // The window always fills the screen on Android, but it isn't
+            // made an SDL "fullscreen" window: SDL leaves fullscreen when the
+            // window is minimized (when going into the background), and on
+            // Android that waits for the UI thread, which at that moment is
+            // waiting for touchHLE to release the OpenGL ES surface. After
+            // half a second both give up, the surface is destroyed while
+            // still in use, and touchHLE crashed on returning. Instead,
+            // MainActivity hides the system bars itself.
             let window = video_ctx
                 .window(title, width, height)
-                .fullscreen()
                 .opengl()
                 .build()
                 .unwrap();
@@ -1582,21 +1594,14 @@ impl Window {
             set_sdl2_orientation(new_orientation);
             // Hack: from reading SDL2's source code, it seems that SDL2 will
             // only re-do the orientation when changing whether a window is
-            // "resizeable" (can be rotated). You can't set the resizeable state
-            // on a fullscreen window, so it must be temporarily stop being
-            // fulscreen.
-            // Apparently, doing this does result in resizing the window.
-            self.window
-                .set_fullscreen(sdl2::video::FullscreenType::Off)
-                .unwrap();
+            // "resizeable" (can be rotated). (The window isn't an SDL
+            // fullscreen window on Android, see Window::new, otherwise this
+            // wouldn't be allowed.)
             unsafe {
                 let window_raw = self.window.raw();
                 sdl2_sys::SDL_SetWindowResizable(window_raw, sdl2_sys::SDL_bool::SDL_FALSE);
                 sdl2_sys::SDL_SetWindowResizable(window_raw, sdl2_sys::SDL_bool::SDL_TRUE);
             }
-            self.window
-                .set_fullscreen(sdl2::video::FullscreenType::True)
-                .unwrap();
         }
 
         self.device_orientation = new_orientation;
