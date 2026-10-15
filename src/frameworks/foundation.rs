@@ -19,6 +19,7 @@ pub mod _nib_archive_decoder;
 pub mod ns_array;
 pub mod ns_autorelease_pool;
 pub mod ns_bundle;
+pub mod ns_calendar;
 pub mod ns_character_set;
 pub mod ns_coder;
 pub mod ns_data;
@@ -42,6 +43,7 @@ pub mod ns_method_signature;
 pub mod ns_notification;
 pub mod ns_notification_center;
 pub mod ns_null;
+pub mod ns_number_formatter;
 pub mod ns_objc_runtime;
 pub mod ns_object;
 pub mod ns_process_info;
@@ -68,6 +70,7 @@ pub const DYLIB: crate::dyld::HostDylib = crate::dyld::HostDylib {
         ns_array::CLASSES,
         ns_autorelease_pool::CLASSES,
         ns_bundle::CLASSES,
+        ns_calendar::CLASSES,
         ns_character_set::CLASSES,
         ns_coder::CLASSES,
         ns_data::CLASSES,
@@ -88,6 +91,7 @@ pub const DYLIB: crate::dyld::HostDylib = crate::dyld::HostDylib {
         ns_notification::CLASSES,
         ns_notification_center::CLASSES,
         ns_null::CLASSES,
+        ns_number_formatter::CLASSES,
         ns_method_signature::CLASSES,
         ns_object::CLASSES,
         ns_process_info::CLASSES,
@@ -107,6 +111,7 @@ pub const DYLIB: crate::dyld::HostDylib = crate::dyld::HostDylib {
         ns_xml_parser::CLASSES,
     ],
     constant_exports: &[
+        ns_calendar::CONSTANTS,
         ns_error::CONSTANTS,
         ns_exception::CONSTANTS,
         ns_file_manager::CONSTANTS,

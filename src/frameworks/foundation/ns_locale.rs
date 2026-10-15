@@ -235,14 +235,19 @@ pub const CLASSES: ClassExports = objc_classes! {
 - (id)initWithLocaleIdentifier:(id)string { // NSString *
     let str = ns_string::to_rust_string(env, string);
     log_dbg!("[(NSLocale *){:?} initWithLocaleIdentifier:'{}']", this, str);
-    retain(env, string);
-    // Loosely assume 2-char lang code here
-    // TODO: locale identifier parsing
-    assert_eq!(2, str.len());
-    assert!(str.to_lowercase().eq(&str));
-    assert!(!str.contains('_') && !str.contains('-'));
+    // Identifiers look like "en", "en_US", "zh-Hans" or "en_US@currency=USD".
+    // Only the language and the region (a two-letter code) are kept.
+    // TODO: scripts and keywords
+    let str = str.split('@').next().unwrap_or("").to_string();
+    let mut parts = str.split(['_', '-']);
+    let language = parts.next().unwrap_or("").to_lowercase();
+    let country = parts.find(|part| part.len() == 2 && part.chars().all(|c| c.is_ascii_uppercase()));
+    let language = ns_string::from_rust_string(env, language);
+    let country = country.map_or(nil, |country| ns_string::from_rust_string(env, country.to_string()));
     assert!(env.objc.borrow::<NSLocaleHostObject>(this).language_code == nil);
-    env.objc.borrow_mut::<NSLocaleHostObject>(this).language_code = string;
+    let host_object = env.objc.borrow_mut::<NSLocaleHostObject>(this);
+    host_object.language_code = language;
+    host_object.country_code = country;
     this
 }
 
@@ -276,13 +281,16 @@ pub const CLASSES: ClassExports = objc_classes! {
         // TODO: Define NSLocaleIdentifier _as_ kCFLocaleIdentifier
         NSLocaleIdentifier | kCFLocaleIdentifier => {
             let &NSLocaleHostObject { country_code, language_code } = env.objc.borrow(this);
-            assert!(country_code != nil); // TODO
             assert!(language_code != nil); // TODO
-            let locale_id_str = format!(
-                "{}_{}",
-                ns_string::to_rust_string(env, language_code),
-                ns_string::to_rust_string(env, country_code)
-            );
+            let locale_id_str = if country_code == nil {
+                ns_string::to_rust_string(env, language_code).to_string()
+            } else {
+                format!(
+                    "{}_{}",
+                    ns_string::to_rust_string(env, language_code),
+                    ns_string::to_rust_string(env, country_code)
+                )
+            };
             let res = ns_string::from_rust_string(env, locale_id_str);
             autorelease(env, res)
         },

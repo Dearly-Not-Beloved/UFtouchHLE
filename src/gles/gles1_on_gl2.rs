@@ -774,7 +774,9 @@ impl GLES for GLES1OnGL2<'_> {
     unsafe fn GetFloatv(&mut self, pname: GLenum, params: *mut GLfloat) {
         let (type_, _count) = GET_PARAMS.get_type_info(pname);
         match type_ {
-            ParamType::Float | ParamType::FloatSpecial => {
+            // OpenGL converts integer and boolean values itself. (This is
+            // also how glGetFixedv is implemented, see gles_guest.rs.)
+            ParamType::Float | ParamType::FloatSpecial | ParamType::Int | ParamType::Boolean => {
                 gl21::GetFloatv(pname, params);
             }
             _ => unimplemented!("TODO: type conversion for {:?}", type_),
