@@ -12,7 +12,14 @@ pub const GITHUB_RUN_ID: Option<&str> = option_env!("GITHUB_RUN_ID");
 pub const GITHUB_REF_NAME: Option<&str> = option_env!("GITHUB_REF_NAME");
 pub const GITHUB_EVENT_NAME: Option<&str> = option_env!("GITHUB_EVENT_NAME");
 
+/// Set when building locally to get the same branding as a GitHub Actions
+/// build of this fork (see dev-scripts/build-android-uf.sh).
+pub const TOUCHHLE_BRANDING: Option<&str> = option_env!("TOUCHHLE_BRANDING");
+
 pub fn branding() -> &'static str {
+    if let Some(branding) = TOUCHHLE_BRANDING {
+        return branding;
+    }
     if GITHUB_RUN_ID.is_none() {
         return "";
     }
@@ -27,9 +34,9 @@ pub fn branding() -> &'static str {
     if (GITHUB_REPOSITORY, GITHUB_REF_NAME) == (Some("touchHLE/touchHLE"), Some("trunk")) {
         "PREVIEW"
     } else {
-        // Short for "unofficial". Note that the Android package name and
-        // documents provider still use "unofficial", see
-        // android/app/build.gradle.kts and src/paths.rs.
+        // Short for "unofficial". Note that the Android package name for
+        // this is org.touchhleuf.android, see android/app/build.gradle.kts
+        // and src/paths.rs.
         "UF"
     }
 }

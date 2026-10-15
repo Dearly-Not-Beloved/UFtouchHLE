@@ -11,6 +11,7 @@ fn rerun_if_changed(path: &Path) {
 }
 
 pub fn main() {
+    println!("cargo:rerun-if-env-changed=TOUCHHLE_BRANDING");
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
     let package_root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let workspace_root = package_root.join("../..");

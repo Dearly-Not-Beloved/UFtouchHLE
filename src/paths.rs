@@ -155,16 +155,13 @@ pub fn url_for_opening_user_data_dir() -> Result<String, String> {
         // Handled by FileManagerActivity, which opens a file manager for the
         // files of DocumentsProvider. See also app/build.gradle and
         // AndroidManifest.xml.
-        let brand = match crate::branding() {
-            // The package name kept the old "unofficial" suffix.
-            "UF" => "unofficial".to_string(),
-            brand => brand.to_lowercase(),
+        // The package name, see android/app/build.gradle.kts.
+        let package = match crate::branding() {
+            "UF" => "org.touchhleuf.android".to_string(),
+            "" => "org.touchhle.android".to_string(),
+            brand => format!("org.touchhle.android.{}", brand.to_lowercase()),
         };
-        Ok(format!(
-            "org.touchhle.android{}{}.files://open",
-            if brand.is_empty() { "" } else { "." },
-            brand
-        ))
+        Ok(format!("{package}.files://open"))
     } else {
         let path = user_data_base_path()
             .join(".")

@@ -29,3 +29,4 @@ android/build
 # Default developer dump file
 
 DUMP.txt
+/touchHLE_UF_*.apk

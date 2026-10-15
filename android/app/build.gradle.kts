@@ -45,11 +45,14 @@ android {
     }
     defaultConfig {
         val branding = getTouchHLEBranding()
-        applicationId = "org.touchhle.android"
-        if (!branding.isEmpty()) {
-            // "UF" builds keep the old "unofficial" package name, so they can
-            // upgrade earlier installs. Must match src/paths.rs.
-            applicationIdSuffix = if (branding == "UF") "unofficial" else branding.lowercase()
+        // Must match src/paths.rs.
+        if (branding == "UF") {
+            applicationId = "org.touchhleuf.android"
+        } else {
+            applicationId = "org.touchhle.android"
+            if (!branding.isEmpty()) {
+                applicationIdSuffix = branding.lowercase()
+            }
         }
         resValue("string", "app_name", join("touchHLE", " ", branding))
         buildConfigField("String", "APP_NAME", "\"${join("touchHLE", " ", branding)}\"")
