@@ -13,6 +13,8 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.SystemClock;
 import android.view.Display;
+import android.view.InputDevice;
+import android.view.KeyEvent;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.Toast;
@@ -154,11 +156,9 @@ public class MainActivity extends SDLActivity {
         }
     }
 
-    // By default, the back button/gesture finishes the activity, which makes
-    // touchHLE exit and any unsaved progress in the app is lost. Treat it like
-    // the home button instead: touchHLE goes into the background (where the
-    // app is paused) and can be resumed. It can still be closed from the
-    // recent apps screen.
+    // Back exits the app and returns to the launcher (LauncherActivity).
+    // Finishing this activity makes SDLActivity tell touchHLE to quit and wait
+    // for it, so the app gets a chance to save (applicationWillTerminate:).
     //
     // With gesture navigation, swiping in from the side of the screen is
     // "back", which is easy to do by accident while playing. So back has to be
@@ -167,14 +167,30 @@ public class MainActivity extends SDLActivity {
     private long lastBackPressTime = 0;
 
     @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        // SDL passes the back key (also sent for the back gesture) to the app
+        // as a keyboard key, so onBackPressed() would never be called. The
+        // app can't use it anyway, so handle it here before SDL gets it. A
+        // mouse's back button is left to SDL, as a right click.
+        if (event.getKeyCode() == KeyEvent.KEYCODE_BACK
+            && (event.getSource() & InputDevice.SOURCE_MOUSE) != InputDevice.SOURCE_MOUSE) {
+            if (event.getAction() == KeyEvent.ACTION_UP && !event.isCanceled()) {
+                onBackPressed();
+            }
+            return true;
+        }
+        return super.dispatchKeyEvent(event);
+    }
+
+    @Override
     public void onBackPressed() {
         long now = SystemClock.uptimeMillis();
         if (now - lastBackPressTime < BACK_CONFIRM_MS) {
             lastBackPressTime = 0;
-            moveTaskToBack(true);
+            finish();
         } else {
             lastBackPressTime = now;
-            Toast.makeText(this, "再按一次返回键退到后台", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "再返回一次退出游戏，回到主页面", Toast.LENGTH_SHORT).show();
         }
     }
 
