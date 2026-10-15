@@ -87,3 +87,6 @@ cargo-license = "0.5.1"
 cc = { workspace = true }
 cmake = { workspace = true }
 gl_generator = { workspace = true }
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni-sys = "=0.3.0"

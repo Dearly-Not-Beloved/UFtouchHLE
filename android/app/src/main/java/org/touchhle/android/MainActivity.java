@@ -24,6 +24,22 @@ import org.libsdl.app.SDLActivity;
  */
 
 public class MainActivity extends SDLActivity {
+    /**
+     * The command-line arguments for touchHLE (the app path and options),
+     * set by LauncherActivity.
+     */
+    public static final String EXTRA_ARGS = "org.touchhle.android.ARGS";
+
+    private boolean hasArgs() {
+        return getIntent() != null && getIntent().getStringArrayExtra(EXTRA_ARGS) != null;
+    }
+
+    @Override
+    protected String[] getArguments() {
+        String[] args = getIntent() != null ? getIntent().getStringArrayExtra(EXTRA_ARGS) : null;
+        return args != null ? args : new String[0];
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         // Use the whole screen, including the area beside a display cutout
@@ -37,6 +53,13 @@ public class MainActivity extends SDLActivity {
         }
         preferSixtyHertz();
         super.onCreate(savedInstanceState);
+        if (!hasArgs()) {
+            // Started without an app (e.g. from the notification after
+            // touchHLE was closed): the launcher is where to pick one.
+            startActivity(new Intent(this, LauncherActivity.class));
+            finish();
+            return;
+        }
         hideSystemBars();
     }
 
@@ -70,6 +93,9 @@ public class MainActivity extends SDLActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        if (isFinishing()) {
+            return;
+        }
         hideSystemBars();
         // Started while touchHLE is in the foreground, since Android doesn't
         // allow starting foreground services from the background.
@@ -90,6 +116,12 @@ public class MainActivity extends SDLActivity {
             stopService(new Intent(this, KeepAliveService.class));
         } catch (Throwable e) {
             // Not essential.
+        }
+        // This activity has its own process (see AndroidManifest.xml), and
+        // touchHLE isn't made to be started twice in one process, so end it.
+        // Android then returns to the launcher.
+        if (!isChangingConfigurations()) {
+            android.os.Process.killProcess(android.os.Process.myPid());
         }
     }
 

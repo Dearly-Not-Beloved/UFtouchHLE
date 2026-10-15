@@ -191,7 +191,11 @@ fn divider(out: &mut String) -> Result<(), std::fmt::Error> {
     writeln!(out, "---")
 }
 
-fn print(out: &mut String, resources_are_external_files: bool) -> Result<(), std::fmt::Error> {
+fn print(
+    out: &mut String,
+    resources_are_external_files: bool,
+    read_bundled_file: &dyn Fn(&str) -> String,
+) -> Result<(), std::fmt::Error> {
     use std::fmt::Write;
     if resources_are_external_files {
         writeln!(out, "{EXTERNAL_FILES_CAVEAT}")?;
@@ -278,8 +282,20 @@ fn print(out: &mut String, resources_are_external_files: bool) -> Result<(), std
 }
 
 pub fn get_text() -> String {
+    get_text_with_reader(&read_bundled_file)
+}
+
+/// Like [get_text], but with a different way to read bundled files. The
+/// Android launcher needs this, since [crate::paths::ResourceFile] uses SDL,
+/// which isn't initialized there.
+pub fn get_text_with_reader(read_bundled_file: &dyn Fn(&str) -> String) -> String {
     let mut string = String::new();
-    print(&mut string, crate::paths::RESOURCES_ARE_EXTERNAL_FILES).unwrap();
+    print(
+        &mut string,
+        crate::paths::RESOURCES_ARE_EXTERNAL_FILES,
+        read_bundled_file,
+    )
+    .unwrap();
     string
 }
 
@@ -293,6 +309,7 @@ fn test_external_files_license_text() {
     print(
         &mut String::new(),
         /* resources_are_external_files: */ true,
+        &read_bundled_file,
     )
     .unwrap();
 }

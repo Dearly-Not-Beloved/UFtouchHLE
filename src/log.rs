@@ -8,6 +8,11 @@
 use std::fs::File;
 use std::sync::LazyLock;
 
+/// Whether to write to the log file. Turned off by the Android launcher
+/// (see src/android_launcher.rs), which runs in a different process from the
+/// app and would otherwise replace the app's log.
+pub static LOG_TO_FILE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
 /// Get a handle to the log file. This is only for use by logging macros!
 ///
 /// All the logging macros print to stderr or (on Android) logcat, but this
@@ -139,6 +144,10 @@ fn write_line(line: &str) {
     }
     #[cfg(not(target_os = "android"))]
     eprintln!("{}", line);
+
+    if !LOG_TO_FILE.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
 
     use std::io::Write;
     let mut log_file = get_log_file();

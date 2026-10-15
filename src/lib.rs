@@ -28,6 +28,8 @@
 #[macro_use]
 mod log;
 mod abi;
+#[cfg(target_os = "android")]
+mod android_launcher;
 mod audio;
 mod bundle;
 mod cpu;
@@ -67,9 +69,11 @@ pub use touchHLE_version::*;
 /// initialization). On other platforms the true entry point is in src/bin.rs.
 #[cfg(target_os = "android")]
 #[no_mangle]
+// SDL always passes a valid argv.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub extern "C" fn SDL_main(
-    _argc: std::ffi::c_int,
-    _argv: *const *const std::ffi::c_char,
+    argc: std::ffi::c_int,
+    argv: *const *const std::ffi::c_char,
 ) -> std::ffi::c_int {
     // Rust's default panic handler prints to stderr, but on Android that just
     // gets discarded, so we set a custom hook to make debugging easier.
@@ -88,8 +92,24 @@ pub extern "C" fn SDL_main(
         }
     }));
 
-    // Empty args: brings up app picker.
-    match main([String::new()].into_iter()) {
+    // The launcher (LauncherActivity.java) passes the app path and options
+    // as arguments (see MainActivity.getArguments()). Empty args: brings up
+    // the app picker.
+    let args: Vec<String> = (0..argc.max(1))
+        .map(|i| unsafe {
+            let arg = if argv.is_null() {
+                std::ptr::null()
+            } else {
+                *argv.offset(i as isize)
+            };
+            if arg.is_null() {
+                String::new()
+            } else {
+                std::ffi::CStr::from_ptr(arg).to_string_lossy().into_owned()
+            }
+        })
+        .collect();
+    match main(args.into_iter()) {
         Ok(_) => echo!("touchHLE finished"),
         Err(e) => echo!("touchHLE errored: {e:?}"),
     }

@@ -71,17 +71,28 @@
         <meta-data android:name="SDL_ENV.SDL_ACCELEROMETER_AS_JOYSTICK" android:value="0"/>
          -->
 
+        <!-- The launcher, see LauncherActivity.java -->
         <activity
-            android:name="org.touchhle.android.MainActivity"
+            android:name="org.touchhle.android.LauncherActivity"
             android:alwaysRetainTaskState="true"
-            android:configChanges="layoutDirection|locale|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation|density|fontScale|touchscreen|colorMode|mcc|mnc"
+            android:configChanges="orientation|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode"
             android:exported="true"
-            android:launchMode="singleInstance"
-            android:preferMinimalPostProcessing="true">
+            android:theme="@android:style/Theme.Material.NoActionBar.Fullscreen">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+        </activity>
+
+        <!-- touchHLE proper, started by the launcher. It has its own process,
+             which ends when the app exits, so each app starts afresh. -->
+        <activity
+            android:name="org.touchhle.android.MainActivity"
+            android:configChanges="layoutDirection|locale|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation|density|fontScale|touchscreen|colorMode|mcc|mnc"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:process=":game"
+            android:preferMinimalPostProcessing="true">
             <!-- Let Android know that we can handle some USB devices and should receive this event -->
             <intent-filter>
                 <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
@@ -99,7 +110,8 @@
         <!-- See KeepAliveService.java -->
         <service
             android:name="org.touchhle.android.KeepAliveService"
-            android:exported="false" />
+            android:exported="false"
+            android:process=":game" />
 
         <!-- Opens a file manager for touchHLE's files, see src/paths.rs -->
         <activity
