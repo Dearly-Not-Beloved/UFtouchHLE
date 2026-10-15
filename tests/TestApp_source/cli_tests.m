@@ -6408,7 +6408,8 @@ int test_NSSet_setWithObjects_count() {
   NSAutoreleasePool *pool = [NSAutoreleasePool new];
 
   // Duplicate objects are only included once.
-  id objects[] = {@1, @2, @1};
+  id one = @1, two = @2;
+  id objects[] = {one, two, one};
   NSSet *set = [NSSet setWithObjects:objects count:3];
   if ([set count] != 2 || ![set containsObject:@1] ||
       ![set containsObject:@2]) {
