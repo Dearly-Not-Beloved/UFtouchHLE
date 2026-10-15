@@ -1593,8 +1593,24 @@ pub const CLASSES: ClassExports = objc_classes! {
     if did_convert {
         log_dbg!("[{:?} substringWithRange]: converted string to UTF-16", this);
     }
-    let host_string =
-        orig_string[(range.location as usize)..((range.location + range.length) as usize)].to_vec();
+    let len = orig_string.len();
+    let (location, length) = (range.location, range.length);
+    let start = location as usize;
+    let end = start.saturating_add(length as usize);
+    // This should raise NSRangeException, but touchHLE doesn't support
+    // Objective-C exceptions, so clamp the range instead of crashing. Some
+    // apps (e.g. Inotia 2, for the 40-character device ID) do ask for more
+    // than there is.
+    let (start, end) = if end > len {
+        log!(
+            "Warning: [(NSString*){:?} substringWithRange:{{{}, {}}}] is out of range (length {}), clamping",
+            this, location, length, len
+        );
+        (start.min(len), len)
+    } else {
+        (start, end)
+    };
+    let host_string = orig_string[start..end].to_vec();
     let res = from_u16_vec(env, host_string);
     autorelease(env, res)
 }

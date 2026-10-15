@@ -10,7 +10,7 @@
 //! - [Unicode Technical Standard #35](https://unicode.org/reports/tr35/tr35-10.html#Date_Format_Patterns)
 
 use crate::frameworks::core_foundation::time::CFAbsoluteTimeGetGregorianDate;
-use crate::frameworks::foundation::{ns_string, NSTimeInterval};
+use crate::frameworks::foundation::{ns_string, NSInteger, NSTimeInterval};
 use crate::objc::{
     autorelease, id, msg, nil, objc_classes, todo_objc_setter, ClassExports, HostObject, NSZonePtr,
 };
@@ -36,6 +36,16 @@ pub const CLASSES: ClassExports = objc_classes! {
 - (())setDateFormat:(id)format { // NSString *
     let date_format: id = msg![env; format copy];
     env.objc.borrow_mut::<NSDateFormatterHostObject>(this).date_format = Some(date_format);
+}
+
+- (())setFormatterBehavior:(NSInteger)behavior {
+    // Only the "10.4+" behavior (format patterns from Unicode Technical
+    // Standard #35, which is what's implemented here) exists on iPhone OS.
+    // NSDateFormatterBehaviorDefault (0) means the same thing.
+    const NS_DATE_FORMATTER_BEHAVIOR_10_4: NSInteger = 1040;
+    if behavior != 0 && behavior != NS_DATE_FORMATTER_BEHAVIOR_10_4 {
+        log!("TODO: [(NSDateFormatter*){:?} setFormatterBehavior:{}]", this, behavior);
+    }
 }
 
 - (())setTimeZone:(id)time_zone {

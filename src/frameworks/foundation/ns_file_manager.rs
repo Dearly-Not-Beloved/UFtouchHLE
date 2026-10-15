@@ -417,10 +417,12 @@ pub const CLASSES: ClassExports = objc_classes! {
 
     let dict = msg_class![env; NSMutableDictionary new];
 
-    // Reporting 1 Gb of free space should be enough
+    // Reporting about 1GB of free space should be enough. It's deliberately
+    // not a round number: Inotia 2 only keeps the bits in 0x8fffffff, so
+    // exactly 1GiB (0x40000000) made it say there's no free space.
     // TODO: unify with `statfs`
     // TODO: account for path
-    let size: u64 = 1024 * 1024 * 1024;
+    let size: u64 = 1000 * 1024 * 1024;
     let size_num: id = msg_class![env; NSNumber numberWithUnsignedLongLong:size];
 
     let fs_free_size_key = get_static_str(env, NSFileSystemFreeSize);
