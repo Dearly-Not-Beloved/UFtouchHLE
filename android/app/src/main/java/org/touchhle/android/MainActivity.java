@@ -108,11 +108,26 @@ public class MainActivity extends SDLActivity {
         }
     }
 
+    // How long to wait for touchHLE to quit before ending the process anyway.
+    private static final long QUIT_TIMEOUT_MS = 5000;
+
     @Override
     protected void onDestroy() {
         // SDLActivity tells touchHLE to quit and waits for it, which gives the
         // app a chance to save (applicationWillTerminate:). The service keeps
         // the process alive meanwhile, so only stop it afterwards.
+        // But it waits without a time limit: if touchHLE never finishes (e.g.
+        // after the app crashes while quitting), this process would stay stuck
+        // and opening a game again would just show it, so end it after a while
+        // regardless.
+        if (!isChangingConfigurations()) {
+            Thread watchdog = new Thread(() -> {
+                SystemClock.sleep(QUIT_TIMEOUT_MS);
+                android.os.Process.killProcess(android.os.Process.myPid());
+            });
+            watchdog.setDaemon(true);
+            watchdog.start();
+        }
         super.onDestroy();
         try {
             stopService(new Intent(this, KeepAliveService.class));

@@ -22,6 +22,9 @@ pub struct State {
     /// [UIApplication sharedApplication]
     shared_application: Option<id>,
     pub(super) status_bar_hidden: bool,
+    /// Whether the app was told it will resign active (see
+    /// [will_resign_active]) and hasn't become active again since.
+    resigned_active: bool,
 }
 
 struct UIApplicationHostObject {
@@ -437,6 +440,7 @@ pub(super) fn UIApplicationMain(
 /// background). User defaults are saved too, in case the app is later killed
 /// while paused.
 pub(super) fn will_resign_active(env: &mut Environment) {
+    env.framework_state.uikit.ui_application.resigned_active = true;
     let ui_application: id = msg_class![env; UIApplication sharedApplication];
     let pool: id = msg_class![env; NSAutoreleasePool new];
     if !env.is_app_picker {
@@ -469,6 +473,7 @@ pub(super) fn will_resign_active(env: &mut Environment) {
 
 /// Tell the app it's active again after [will_resign_active].
 pub(super) fn did_become_active(env: &mut Environment) {
+    env.framework_state.uikit.ui_application.resigned_active = false;
     let ui_application: id = msg_class![env; UIApplication sharedApplication];
     let pool: id = msg_class![env; NSAutoreleasePool new];
     let delegate: id = msg![env; ui_application delegate];
@@ -498,7 +503,10 @@ pub(super) fn exit(env: &mut Environment) {
 
     let center: id = msg_class![env; NSNotificationCenter defaultCenter];
 
-    {
+    // If the app was paused before being terminated (e.g. on Android), it has
+    // already been told it will resign active. Telling it again can make it
+    // free things twice (e.g. in Resident Evil: Mercenaries VS.).
+    if !env.framework_state.uikit.ui_application.resigned_active {
         let pool: id = msg_class![env; NSAutoreleasePool new];
 
         // Skip NSUserDefaults code while in the app picker, otherwise we get
