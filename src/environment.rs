@@ -431,8 +431,11 @@ impl Environment {
             || bundle
                 .bundle_identifier()
                 .starts_with("com.go.starwave.CritterCrunch");
+        let is_dead_rising = bundle
+            .bundle_identifier()
+            .starts_with("jp.co.capcom.deadrising");
         // We always reset this flag depending on which game is launched.
-        mem.zero_memory_on_free = !is_spore && !is_critter_crunch;
+        mem.zero_memory_on_free = !is_spore && !is_critter_crunch && !is_dead_rising;
         if is_spore {
             log!("Applying game-specific hack for Spore Origins: zeroing memory on alloc instead of free.");
         }
@@ -440,6 +443,12 @@ impl Environment {
             // Without this hack, every time a critter 'explodes',
             // the game crashes with a null page access error.
             log!("Applying game-specific hack for Critter Crunch: zeroing memory on alloc instead of free.");
+        }
+        if is_dead_rising {
+            // Without this hack, the game crashes when loading the first
+            // effect: it passes an effect's directory to the code that loads
+            // its textures after freeing the string holding it.
+            log!("Applying game-specific hack for Dead Rising: zeroing memory on alloc instead of free.");
         }
         let executable = mach_o::MachO::load_from_file(
             bundle.executable_path(),
