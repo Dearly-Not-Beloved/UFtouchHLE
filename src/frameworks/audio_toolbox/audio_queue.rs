@@ -616,15 +616,26 @@ pub fn decode_buffer(
                 let actual_frame_count = data_slice.len() / actual_bytes_per_frame as usize;
                 let processed_frame_count = format.bytes_per_frame as usize * actual_frame_count;
                 let mut processed_data = Vec::<u8>::with_capacity(processed_frame_count);
-                for frame in data_slice.chunks(actual_bytes_per_frame as usize) {
+                let frames = data_slice
+                    .chunks(actual_bytes_per_frame as usize)
                     // Fetch only frame bytes
-                    let frame_bytes = &frame[frame.len() - format.bytes_per_frame as usize..];
+                    .map(|frame| &frame[frame.len() - format.bytes_per_frame as usize..]);
+                // It's been observed in Resident Evil 4 that, although the
+                // audio format doesn't say anything about it being in big
+                // endian, the data in the buffer has their values in big
+                // endian and must be converted to little endian before
+                // passing them to OpenAL. Resident Evil: Mercenaries VS. uses
+                // the same format with little endian data though, so for
+                // 16-bit samples, the byte order that gives the smoother
+                // signal is used.
+                let big_endian =
+                    format.bytes_per_frame != 2 || is_smoother_as_big_endian_16(frames.clone());
+                for frame_bytes in frames {
+                    if !big_endian {
+                        processed_data.extend_from_slice(frame_bytes);
+                        continue;
+                    }
                     // Change from big to little endian
-                    // It's been observed in Resident Evil 4 that, although the
-                    // audio format doesn't say anything about it being in big
-                    // endian, the data in the buffer has their values in big
-                    // endian and must be converted to little endian before
-                    // passing them to OpenAL.
                     match format.bytes_per_frame {
                         1 => processed_data.extend(
                             &u8::from_be_bytes(frame_bytes.try_into().unwrap()).to_le_bytes(),
@@ -674,6 +685,24 @@ pub fn decode_buffer(
         }
         _ => unreachable!(),
     }
+}
+
+/// Guesses whether 16-bit samples are big endian, by which byte order makes
+/// consecutive samples closer to each other: audio is a fairly smooth signal,
+/// but with the wrong byte order it looks like noise.
+fn is_smoother_as_big_endian_16<'a>(samples: impl Iterator<Item = &'a [u8]>) -> bool {
+    let mut previous: Option<(i16, i16)> = None;
+    let (mut big_endian_roughness, mut little_endian_roughness) = (0u64, 0u64);
+    for sample in samples {
+        let sample: [u8; 2] = sample.try_into().unwrap();
+        let current = (i16::from_be_bytes(sample), i16::from_le_bytes(sample));
+        if let Some(previous) = previous {
+            big_endian_roughness += previous.0.abs_diff(current.0) as u64;
+            little_endian_roughness += previous.1.abs_diff(current.1) as u64;
+        }
+        previous = Some(current);
+    }
+    big_endian_roughness < little_endian_roughness
 }
 
 /// Ensure an audio queue has an OpenAL source and at least one queued OpenAL
