@@ -907,6 +907,7 @@ fn glMatrixIndexPointerOES(
 
 // Drawing
 fn glDrawArrays(env: &mut Environment, mode: GLenum, first: GLint, count: GLsizei) {
+    let offset = env.options.subpixel_offset;
     let skinned = with_palette(env, |env, state| {
         if !state.is_active() {
             return false;
@@ -915,7 +916,7 @@ fn glDrawArrays(env: &mut Environment, mode: GLenum, first: GLint, count: GLsize
         with_ctx_and_mem(env, |gles, mem| unsafe {
             let fog_state_backup = clamp_fog_state_values(gles);
             matrix_palette::draw_skinned(state, gles, mem, vertex_count, |gles| {
-                gles.DrawArrays(mode, first, count)
+                draw_with_subpixel_offset(gles, offset, |gles| gles.DrawArrays(mode, first, count))
             });
             restore_fog_state_values(gles, fog_state_backup);
         });
@@ -926,7 +927,7 @@ fn glDrawArrays(env: &mut Environment, mode: GLenum, first: GLint, count: GLsize
     }
     with_ctx_and_mem(env, |gles, _mem| unsafe {
         let fog_state_backup = clamp_fog_state_values(gles);
-        gles.DrawArrays(mode, first, count);
+        draw_with_subpixel_offset(gles, offset, |gles| gles.DrawArrays(mode, first, count));
         restore_fog_state_values(gles, fog_state_backup);
     })
 }
@@ -937,6 +938,7 @@ fn glDrawElements(
     type_: GLenum,
     indices: ConstVoidPtr,
 ) {
+    let offset = env.options.subpixel_offset;
     let skinned = with_palette(env, |env, state| {
         if !state.is_active() {
             return false;
@@ -961,7 +963,9 @@ fn glDrawElements(
                 gles11::ELEMENT_ARRAY_BUFFER_BINDING,
             );
             matrix_palette::draw_skinned(state, gles, mem, max_index as usize + 1, |gles| {
-                gles.DrawElements(mode, count, type_, indices)
+                draw_with_subpixel_offset(gles, offset, |gles| {
+                    gles.DrawElements(mode, count, type_, indices)
+                })
             });
             restore_fog_state_values(gles, fog_state_backup);
         });
@@ -978,7 +982,9 @@ fn glDrawElements(
             indices,
             gles11::ELEMENT_ARRAY_BUFFER_BINDING,
         );
-        gles.DrawElements(mode, count, type_, indices);
+        draw_with_subpixel_offset(gles, offset, |gles| {
+            gles.DrawElements(mode, count, type_, indices)
+        });
         restore_fog_state_values(gles, fog_state_backup);
     })
 }
@@ -1751,6 +1757,39 @@ fn glUnmapBufferOES(env: &mut Environment, target: GLenum) -> GLboolean {
         env.mem.free(guest_buffer);
     }
     with_ctx_and_mem(env, |gles, _mem| unsafe { gles.UnmapBufferOES(target) })
+}
+
+/// Runs `draw` with everything shifted right by `offset` units of the app's
+/// own (eye) coordinates, if it's [Some] (see `--subpixel-offset` in
+/// `OPTIONS_HELP.txt`). For 2D drawing these are usually points.
+///
+/// Some apps draw textured quads whose edges are exactly between pixels, so
+/// pixel centres sample exactly between texels. Which texel is used then
+/// differs between GPUs: e.g. Dead Rising's text loses the leftmost column of
+/// some letters on desktop GPUs. A tiny shift makes such samples land on the
+/// texel the iPhone uses. It's done before projecting, since the projection
+/// may rotate the picture (for landscape apps).
+unsafe fn draw_with_subpixel_offset(
+    gles: &mut dyn GLES,
+    offset: Option<f32>,
+    draw: impl FnOnce(&mut dyn GLES),
+) {
+    let Some(offset) = offset else {
+        draw(gles);
+        return;
+    };
+    let mut matrix_mode = 0;
+    gles.GetIntegerv(gles11::MATRIX_MODE, &mut matrix_mode);
+    gles.MatrixMode(gles11::PROJECTION);
+    gles.PushMatrix();
+    gles.Translatef(offset, 0.0, 0.0);
+    gles.MatrixMode(matrix_mode as GLenum);
+
+    draw(gles);
+
+    gles.MatrixMode(gles11::PROJECTION);
+    gles.PopMatrix();
+    gles.MatrixMode(matrix_mode as GLenum);
 }
 
 /// If fog is enabled, check if the values for start and end distances

@@ -97,6 +97,12 @@ pub struct Options {
     pub filter_mode: FilterMode,
     pub keep_screen_on: bool,
     pub device_family: Option<DeviceFamily>,
+    /// Device model reported to the app (`hw.machine`), e.g. `iPhone2,1`.
+    /// [None] means the original iPhone (`iPhone1,1`).
+    pub device_model: Option<&'static str>,
+    /// Shift for everything the app draws, in pixels (see
+    /// `draw_with_subpixel_offset` in `gles_guest`).
+    pub subpixel_offset: Option<f32>,
     pub initial_orientation: DeviceOrientation,
     pub scale_hack: NonZeroU32,
     pub deadzone: f32,
@@ -133,6 +139,8 @@ impl Default for Options {
             filter_mode: FilterMode::DEFAULT,
             keep_screen_on: KEEP_SCREEN_ON_DEFAULT,
             device_family: None,
+            device_model: None,
+            subpixel_offset: None,
             initial_orientation: DeviceOrientation::Portrait,
             scale_hack: NonZeroU32::new(1).unwrap(),
             analog_stick_tilt_controls: true,
@@ -210,6 +218,20 @@ impl Options {
             let parsed =
                 DeviceFamily::try_from(value).map_err(|_| "Invalid device family".to_string())?;
             self.device_family = Some(parsed);
+        } else if let Some(value) = arg.strip_prefix("--device-model=") {
+            if crate::libc::sysctl::model_for_machine(value).is_none() {
+                return Err(format!("Unknown device model {value:?}"));
+            }
+            // Options are parsed only a few times, so leaking is fine.
+            self.device_model = Some(Box::leak(value.to_string().into_boxed_str()));
+        } else if let Some(value) = arg.strip_prefix("--subpixel-offset=") {
+            let offset: f32 = value
+                .parse()
+                .map_err(|_| "Invalid subpixel offset".to_string())?;
+            if !(offset.is_finite() && offset.abs() < 1.0) {
+                return Err("Subpixel offset must be less than a pixel".to_string());
+            }
+            self.subpixel_offset = Some(offset);
         } else if let Some(value) = arg.strip_prefix("--scale-hack=") {
             self.scale_hack = value
                 .parse()

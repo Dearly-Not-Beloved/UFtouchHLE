@@ -52,6 +52,14 @@ View options:
         and it will automatically rotate the window, but some apps neglect to
         do this. These options may be useful in that case.
 
+    --subpixel-offset=...
+        Shifts everything the app draws right by this much, e.g. 0.01, in the
+        app's own coordinates (usually points, for 2D drawing).
+        Some apps draw quads exactly between pixels, and which texel is used
+        then differs between GPUs, which can e.g. cut off a column of some
+        letters. A tiny shift makes the result match the iPhone. Only use this
+        for apps that need it.
+
     --scale-hack=...
         Set a scaling factor for the window. touchHLE will attempt to run the
         app with an increased internal resolution. This is a hack and there's
@@ -72,6 +80,13 @@ Device options:
         bundle itself, falling back to iPhone if needed.
 
         Accepted values are "iphone" and "ipad" respectively.
+
+    --device-model=...
+        Specifies which device model the app is told it runs on, e.g.
+        iPhone2,1 (iPhone 3GS). The default is iPhone1,1 (the original
+        iPhone). Some apps refuse to run on older models, but others use
+        features touchHLE doesn't support (like OpenGL ES 2.0) on newer ones,
+        so only change this for apps that need it.
 
 Game controller options:
     --deadzone=...

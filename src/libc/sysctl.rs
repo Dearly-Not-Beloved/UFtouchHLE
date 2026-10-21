@@ -76,6 +76,32 @@ static SYSCTL_VALUES: [(SysCtlNamePath, &str, SysInfoType); 18] = [
     (SysCtlNamePath::Length4(CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0), "kern.proc.all", SysInfoType::Struct),
 ];
 
+/// Known values of `hw.machine` and the matching `hw.model`.
+const DEVICE_MODELS: &[(&str, &str)] = &[
+    ("iPhone1,1", "M68AP"),
+    ("iPhone1,2", "N82AP"),
+    ("iPhone2,1", "N88AP"),
+    ("iPhone3,1", "N90AP"),
+    ("iPod1,1", "N45AP"),
+    ("iPod2,1", "N72AP"),
+    ("iPod3,1", "N18AP"),
+    ("iPod4,1", "N81AP"),
+    ("iPad1,1", "K48AP"),
+];
+
+/// The `hw.model` for a `hw.machine` value, if it's known.
+pub fn model_for_machine(machine: &str) -> Option<&'static str> {
+    DEVICE_MODELS
+        .iter()
+        .find(|&&(known, _)| known == machine)
+        .map(|&(_, model)| model)
+}
+
+/// `hw.machine` as reported to the app (see [crate::options::Options]).
+pub fn machine(env: &Environment) -> &'static str {
+    env.options.device_model.unwrap_or("iPhone1,1")
+}
+
 static STRING_MAP: LazyLock<HashMap<&str, SysInfoType>> = LazyLock::new(|| {
     // Can't use from_iter because the closure erases the lifetime
     let mut hashmap = HashMap::new();
@@ -245,6 +271,11 @@ where
     assert_eq!(newlen, 0);
 
     let (name_str, val) = name_lookup(env);
+    let val = match name_str {
+        "hw.machine" => SysInfoType::String(machine(env).as_bytes()),
+        "hw.model" => SysInfoType::String(model_for_machine(machine(env)).unwrap().as_bytes()),
+        _ => val,
+    };
     let len: GuestUSize = match val {
         SysInfoType::String(str) => str.len() as GuestUSize + 1,
         SysInfoType::Int32(_) => guest_size_of::<i32>(),
