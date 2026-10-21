@@ -13,6 +13,7 @@
 mod gk_leaderboard;
 mod gk_local_player;
 mod gk_score;
+mod gk_session;
 
 pub const DYLIB: crate::dyld::HostDylib = crate::dyld::HostDylib {
     path: "/System/Library/Frameworks/GameKit.framework/GameKit",
@@ -21,6 +22,7 @@ pub const DYLIB: crate::dyld::HostDylib = crate::dyld::HostDylib {
         gk_leaderboard::CLASSES,
         gk_local_player::CLASSES,
         gk_score::CLASSES,
+        gk_session::CLASSES,
     ],
     constant_exports: &[gk_local_player::CONSTANTS],
     function_exports: &[],
