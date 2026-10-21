@@ -39,6 +39,10 @@ fn clock(env: &mut Environment) -> clock_t {
         .wrapping_mul(CLOCKS_PER_SEC)
 }
 
+fn difftime(_env: &mut Environment, time1: time_t, time0: time_t) -> f64 {
+    time1 as f64 - time0 as f64
+}
+
 fn time(env: &mut Environment, out: MutPtr<time_t>) -> time_t {
     // TODO: handle errno properly
     set_errno(env, 0);
@@ -780,6 +784,7 @@ pub fn strftime(
 pub const FUNCTIONS: FunctionExports = &[
     export_c_func!(clock()),
     export_c_func!(time(_)),
+    export_c_func!(difftime(_, _)),
     export_c_func!(tzset()),
     export_c_func!(gmtime_r(_, _)),
     export_c_func!(gmtime(_)),
