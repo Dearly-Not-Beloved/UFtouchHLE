@@ -126,6 +126,12 @@ android {
         tasks.named("merge${variantName}Assets").configure {
             dependsOn("externalNativeBuild${variantName}")
         }
+        // The Rust library is copied into jniLibs by the cargo-ndk plugin, so
+        // it has to be built before the native libraries are merged, or the
+        // APK can get the library from the previous build.
+        tasks.named("merge${variantName}JniLibFolders").configure {
+            dependsOn("buildCargoNdk${variantName}")
+        }
     }
 
     sourceSets {
