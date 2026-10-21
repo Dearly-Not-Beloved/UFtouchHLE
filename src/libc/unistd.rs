@@ -46,6 +46,8 @@ fn usleep(env: &mut Environment, useconds: useconds_t) -> i32 {
 pub type pid_t = i32;
 #[allow(non_camel_case_types)]
 type gid_t = u32;
+#[allow(non_camel_case_types)]
+type uid_t = u32;
 
 pub fn getpid(_env: &mut Environment) -> pid_t {
     // Not a real value, since touchHLE only simulates a single process.
@@ -55,6 +57,13 @@ pub fn getpid(_env: &mut Environment) -> pid_t {
 fn getppid(_env: &mut Environment) -> pid_t {
     // Included just for completeness. Surely no app ever calls this.
     0
+}
+fn getuid(_env: &mut Environment) -> uid_t {
+    // iPhone OS apps run as the user "mobile".
+    501
+}
+fn geteuid(env: &mut Environment) -> uid_t {
+    getuid(env)
 }
 fn getgid(_env: &mut Environment) -> gid_t {
     // Not a real value
@@ -199,6 +208,8 @@ pub const FUNCTIONS: FunctionExports = &[
     export_c_func!(unlink(_)),
     export_c_func!(gethostname(_, _)),
     export_c_func!(getpagesize()),
+    export_c_func!(getuid()),
+    export_c_func!(geteuid()),
     export_c_func!(getgid()),
     export_c_func!(readlink(_, _, _)),
     export_c_func!(getdtablesize()),

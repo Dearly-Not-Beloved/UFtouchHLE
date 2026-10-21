@@ -80,6 +80,8 @@ pub const O_NOFOLLOW: OpenFlag = 0x100;
 pub const O_CREAT: OpenFlag = 0x200;
 pub const O_TRUNC: OpenFlag = 0x400;
 pub const O_EXCL: OpenFlag = 0x800;
+/// There are no terminals, so this has no effect.
+pub const O_NOCTTY: OpenFlag = 0x20000;
 
 /// File control command flags.
 /// This alias is for readability, POSIX just uses `int`.
@@ -144,7 +146,8 @@ pub fn open_direct(env: &mut Environment, path: ConstPtr<u8>, flags: i32) -> Fil
                 | O_NOFOLLOW
                 | O_CREAT
                 | O_TRUNC
-                | O_EXCL)
+                | O_EXCL
+                | O_NOCTTY)
             == 0
     );
 
