@@ -186,8 +186,15 @@ fn read_matrixx(mem: &Mem, m: ConstPtr<GLfixed>) -> [f32; 16] {
 // Generic state manipulation
 fn glGetError(env: &mut Environment) -> GLenum {
     let ignore_gl_errors = env.options.ignore_gl_errors;
+    // Errors kept while touchHLE used the context (see
+    // super::without_leaving_errors) come first.
+    let pending = (*env
+        .framework_state
+        .opengles
+        .current_ctx_for_thread(env.current_thread))
+    .and_then(|ctx| env.framework_state.opengles.pending_errors.remove(&ctx));
     with_ctx_and_mem(env, |gles, _mem| {
-        let err = unsafe { gles.GetError() };
+        let err = pending.unwrap_or_else(|| unsafe { gles.GetError() });
         if err != 0 {
             if ignore_gl_errors {
                 log_once!(

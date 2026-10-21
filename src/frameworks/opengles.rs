@@ -36,6 +36,9 @@ pub struct State {
     /// frames, so they can be reused. Keyed by sharegroup (see
     /// [eagl::sharegroup_key]), since that's what texture names belong to.
     present_texture_sizes: std::collections::HashMap<usize, eagl::PresentTextureSizes>,
+    /// Errors the app hasn't retrieved with `glGetError` yet, kept for each
+    /// context while touchHLE uses it (see [without_leaving_errors]).
+    pending_errors: std::collections::HashMap<crate::objc::id, GLenum>,
 }
 impl State {
     fn current_ctx_for_thread(&mut self, thread: crate::ThreadId) -> &mut Option<crate::objc::id> {
@@ -52,6 +55,68 @@ fn sync_context<'objc, 'win: 'objc>(
 ) -> Box<dyn crate::gles::GLES + 'objc> {
     let gles_ctx = get_thread_context(state, objc, current_thread);
     gles_ctx.make_current(window)
+}
+
+/// Runs `f`, which uses the current context for touchHLE's own purposes
+/// (e.g. presenting a frame), without leaving OpenGL ES errors for the app.
+///
+/// An app can't tell apart errors from its own calls and from touchHLE's, and
+/// some react to them: if presenting leaves an error (as on Huawei's OpenGL ES
+/// implementation), Resident Evil: Mercenaries VS. stops drawing its player
+/// character. So errors from `f` are discarded, and errors the app already
+/// had are kept for its next `glGetError` call.
+fn without_leaving_errors<U>(
+    env: &mut crate::Environment,
+    f: impl FnOnce(&mut crate::Environment) -> U,
+) -> U {
+    let Some(ctx) = *env
+        .framework_state
+        .opengles
+        .current_ctx_for_thread(env.current_thread)
+    else {
+        return f(env);
+    };
+    let app_error = take_errors(env);
+    let res = f(env);
+    let own_error = take_errors(env);
+    if own_error != 0 {
+        log_dbg!(
+            "Discarded error {:#x} from touchHLE's own OpenGL ES use",
+            own_error
+        );
+    }
+    if app_error != 0 {
+        env.framework_state
+            .opengles
+            .pending_errors
+            .entry(ctx)
+            .or_insert(app_error);
+    }
+    res
+}
+
+/// Clears the error flags of the current context, returning the first error.
+fn take_errors(env: &mut crate::Environment) -> GLenum {
+    let mut gles = sync_context(
+        &mut env.framework_state.opengles,
+        &mut env.objc,
+        env.window
+            .as_mut()
+            .expect("OpenGL ES is not supported in headless mode"),
+        env.current_thread,
+    );
+    let mut first = 0;
+    // There can be several error flags, but not endlessly many.
+    for _ in 0..16 {
+        let error = unsafe { gles.GetError() };
+        if error == 0 {
+            break;
+        }
+        if first == 0 {
+            first = error;
+        }
+    }
+    first
 }
 
 fn get_thread_context<'objc>(

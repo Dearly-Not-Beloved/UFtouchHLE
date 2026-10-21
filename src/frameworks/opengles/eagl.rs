@@ -226,6 +226,7 @@ pub const CLASSES: ClassExports = objc_classes! {
 }
 
 - (())dealloc {
+    env.framework_state.opengles.pending_errors.remove(&this);
     let host_obj = env.objc.borrow_mut::<EAGLContextHostObject>(this);
     for &(guest_buf, _host_buf) in host_obj.mapped_buffers.values() {
         env.mem.free(guest_buf);
@@ -422,13 +423,13 @@ pub const CLASSES: ClassExports = objc_classes! {
         let sharegroup = sharegroup_key(env.objc.borrow::<EAGLContextHostObject>(this));
         let mut sizes = env.framework_state.opengles.present_texture_sizes.get(&sharegroup).copied().unwrap_or_default();
         // re-borrow
-        let (pixels_vec, width, height) = {
+        let (pixels_vec, width, height) = super::without_leaving_errors(env, |env| {
             let mut gles = super::sync_context(&mut env.framework_state.opengles, &mut env.objc, env.window.as_mut().unwrap(), env.current_thread);
             unsafe {
                 let framebuffer = read_framebuffer(gles.as_mut(), &mut sizes.read_framebuffer);
                 read_renderbuffer(gles.as_mut(), pixels_vec, framebuffer)
             }
-        };
+        });
         env.framework_state.opengles.present_texture_sizes.insert(sharegroup, sizes);
         present_pixels(env, drawable, pixels_vec, width, height);
     }
@@ -667,6 +668,16 @@ pub fn redraw_last_frame(env: &mut Environment, context: id, quarter_turns: u8) 
 /// false, the window's buffers aren't swapped afterwards, so more can be
 /// drawn on top (see [crate::frameworks::core_animation::present_overlays]).
 unsafe fn present_renderbuffer(
+    env: &mut Environment,
+    quarter_turns: u8,
+    copy: bool,
+    swap: bool,
+) -> bool {
+    super::without_leaving_errors(env, |env| {
+        present_renderbuffer_inner(env, quarter_turns, copy, swap)
+    })
+}
+unsafe fn present_renderbuffer_inner(
     env: &mut Environment,
     quarter_turns: u8,
     copy: bool,
