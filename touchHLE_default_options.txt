@@ -243,3 +243,9 @@ com.ea.nfshp.bv: --force-composition
 com.ea.nfshp.inc: --force-composition
 com.ea.nfshp.ipad.bv: --force-composition
 com.ea.nfshp.ipad.inc: --force-composition
+
+# Dead Rising Mobile
+# It refuses to run on the original iPhone, and uses its Retina graphics on an
+# iPhone 4. Some letters lose a column of pixels on desktop GPUs without the
+# subpixel offset.
+jp.co.capcom.deadrisingus: --device-model=iPhone3,1 --subpixel-offset=0.01
