@@ -22,11 +22,11 @@ use crate::frameworks::uikit::ui_device::{
 use crate::frameworks::uikit::ui_font::{UILineBreakModeWordWrap, UITextAlignmentCenter};
 use crate::image::Image;
 use crate::objc::{
-    id, msg, msg_class, nil, objc_classes, release, retain, todo_objc_setter, ClassExports,
-    HostObject, NSZonePtr,
+    id, msg, msg_class, msg_super, nil, objc_classes, release, retain, todo_objc_setter,
+    ClassExports, HostObject, NSZonePtr,
 };
 use crate::Environment;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
 /// A movie that's being played.
@@ -65,6 +65,9 @@ pub struct State {
     /// delay such notifications until the app next returns to the run loop,
     /// which seems to be late enough.
     pending_notifications: VecDeque<(&'static str, id, Instant)>,
+    /// The `MPMoviePlayerController` of each `MPMoviePlayerViewController`
+    /// (which uses `UIViewController`'s host object).
+    view_controller_players: HashMap<id, id>,
 }
 impl State {
     fn get(env: &mut Environment) -> &mut Self {
@@ -275,15 +278,40 @@ pub const CLASSES: ClassExports = objc_classes! {
 
 @implementation MPMoviePlayerViewController: UIViewController
 
+// The movie itself is shown by the MPMoviePlayerController (see
+// [start_playback]), so this view controller's view is just an empty view the
+// app can add and remove.
+
 - (id)initWithContentURL:(id)url {
-    log!(
-        "TODO: [(MPMoviePlayerViewController*){:?} initWithContentURL:{:?} ({:?})] -> nil",
-        this,
-        url,
-        ns_url::to_rust_path(env, url),
-    );
-    release(env, this);
-    nil // TODO
+    let this: id = msg_super![env; this initWithNibName:nil bundle:nil];
+    let player: id = msg_class![env; MPMoviePlayerController alloc];
+    let player: id = msg![env; player initWithContentURL:url];
+    State::get(env).view_controller_players.insert(this, player);
+    this
+}
+
+- (())dealloc {
+    if let Some(player) = State::get(env).view_controller_players.remove(&this) {
+        release(env, player);
+    }
+    msg_super![env; this dealloc]
+}
+
+- (id)moviePlayer {
+    State::get(env)
+        .view_controller_players
+        .get(&this)
+        .copied()
+        .unwrap_or(nil)
+}
+
+- (())loadView {
+    let view: id = msg_class![env; UIView alloc];
+    let screen: id = msg_class![env; UIScreen mainScreen];
+    let frame: CGRect = msg![env; screen bounds];
+    let view: id = msg![env; view initWithFrame:frame];
+    () = msg![env; this setView:view];
+    release(env, view);
 }
 
 @end
@@ -312,7 +340,19 @@ fn start_playback(env: &mut Environment, player: id) -> bool {
         }
     };
     let ui_application: id = msg_class![env; UIApplication sharedApplication];
-    let window: id = msg![env; ui_application keyWindow];
+    let mut window: id = msg![env; ui_application keyWindow];
+    if window == nil {
+        // Some apps (e.g. Dead Rising) never make their window key, which
+        // doesn't seem to matter on iPhone OS. Use the top visible window
+        // then, so the movie isn't hidden by it. (The list is ordered
+        // back-to-front.)
+        let windows = env.framework_state.uikit.ui_view.ui_window.windows.clone();
+        window = windows
+            .into_iter()
+            .rev()
+            .find(|&window| !msg![env; window isHidden])
+            .unwrap_or(nil);
+    }
     if window == nil {
         log!("Warning: no key window to show movie {:?} in", path);
         return false;

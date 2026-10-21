@@ -9,8 +9,9 @@
 //! Only as much of the MPEG-4 file format as is needed to find the video
 //! frames is parsed here. The audio is decoded with [crate::audio].
 
-use openh264::decoder::Decoder;
+use openh264::decoder::{Decoder, DecoderConfig, Flush};
 use openh264::formats::YUVSource;
+use openh264::OpenH264API;
 use std::time::Duration;
 
 /// A decoded video frame.
@@ -362,7 +363,14 @@ impl MovieDecoder {
             .filter_map(|(_, trak)| parse_subtitle_track(&file, trak))
             .collect();
 
-        let decoder = Decoder::new().map_err(|e| format!("Couldn't create H.264 decoder: {e}"))?;
+        // Flushing after each frame (the default) breaks decoding Main profile
+        // streams (e.g. Dead Rising's movies): it makes OpenH264 run out of
+        // pictures for the next frame. Without B-frames (which all iPhone OS
+        // movies seen so far lack), frames are returned as soon as they're
+        // decoded anyway.
+        let config = DecoderConfig::new().flush_after_decode(Flush::NoFlush);
+        let decoder = Decoder::with_api_config(OpenH264API::from_source(), config)
+            .map_err(|e| format!("Couldn't create H.264 decoder: {e}"))?;
         Ok((
             MovieDecoder {
                 file,
