@@ -11,6 +11,7 @@
 
 mod eagl;
 mod gles_guest;
+mod matrix_palette;
 
 pub use eagl::redraw_last_frame;
 

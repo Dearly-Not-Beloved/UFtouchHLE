@@ -67,6 +67,8 @@ pub(super) struct EAGLContextHostObject {
     fps_counter: Option<FpsCounter>,
     next_frame_due: Option<Instant>,
     pub mapped_buffers: HashMap<GLuint, (MutPtr<GLvoid>, *mut GLvoid)>,
+    /// Always [Some], except while it's in use (see `gles_guest`).
+    pub matrix_palette: Option<Box<super::matrix_palette::State>>,
 }
 impl HostObject for EAGLContextHostObject {}
 
@@ -119,6 +121,7 @@ pub const CLASSES: ClassExports = objc_classes! {
         fps_counter: None,
         next_frame_due: None,
         mapped_buffers: HashMap::new(),
+        matrix_palette: Some(Default::default()),
     });
     env.objc.alloc_object(this, host_object, &mut env.mem)
 }
@@ -184,6 +187,8 @@ pub const CLASSES: ClassExports = objc_classes! {
     env.window.as_mut().unwrap().set_share_with_current_context(false);
 
     env.objc.borrow_mut::<EAGLContextHostObject>(this).renderbuffer_drawable_bindings = env.objc.borrow::<EAGLContextHostObject>(group).renderbuffer_drawable_bindings.clone();
+    let buffers = env.objc.borrow::<EAGLContextHostObject>(group).matrix_palette.as_ref().unwrap().buffers.clone();
+    env.objc.borrow_mut::<EAGLContextHostObject>(this).matrix_palette.as_mut().unwrap().buffers = buffers;
     this
 }
 
