@@ -49,6 +49,9 @@ pub(super) struct CALayerHostObject {
     pub(super) opacity: f32,
     pub(super) background_color: Option<CGColorHostObject>,
     pub(super) corner_radius: CGFloat,
+    /// Pixels per point of the layer's backing store. Only used for the size
+    /// of a CAEAGLLayer's renderbuffer so far.
+    pub(super) contents_scale: CGFloat,
     pub(super) needs_display: bool,
     pub(super) needs_display_on_bounds_change: bool,
     /// `CGImageRef*`
@@ -127,6 +130,7 @@ pub const CLASSES: ClassExports = objc_classes! {
         opacity: 1.0,
         background_color: None, // transparency
         corner_radius: 0.0,
+        contents_scale: 1.0,
         needs_display: false,
         needs_display_on_bounds_change: false,
         contents: nil,
@@ -350,6 +354,13 @@ pub const CLASSES: ClassExports = objc_classes! {
 
 - (bool)isOpaque {
     env.objc.borrow::<CALayerHostObject>(this).opaque
+}
+
+- (CGFloat)contentsScale {
+    env.objc.borrow::<CALayerHostObject>(this).contents_scale
+}
+- (())setContentsScale:(CGFloat)scale {
+    env.objc.borrow_mut::<CALayerHostObject>(this).contents_scale = scale;
 }
 - (())setOpaque:(bool)opaque {
     env.objc.borrow_mut::<CALayerHostObject>(this).opaque = opaque;

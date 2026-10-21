@@ -9,7 +9,7 @@ use crate::dyld::{ConstantExports, HostConstant};
 use crate::frameworks::core_animation::ca_eagl_layer::{
     find_fullscreen_eagl_layer_with_overlays, get_pixels_vec_for_presenting, present_pixels,
 };
-use crate::frameworks::core_graphics::{CGRect, CGSize};
+use crate::frameworks::core_graphics::{CGFloat, CGRect, CGSize};
 use crate::frameworks::foundation::ns_string::get_static_str;
 use crate::frameworks::foundation::NSUInteger;
 use crate::gles::gles11_raw as gles11; // constants only
@@ -272,7 +272,10 @@ pub const CLASSES: ClassExports = objc_classes! {
 
     let (width, height) = {
         let bounds: CGRect = msg![env; drawable bounds];
+        // E.g. 2 for apps rendering at the iPhone 4's Retina resolution.
+        let contents_scale: CGFloat = msg![env; drawable contentsScale];
         let CGSize { width, height } = bounds.size;
+        let (width, height) = (width * contents_scale, height * contents_scale);
         assert!((0.0..(u32::MAX as f32)).contains(&width));
         assert!((0.0..(u32::MAX as f32)).contains(&height));
         let scale_hack = env.options.scale_hack.get();

@@ -907,11 +907,15 @@ pub const CLASSES: ClassExports = objc_classes! {
     log!("TODO: [(UIView *){:?} sizeToFit]", this);
 }
 
+// The scale is the layer's: for a CAEAGLLayer, it determines the size of the
+// renderbuffer (e.g. games for the iPhone 4 set 2 for a Retina display).
 - (())setContentScaleFactor:(CGFloat)factor {
-    todo_objc_setter!(this, factor);
+    let layer: id = msg![env; this layer];
+    () = msg![env; layer setContentsScale:factor];
 }
 - (CGFloat)contentScaleFactor {
-    1.0 // TODO
+    let layer: id = msg![env; this layer];
+    msg![env; layer contentsScale]
 }
 
 @end
