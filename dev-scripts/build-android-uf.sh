@@ -32,6 +32,9 @@ export TOUCHHLE_KEYSTORE_FILE="$KEYSTORE"
 export TOUCHHLE_BRANDING=UF
 
 cd "$ROOT/android"
+# Make Gradle merge the native libraries again: it has been seen packaging the
+# Rust library from a previous build.
+rm -rf app/build/intermediates/merged_jni_libs app/build/intermediates/merged_native_libs app/build/intermediates/stripped_native_libs
 "$GRADLE" assembleRelease -q
 
 VERSION="$(cd "$ROOT" && cargo run -q --package touchHLE_version)"
