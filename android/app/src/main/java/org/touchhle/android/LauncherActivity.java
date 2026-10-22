@@ -11,12 +11,19 @@ import android.app.Dialog;
 import android.content.ActivityNotFoundException;
 import android.content.ClipData;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.res.ColorStateList;
 import android.content.res.Configuration;
 import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.ColorFilter;
+import android.graphics.Paint;
+import android.graphics.Path;
+import android.graphics.PixelFormat;
+import android.graphics.Rect;
 import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
@@ -50,6 +57,8 @@ import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.RandomAccessFile;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -60,6 +69,10 @@ import java.util.Locale;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 /**
  * touchHLE's launcher on Android: lists the apps, imports new ones, and lets
@@ -101,6 +114,13 @@ public class LauncherActivity extends Activity {
     /// Added to exported saves, to tell which app they're for.
     private static final String SAVE_MARKER = "touchHLE_save.txt";
 
+    /// The newest release of this fork, checked for updates.
+    private static final String LATEST_RELEASE_URL =
+        "https://api.github.com/repos/wesleyicode/touchHLE/releases/latest";
+    private static final String PREFS = "launcher";
+    private static final String PREF_CHECK_UPDATES = "checkUpdates";
+    private static final String PREF_IGNORED_VERSION = "ignoredUpdateVersion";
+
     private static final int TEXT = Color.WHITE;
     private static final int TEXT_DIM = 0xB3FFFFFF;
     private static final int ACCENT = 0xFF3D8BFF;
@@ -126,6 +146,17 @@ public class LauncherActivity extends Activity {
 
     private AppAdapter adapter;
     private TextView statusText;
+    /// Holds the "new version" banner, filled in once the check finishes.
+    private FrameLayout updateSlot;
+    /// The newer release found by [checkForUpdate], if any.
+    private UpdateInfo update;
+
+    private static class UpdateInfo {
+        String version;
+        String notes;
+        /// The Android APK, or the release page if there's none.
+        String downloadUrl;
+    }
     private View importBigButton;
 
     // ---- Lifecycle ----
@@ -156,6 +187,7 @@ public class LauncherActivity extends Activity {
         wallpaper = loadWallpaper();
         buildUi();
         rescan();
+        checkForUpdate();
     }
 
     @Override
@@ -451,20 +483,22 @@ public class LauncherActivity extends Activity {
         LinearLayout actions = new LinearLayout(this);
         actions.setOrientation(LinearLayout.HORIZONTAL);
         actions.setGravity(Gravity.CENTER_VERTICAL);
-        View[] buttons = {
-            makeButton("导入游戏", true, v -> startImport()),
-            makeButton("快捷设置", false, v -> showQuickOptions()),
-            makeButton("版权信息", false, v -> showCopyright()),
-        };
-        for (int i = 0; i < buttons.length; i++) {
-            LinearLayout.LayoutParams params = isLandscape()
-                ? new LinearLayout.LayoutParams(-2, dp(44))
-                : new LinearLayout.LayoutParams(0, dp(46), 1);
-            if (i > 0) {
-                params.leftMargin = dp(10);
-            }
-            actions.addView(buttons[i], params);
-        }
+        int buttonHeight = isLandscape() ? dp(44) : dp(46);
+        actions.addView(makeButton("导入游戏", true, v -> startImport()), isLandscape()
+            ? new LinearLayout.LayoutParams(-2, buttonHeight)
+            : new LinearLayout.LayoutParams(0, buttonHeight, 1));
+        ImageView settings = new ImageView(this);
+        settings.setImageDrawable(new GearDrawable(TEXT));
+        settings.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        int iconPadding = (buttonHeight - dp(24)) / 2;
+        settings.setPadding(iconPadding, iconPadding, iconPadding, iconPadding);
+        settings.setBackground(buttonBackground(0x2EFFFFFF, buttonHeight / 2f));
+        settings.setContentDescription("设置");
+        settings.setOnClickListener(v -> showQuickOptions());
+        LinearLayout.LayoutParams settingsParams =
+            new LinearLayout.LayoutParams(buttonHeight, buttonHeight);
+        settingsParams.leftMargin = dp(10);
+        actions.addView(settings, settingsParams);
         if (isLandscape()) {
             header.addView(actions);
         }
@@ -480,6 +514,9 @@ public class LauncherActivity extends Activity {
             params.topMargin = dp(14);
             content.addView(banner, params);
         }
+        updateSlot = new FrameLayout(this);
+        content.addView(updateSlot, new LinearLayout.LayoutParams(-1, -2));
+        showUpdateBanner();
 
         View divider = new View(this);
         divider.setBackgroundColor(0x33FFFFFF);
@@ -741,16 +778,28 @@ public class LauncherActivity extends Activity {
             b -> quickOptions.keepScreenOn = b);
         addSwitch(layout, "用摇杆模拟重力感应", quickOptions.tiltControls,
             b -> quickOptions.tiltControls = b);
-        addSwitch(layout, "允许联网", quickOptions.network, b -> quickOptions.network = b);
+        addSwitch(layout, "允许游戏联网", quickOptions.network, b -> quickOptions.network = b);
+        // A launcher setting, not a touchHLE option, so it's not in the file.
+        final SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        addSwitch(layout, "自动检查更新", prefs.getBoolean(PREF_CHECK_UPDATES, true),
+            b -> prefs.edit().putBoolean(PREF_CHECK_UPDATES, b).apply());
+
+        TextView copyright = makeButton("版权信息", false, null);
+        LinearLayout.LayoutParams copyrightParams = new LinearLayout.LayoutParams(-1, dp(44));
+        copyrightParams.topMargin = dp(16);
+        layout.addView(copyright, copyrightParams);
 
         ScrollView scroll = new ScrollView(this);
         scroll.addView(layout);
-        new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
-            .setTitle("快捷设置")
+        final AlertDialog dialog = new AlertDialog.Builder(
+                this, android.R.style.Theme_Material_Dialog_Alert)
+            .setTitle("设置")
             .setView(scroll)
             .setPositiveButton("完成", null)
-            .setOnDismissListener(dialog -> quickOptions.save(getBaseDir()))
-            .show();
+            .setOnDismissListener(d -> quickOptions.save(getBaseDir()))
+            .create();
+        copyright.setOnClickListener(v -> showCopyright());
+        dialog.show();
     }
 
     private interface IntSetter {
@@ -1453,5 +1502,211 @@ public class LauncherActivity extends Activity {
             }
         }
         return null;
+    }
+
+    // ---- Updates ----
+
+    /// The version numbers in e.g. "v0.3.12" or "v0.3.12-2-gabcdef", or null.
+    private static int[] parseVersion(String version) {
+        Matcher m = Pattern.compile("v?(\\d+)\\.(\\d+)\\.(\\d+)").matcher(version);
+        if (!m.find()) {
+            return null;
+        }
+        return new int[]{Integer.parseInt(m.group(1)), Integer.parseInt(m.group(2)),
+                         Integer.parseInt(m.group(3))};
+    }
+
+    private static boolean isNewer(int[] a, int[] b) {
+        for (int i = 0; i < 3; i++) {
+            if (a[i] != b[i]) {
+                return a[i] > b[i];
+            }
+        }
+        return false;
+    }
+
+    /// Asks GitHub for the latest release in the background, and shows a
+    /// banner if it's newer than this version. Failures (e.g. no network) are
+    /// ignored.
+    private void checkForUpdate() {
+        if (!getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(PREF_CHECK_UPDATES, true)) {
+            return;
+        }
+        final int[] current = parseVersion(new String(nativeVersion(), StandardCharsets.UTF_8));
+        if (current == null) {
+            return;
+        }
+        new Thread(() -> {
+            try {
+                HttpURLConnection connection =
+                    (HttpURLConnection) new URL(LATEST_RELEASE_URL).openConnection();
+                connection.setConnectTimeout(8000);
+                connection.setReadTimeout(8000);
+                connection.setRequestProperty("Accept", "application/vnd.github+json");
+                connection.setRequestProperty("User-Agent", "touchHLE-UF");
+                byte[] data;
+                try (InputStream in = connection.getInputStream()) {
+                    java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+                    byte[] buffer = new byte[1 << 14];
+                    int n;
+                    while ((n = in.read(buffer)) != -1 && out.size() < (1 << 20)) {
+                        out.write(buffer, 0, n);
+                    }
+                    data = out.toByteArray();
+                } finally {
+                    connection.disconnect();
+                }
+                JSONObject release = new JSONObject(new String(data, StandardCharsets.UTF_8));
+                String tag = release.getString("tag_name");
+                int[] latest = parseVersion(tag);
+                if (latest == null || !isNewer(latest, current)) {
+                    return;
+                }
+                final UpdateInfo info = new UpdateInfo();
+                info.version = tag;
+                info.notes = release.optString("body", "");
+                info.downloadUrl = release.optString("html_url", "");
+                JSONArray assets = release.optJSONArray("assets");
+                for (int i = 0; assets != null && i < assets.length(); i++) {
+                    JSONObject asset = assets.getJSONObject(i);
+                    if (asset.optString("name").endsWith("_Android_AArch64.apk")) {
+                        info.downloadUrl = asset.optString("browser_download_url", info.downloadUrl);
+                    }
+                }
+                runOnUiThread(() -> {
+                    update = info;
+                    showUpdateBanner();
+                });
+            } catch (Exception e) {
+                // No network, GitHub unreachable, etc.: just don't show anything.
+            }
+        }).start();
+    }
+
+    private void showUpdateBanner() {
+        if (updateSlot == null) {
+            return;
+        }
+        updateSlot.removeAllViews();
+        String ignored = getSharedPreferences(PREFS, MODE_PRIVATE).getString(PREF_IGNORED_VERSION, "");
+        if (update == null || update.version.equals(ignored)) {
+            return;
+        }
+        TextView banner = makeText("发现新版本 " + update.version + "，点这里更新", 14, TEXT, true);
+        banner.setGravity(Gravity.CENTER);
+        banner.setPadding(dp(14), dp(10), dp(14), dp(10));
+        banner.setBackground(buttonBackground(ACCENT, dp(12)));
+        banner.setOnClickListener(v -> showUpdateDialog());
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(-1, -2);
+        params.topMargin = dp(14);
+        updateSlot.addView(banner, params);
+    }
+
+    /// The release notes are Markdown: keep the "Changes in ..." part (the
+    /// rest describes the project and downloads), and drop the markup.
+    private static String plainNotes(String notes) {
+        notes = notes.replace("\r", "");
+        int changes = notes.indexOf("Changes in ");
+        if (changes >= 0) {
+            notes = notes.substring(notes.lastIndexOf('\n', changes) + 1);
+        }
+        int built = notes.indexOf("\nBuilt from commit");
+        if (built >= 0) {
+            notes = notes.substring(0, built);
+        }
+        return notes.replaceAll("(?m)^#+\\s*", "")
+            .replace("**", "")
+            .replace("`", "")
+            .replaceAll("\\[([^\\]]*)\\]\\([^)]*\\)", "$1")
+            .trim();
+    }
+
+    private void showUpdateDialog() {
+        final UpdateInfo info = update;
+        if (info == null) {
+            return;
+        }
+        new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+            .setTitle("发现新版本 " + info.version)
+            .setMessage(plainNotes(info.notes))
+            .setPositiveButton("下载安装包", (dialog, which) -> {
+                try {
+                    startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(info.downloadUrl)));
+                } catch (ActivityNotFoundException e) {
+                    Toast.makeText(this, "没有可以打开下载链接的浏览器。", Toast.LENGTH_LONG).show();
+                }
+            })
+            .setNegativeButton("稍后", null)
+            .setNeutralButton("忽略这个版本", (dialog, which) -> {
+                getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                    .putString(PREF_IGNORED_VERSION, info.version).apply();
+                showUpdateBanner();
+            })
+            .show();
+    }
+
+    /// A gear icon for the settings button, drawn here rather than taken from
+    /// an icon set.
+    private static class GearDrawable extends Drawable {
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+        GearDrawable(int color) {
+            paint.setColor(color);
+            paint.setStyle(Paint.Style.FILL);
+        }
+
+        @Override
+        public void draw(Canvas canvas) {
+            Rect bounds = getBounds();
+            float cx = bounds.exactCenterX();
+            float cy = bounds.exactCenterY();
+            float outer = Math.min(bounds.width(), bounds.height()) / 2f;
+            float inner = outer * 0.74f;
+            int teeth = 8;
+            Path path = new Path();
+            path.setFillType(Path.FillType.EVEN_ODD);
+            for (int i = 0; i < teeth; i++) {
+                double center = 2 * Math.PI * i / teeth;
+                double[] angles = {center - 0.30, center - 0.18, center + 0.18, center + 0.30};
+                float[] radii = {inner, outer, outer, inner};
+                for (int j = 0; j < 4; j++) {
+                    float x = cx + (float) Math.cos(angles[j]) * radii[j];
+                    float y = cy + (float) Math.sin(angles[j]) * radii[j];
+                    if (i == 0 && j == 0) {
+                        path.moveTo(x, y);
+                    } else {
+                        path.lineTo(x, y);
+                    }
+                }
+            }
+            path.close();
+            path.addCircle(cx, cy, outer * 0.32f, Path.Direction.CW);
+            canvas.drawPath(path, paint);
+        }
+
+        @Override
+        public void setAlpha(int alpha) {
+            paint.setAlpha(alpha);
+        }
+
+        @Override
+        public void setColorFilter(ColorFilter filter) {
+            paint.setColorFilter(filter);
+        }
+
+        @Override
+        public int getOpacity() {
+            return PixelFormat.TRANSLUCENT;
+        }
+
+        @Override
+        public int getIntrinsicWidth() {
+            return 48;
+        }
+
+        @Override
+        public int getIntrinsicHeight() {
+            return 48;
+        }
     }
 }
