@@ -41,7 +41,8 @@ unsafe fn new_byte_array(env: *mut JNIEnv, bytes: &[u8]) -> jbyteArray {
 
 /// Lists the apps in `apps_dir`. Their icons are written to `icons_dir` as
 /// raw premultiplied RGBA pixels. Returns one line per app, with tab-separated
-/// fields: path, display name, icon file (or empty), icon width, icon height.
+/// fields: path, display name, icon file (or empty), icon width, icon height,
+/// bundle identifier (the name of the app's folder in `touchHLE_sandbox`).
 #[no_mangle]
 pub unsafe extern "system" fn Java_org_touchhle_android_LauncherActivity_nativeScanApps(
     env: *mut JNIEnv,
@@ -140,10 +141,11 @@ fn scan_app(
     }
 
     let line = format!(
-        "{}\t{}{}",
+        "{}\t{}{}\t{}",
         clean(&path.to_string_lossy()),
         name,
-        icon_fields
+        icon_fields,
+        clean(bundle.bundle_identifier()),
     );
     Some((name, line))
 }

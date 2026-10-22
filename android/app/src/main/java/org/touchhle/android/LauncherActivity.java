@@ -45,6 +45,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -53,7 +54,12 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.util.Locale;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
+import java.util.zip.ZipOutputStream;
 
 /**
  * touchHLE's launcher on Android: lists the apps, imports new ones, and lets
@@ -83,6 +89,17 @@ public class LauncherActivity extends Activity {
         "touchHLE_wallpaper.png", "touchHLE_wallpaper.jpg", "touchHLE_wallpaper.jpeg",
     };
     private static final int REQUEST_IMPORT = 1;
+    private static final int REQUEST_IMPORT_SAVE = 2;
+    private static final int REQUEST_EXPORT_SAVE = 3;
+    /// Where touchHLE keeps each app's data (see src/paths.rs), in a folder
+    /// named after the app's bundle identifier.
+    private static final String SANDBOX_DIR = "touchHLE_sandbox";
+    /// Saves are backed up here before importing others over them.
+    private static final String SAVE_BACKUPS_DIR = "touchHLE_save_backups";
+    /// Exported saves go here if the system can't ask where to save them.
+    private static final String SAVE_EXPORTS_DIR = "touchHLE_save_exports";
+    /// Added to exported saves, to tell which app they're for.
+    private static final String SAVE_MARKER = "touchHLE_save.txt";
 
     private static final int TEXT = Color.WHITE;
     private static final int TEXT_DIM = 0xB3FFFFFF;
@@ -93,7 +110,14 @@ public class LauncherActivity extends Activity {
         String path;
         String name;
         Bitmap icon;
+        /// Empty if unknown.
+        String bundleId;
     }
+
+    /// The app whose saves are being imported or exported (kept across
+    /// activity recreation, since the system file picker is in between).
+    private String saveBundleId;
+    private String saveAppName;
 
     private final List<App> apps = new ArrayList<>();
     private boolean loading = true;
@@ -124,10 +148,21 @@ public class LauncherActivity extends Activity {
             getWindow().setAttributes(attrs);
         }
         getAppsDir().mkdirs();
+        if (savedInstanceState != null) {
+            saveBundleId = savedInstanceState.getString("saveBundleId");
+            saveAppName = savedInstanceState.getString("saveAppName");
+        }
         quickOptions = QuickOptions.load(getBaseDir());
         wallpaper = loadWallpaper();
         buildUi();
         rescan();
+    }
+
+    @Override
+    protected void onSaveInstanceState(Bundle outState) {
+        super.onSaveInstanceState(outState);
+        outState.putString("saveBundleId", saveBundleId);
+        outState.putString("saveAppName", saveAppName);
     }
 
     @Override
@@ -224,6 +259,7 @@ public class LauncherActivity extends Activity {
                 app.path = fields[0];
                 app.name = fields[1];
                 app.icon = loadIcon(fields[2], fields[3], fields[4]);
+                app.bundleId = fields.length > 5 ? fields[5] : "";
                 found.add(app);
             }
             runOnUiThread(() -> {
@@ -408,7 +444,7 @@ public class LauncherActivity extends Activity {
         titles.setOrientation(LinearLayout.VERTICAL);
         titles.setPadding(dp(12), 0, dp(12), 0);
         titles.addView(makeText(BuildConfig.APP_NAME, 22, TEXT, true));
-        titles.addView(makeText("点击图标启动游戏 · 长按可删除", 13, TEXT_DIM, false));
+        titles.addView(makeText("点击图标启动游戏 · 长按可管理", 13, TEXT_DIM, false));
         header.addView(titles, new LinearLayout.LayoutParams(0, -2, 1));
         content.addView(header, new LinearLayout.LayoutParams(-1, -2));
 
@@ -468,7 +504,7 @@ public class LauncherActivity extends Activity {
         grid.setAdapter(adapter);
         grid.setOnItemClickListener((parent, view, position, id) -> launch(apps.get(position)));
         grid.setOnItemLongClickListener((parent, view, position, id) -> {
-            confirmDelete(apps.get(position));
+            showAppMenu(apps.get(position));
             return true;
         });
         middle.addView(grid, new FrameLayout.LayoutParams(-1, -1));
@@ -583,6 +619,24 @@ public class LauncherActivity extends Activity {
         Intent intent = new Intent(this, MainActivity.class);
         intent.putExtra(MainActivity.EXTRA_ARGS, args.toArray(new String[0]));
         startActivity(intent);
+    }
+
+    private void showAppMenu(final App app) {
+        String[] items = {"导入存档", "导出存档", "删除游戏"};
+        new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+            .setTitle(app.name)
+            .setItems(items, (dialog, which) -> {
+                if (which == 2) {
+                    confirmDelete(app);
+                } else if (app.bundleId == null || app.bundleId.isEmpty()) {
+                    Toast.makeText(this, "无法识别这个游戏，不能处理存档。", Toast.LENGTH_LONG).show();
+                } else if (which == 0) {
+                    confirmImportSave(app);
+                } else {
+                    startExportSave(app);
+                }
+            })
+            .show();
     }
 
     private void confirmDelete(final App app) {
@@ -879,6 +933,17 @@ public class LauncherActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQUEST_IMPORT_SAVE || requestCode == REQUEST_EXPORT_SAVE) {
+            if (resultCode == RESULT_OK && data != null && data.getData() != null
+                && saveBundleId != null) {
+                if (requestCode == REQUEST_IMPORT_SAVE) {
+                    importSave(data.getData());
+                } else {
+                    exportSave(data.getData());
+                }
+            }
+            return;
+        }
         if (requestCode != REQUEST_IMPORT || resultCode != RESULT_OK || data == null) {
             return;
         }
@@ -979,5 +1044,414 @@ public class LauncherActivity extends Activity {
             temp.delete();
             throw new Exception("Couldn't rename " + temp);
         }
+    }
+
+    // ---- Saves ----
+
+    private File getSaveDir(String bundleId) {
+        return new File(new File(getBaseDir(), SANDBOX_DIR), bundleId);
+    }
+
+    private static String timestamp() {
+        return new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.ROOT).format(new Date());
+    }
+
+    /// The parts of an app's data that make up its saves (not tmp or caches).
+    private static boolean isSavePath(String relative) {
+        return (relative.equals("Documents") || relative.startsWith("Documents/")
+                || relative.equals("Library") || relative.startsWith("Library/"))
+            && !relative.equals("Library/Caches") && !relative.startsWith("Library/Caches/");
+    }
+
+    /// Writes an app's saves to `out` as a zip. Returns the number of files
+    /// written and (in `count[1]`) skipped because they couldn't be read.
+    private int[] writeSaveZip(String bundleId, OutputStream out) throws Exception {
+        File saveDir = getSaveDir(bundleId);
+        int[] count = {0, 0};
+        try (ZipOutputStream zip = new ZipOutputStream(out)) {
+            zip.putNextEntry(new ZipEntry(SAVE_MARKER));
+            zip.write(("touchHLE save\nbundle=" + bundleId + "\n").getBytes(StandardCharsets.UTF_8));
+            zip.closeEntry();
+            for (String top : new String[]{"Documents", "Library"}) {
+                addToZip(zip, new File(saveDir, top), top, count);
+            }
+        }
+        return count;
+    }
+
+    private static void addToZip(ZipOutputStream zip, File file, String relative, int[] count)
+            throws Exception {
+        if (!isSavePath(relative)) {
+            return;
+        }
+        File[] children = file.listFiles();
+        if (file.isDirectory()) {
+            if (children != null) {
+                for (File child : children) {
+                    addToZip(zip, child, relative + "/" + child.getName(), count);
+                }
+            }
+            return;
+        }
+        if (!file.isFile()) {
+            return;
+        }
+        InputStream in;
+        try {
+            in = new FileInputStream(file);
+        } catch (Exception e) {
+            // E.g. a save copied in by hand that touchHLE isn't allowed to read.
+            count[1]++;
+            return;
+        }
+        try (InputStream input = in) {
+            zip.putNextEntry(new ZipEntry(relative));
+            byte[] buffer = new byte[1 << 16];
+            int n;
+            while ((n = input.read(buffer)) != -1) {
+                zip.write(buffer, 0, n);
+            }
+            zip.closeEntry();
+        }
+        count[0]++;
+    }
+
+    private static boolean hasFiles(File dir) {
+        File[] children = dir.listFiles();
+        if (children == null) {
+            return false;
+        }
+        for (File child : children) {
+            if (child.isFile() || hasFiles(child)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean hasSaves(String bundleId) {
+        File saveDir = getSaveDir(bundleId);
+        return hasFiles(new File(saveDir, "Documents")) || hasFiles(new File(saveDir, "Library"));
+    }
+
+    private void startExportSave(App app) {
+        if (!hasSaves(app.bundleId)) {
+            Toast.makeText(this, "「" + app.name + "」还没有存档。", Toast.LENGTH_LONG).show();
+            return;
+        }
+        saveBundleId = app.bundleId;
+        saveAppName = app.name;
+        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("application/zip");
+        intent.putExtra(Intent.EXTRA_TITLE, app.bundleId + "_save_" + timestamp() + ".zip");
+        try {
+            startActivityForResult(intent, REQUEST_EXPORT_SAVE);
+        } catch (ActivityNotFoundException | SecurityException e) {
+            // No system "save as" screen: save it in touchHLE's own folder.
+            exportSaveToFolder();
+        }
+    }
+
+    private void exportSave(final Uri uri) {
+        final String bundleId = saveBundleId;
+        final String name = saveAppName;
+        new Thread(() -> {
+            String message;
+            try (OutputStream out = getContentResolver().openOutputStream(uri)) {
+                if (out == null) {
+                    throw new Exception("Couldn't open " + uri);
+                }
+                message = exportMessage(name, writeSaveZip(bundleId, out), "");
+            } catch (Exception e) {
+                message = "导出存档失败：" + e.getMessage();
+            }
+            final String text = message;
+            runOnUiThread(() -> Toast.makeText(this, text, Toast.LENGTH_LONG).show());
+        }).start();
+    }
+
+    private static String exportMessage(String name, int[] count, String where) {
+        String message = "已导出「" + name + "」的存档（" + count[0] + " 个文件）。" + where;
+        if (count[1] > 0) {
+            message += "\n有 " + count[1] + " 个文件没有读取权限，已跳过。";
+        }
+        return message;
+    }
+
+    private void exportSaveToFolder() {
+        final String bundleId = saveBundleId;
+        final String name = saveAppName;
+        new Thread(() -> {
+            String message;
+            File dir = new File(getBaseDir(), SAVE_EXPORTS_DIR);
+            File file = new File(dir, bundleId + "_save_" + timestamp() + ".zip");
+            try {
+                dir.mkdirs();
+                int[] count;
+                try (OutputStream out = new FileOutputStream(file)) {
+                    count = writeSaveZip(bundleId, out);
+                }
+                message = exportMessage(name, count,
+                    "\n保存在 touchHLE 文件夹：" + SAVE_EXPORTS_DIR + "/" + file.getName());
+            } catch (Exception e) {
+                file.delete();
+                message = "导出存档失败：" + e.getMessage();
+            }
+            final String text = message;
+            runOnUiThread(() -> Toast.makeText(this, text, Toast.LENGTH_LONG).show());
+        }).start();
+    }
+
+    private void confirmImportSave(final App app) {
+        new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+            .setTitle("导入「" + app.name + "」的存档？")
+            .setMessage("请选择一个导出的存档 zip。现有存档会先备份到 touchHLE 文件夹的 "
+                + SAVE_BACKUPS_DIR + "，再被替换。\n\n导入前请先退出这个游戏。")
+            .setPositiveButton("选择文件", (dialog, which) -> {
+                saveBundleId = app.bundleId;
+                saveAppName = app.name;
+                Intent[] attempts = {new Intent(Intent.ACTION_OPEN_DOCUMENT),
+                                     new Intent(Intent.ACTION_GET_CONTENT)};
+                for (Intent intent : attempts) {
+                    intent.addCategory(Intent.CATEGORY_OPENABLE);
+                    intent.setType("*/*");
+                    try {
+                        startActivityForResult(intent, REQUEST_IMPORT_SAVE);
+                        return;
+                    } catch (ActivityNotFoundException | SecurityException e) {
+                        // Try the next one.
+                    }
+                }
+                Toast.makeText(this, "无法打开系统的文件选择器。", Toast.LENGTH_LONG).show();
+            })
+            .setNegativeButton("取消", null)
+            .show();
+    }
+
+    /// Unpacks the zip into a fresh folder in the cache, then checks it and
+    /// asks before replacing the app's saves with it.
+    private void importSave(final Uri uri) {
+        final String bundleId = saveBundleId;
+        final String name = saveAppName;
+        new Thread(() -> {
+            final File staging = new File(getCacheDir(), "save_import");
+            deleteRecursively(staging);
+            String error = null;
+            String zipBundleId = null;
+            try {
+                unzip(uri, staging);
+                File root = saveRoot(staging);
+                zipBundleId = readMarker(new File(staging, SAVE_MARKER));
+                if (zipBundleId == null) {
+                    zipBundleId = readMarker(new File(root, SAVE_MARKER));
+                }
+                if (!hasFiles(root)) {
+                    error = "这个 zip 里没有存档文件。";
+                }
+            } catch (Exception e) {
+                error = "无法读取这个文件，它是存档 zip 吗？";
+            }
+            final String failure = error;
+            final String fromId = zipBundleId;
+            runOnUiThread(() -> {
+                if (failure != null) {
+                    deleteRecursively(staging);
+                    Toast.makeText(this, failure, Toast.LENGTH_LONG).show();
+                } else if (fromId != null && !fromId.equals(bundleId)) {
+                    new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+                        .setTitle("存档和游戏不一致")
+                        .setMessage("这个存档来自另一个游戏（" + fromId + "），不是「" + name
+                            + "」（" + bundleId + "）。仍然导入吗？")
+                        .setPositiveButton("仍然导入", (d, w) -> applySave(staging, bundleId, name))
+                        .setNegativeButton("取消", (d, w) -> deleteRecursively(staging))
+                        .show();
+                } else {
+                    applySave(staging, bundleId, name);
+                }
+            });
+        }).start();
+    }
+
+    private void applySave(final File staging, final String bundleId, final String name) {
+        new Thread(() -> {
+            String message;
+            File saveDir = getSaveDir(bundleId);
+            String step = "移走旧存档";
+            try {
+                // The old saves are moved into the backup folder rather than
+                // copied and deleted: saves copied in by hand (e.g. with a file
+                // manager) may not be readable or deletable by touchHLE, but
+                // its own folders can still be moved.
+                File backup = new File(new File(getBaseDir(), SAVE_BACKUPS_DIR),
+                    bundleId + "_" + timestamp());
+                moveAside(new File(saveDir, "Documents"), new File(backup, "Documents"));
+                File[] libraryChildren = new File(saveDir, "Library").listFiles();
+                if (libraryChildren != null) {
+                    for (File child : libraryChildren) {
+                        if (!child.getName().equals("Caches")) {
+                            moveAside(child, new File(new File(backup, "Library"), child.getName()));
+                        }
+                    }
+                }
+                step = "写入新存档";
+                File root = saveRoot(staging);
+                int count = installSave(root, saveDir);
+                message = "已导入「" + name + "」的存档（" + count + " 个文件）。";
+            } catch (Exception e) {
+                message = "导入存档失败（" + step + "时）：" + e.getMessage()
+                    + "\n原来的存档在 touchHLE 文件夹的 " + SAVE_BACKUPS_DIR + " 里。";
+            }
+            deleteRecursively(staging);
+            final String text = message;
+            runOnUiThread(() -> Toast.makeText(this, text, Toast.LENGTH_LONG).show());
+        }).start();
+    }
+
+    /// Moves `file` (if it exists) to `dest`, which must not exist yet.
+    private static void moveAside(File file, File dest) throws Exception {
+        if (!file.exists()) {
+            return;
+        }
+        dest.getParentFile().mkdirs();
+        if (!file.renameTo(dest)) {
+            throw new Exception("无法移走旧存档 " + file.getName());
+        }
+    }
+
+    /// Where the saves are in an unpacked zip: possibly inside a single folder
+    /// (e.g. a zipped `touchHLE_sandbox/<bundle id>` folder).
+    private static File saveRoot(File staging) {
+        File root = staging;
+        while (true) {
+            File[] children = root.listFiles();
+            if (children == null) {
+                return root;
+            }
+            File onlyDir = null;
+            int others = 0;
+            for (File child : children) {
+                if (child.getName().equals(SAVE_MARKER)) {
+                    continue;
+                }
+                if (child.isDirectory() && onlyDir == null) {
+                    onlyDir = child;
+                } else {
+                    others++;
+                }
+            }
+            if (onlyDir == null || others > 0 || onlyDir.getName().equals("Documents")
+                || onlyDir.getName().equals("Library")) {
+                return root;
+            }
+            root = onlyDir;
+        }
+    }
+
+    /// Moves unpacked saves into the app's folder: `Documents` and `Library`
+    /// keep their place, anything else goes into `Documents`.
+    private static int installSave(File root, File saveDir) throws Exception {
+        int count = 0;
+        File[] children = root.listFiles();
+        if (children == null) {
+            return 0;
+        }
+        boolean structured = new File(root, "Documents").isDirectory()
+            || new File(root, "Library").isDirectory();
+        for (File child : children) {
+            String childName = child.getName();
+            if (childName.equals(SAVE_MARKER)) {
+                continue;
+            }
+            File dest;
+            if (structured && (childName.equals("Documents") || childName.equals("Library"))) {
+                dest = new File(saveDir, childName);
+            } else {
+                dest = new File(new File(saveDir, "Documents"), childName);
+            }
+            count += moveTree(child, dest);
+        }
+        return count;
+    }
+
+    private static int moveTree(File source, File dest) throws Exception {
+        if (source.isDirectory()) {
+            dest.mkdirs();
+            int count = 0;
+            File[] children = source.listFiles();
+            if (children != null) {
+                for (File child : children) {
+                    count += moveTree(child, new File(dest, child.getName()));
+                }
+            }
+            return count;
+        }
+        dest.getParentFile().mkdirs();
+        if (dest.exists()) {
+            dest.delete();
+        }
+        if (!source.renameTo(dest)) {
+            try (InputStream in = new FileInputStream(source);
+                 OutputStream out = new FileOutputStream(dest)) {
+                byte[] buffer = new byte[1 << 16];
+                int n;
+                while ((n = in.read(buffer)) != -1) {
+                    out.write(buffer, 0, n);
+                }
+            }
+        }
+        return 1;
+    }
+
+    private void unzip(Uri uri, File dest) throws Exception {
+        String destPath = dest.getCanonicalPath() + File.separator;
+        int entries = 0;
+        try (InputStream in = getContentResolver().openInputStream(uri);
+             ZipInputStream zip = new ZipInputStream(in)) {
+            ZipEntry entry;
+            while ((entry = zip.getNextEntry()) != null) {
+                entries++;
+                String entryName = entry.getName().replace('\\', '/');
+                // Skip files macOS adds to zips.
+                if (entryName.startsWith("__MACOSX/") || entryName.endsWith("/.DS_Store")
+                    || entryName.equals(".DS_Store")) {
+                    continue;
+                }
+                File file = new File(dest, entryName);
+                // Don't let a strange name escape the folder.
+                if (!file.getCanonicalPath().startsWith(destPath)) {
+                    continue;
+                }
+                if (entry.isDirectory()) {
+                    file.mkdirs();
+                    continue;
+                }
+                file.getParentFile().mkdirs();
+                try (OutputStream out = new FileOutputStream(file)) {
+                    byte[] buffer = new byte[1 << 16];
+                    int n;
+                    while ((n = zip.read(buffer)) != -1) {
+                        out.write(buffer, 0, n);
+                    }
+                }
+            }
+        }
+        if (entries == 0) {
+            throw new Exception("Not a zip file");
+        }
+    }
+
+    /// The bundle identifier in an exported save's marker file, if any.
+    private static String readMarker(File marker) {
+        byte[] data = readFile(marker, 4096);
+        if (data == null) {
+            return null;
+        }
+        for (String line : new String(data, StandardCharsets.UTF_8).split("\n")) {
+            if (line.startsWith("bundle=")) {
+                return line.substring("bundle=".length()).trim();
+            }
+        }
+        return null;
     }
 }
