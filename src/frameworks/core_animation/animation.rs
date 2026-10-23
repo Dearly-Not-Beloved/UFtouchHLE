@@ -23,6 +23,7 @@ use crate::frameworks::core_animation::ca_animation::{
     CAMediaTimingFillMode,
 };
 use crate::frameworks::core_animation::ca_layer::remove_anonymous_animation;
+use crate::frameworks::core_animation::ca_transform3d::CATransform3D;
 use crate::frameworks::core_animation::{ca_layer::CALayerHostObject, CACurrentMediaTime};
 use crate::frameworks::core_foundation::time::CFTimeInterval;
 use crate::frameworks::core_graphics::cg_color::CGColorHostObject;
@@ -248,6 +249,56 @@ impl State {
                         by_value,
                     );
                     presentation.position = from_value + by_value * interpolation_amount;
+                }
+                // 3D transforms are converted to affine ones (see
+                // ca_transform3d).
+                "transform" => {
+                    let value = |env: &mut Environment, obj: id| -> CATransform3D {
+                        msg![env; obj CATransform3DValue]
+                    };
+                    let from_value = id_as_option(from_value).map(|obj| value(env, obj));
+                    let to_value = id_as_option(to_value).map(|obj| value(env, obj));
+                    let by_value = id_as_option(by_value).map(|obj| value(env, obj));
+                    let (from_value, by_value) = get_from_and_by_values(
+                        Some(CATransform3D::from_affine(presentation.affine_transform)),
+                        from_value,
+                        to_value,
+                        by_value,
+                    );
+                    presentation.affine_transform =
+                        (from_value + by_value * interpolation_amount).to_affine();
+                }
+                "transform.scale"
+                | "transform.scale.x"
+                | "transform.scale.y"
+                | "transform.rotation"
+                | "transform.rotation.z"
+                | "transform.translation.x"
+                | "transform.translation.y" => {
+                    let from_value = id_as_option(from_value).map(|obj| msg![env; obj floatValue]);
+                    let to_value = id_as_option(to_value).map(|obj| msg![env; obj floatValue]);
+                    let by_value = id_as_option(by_value).map(|obj| msg![env; obj floatValue]);
+                    let identity_value = if key_path.starts_with("transform.scale") {
+                        1.0
+                    } else {
+                        0.0
+                    };
+                    let (from_value, by_value) = get_from_and_by_values(
+                        Some(identity_value),
+                        from_value,
+                        to_value,
+                        by_value,
+                    );
+                    let value: f32 = from_value + by_value * interpolation_amount;
+                    let t = presentation.affine_transform;
+                    presentation.affine_transform = match &*key_path {
+                        "transform.scale" => t.scale(value, value),
+                        "transform.scale.x" => t.scale(value, 1.0),
+                        "transform.scale.y" => t.scale(1.0, value),
+                        "transform.rotation" | "transform.rotation.z" => t.rotate(value),
+                        "transform.translation.x" => t.translate(value, 0.0),
+                        _ => t.translate(0.0, value),
+                    };
                 }
                 _ => panic!("Attempted to animate on key {}", key_path),
             }

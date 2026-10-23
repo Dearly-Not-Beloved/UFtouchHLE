@@ -432,6 +432,10 @@ struct SourceNotification {
 
 const AL_SOURCE_STATE: ALuint = 0x1010;
 const AL_BUFFERS_PROCESSED: ALuint = 0x1016;
+/// Sent when a looping source starts again from the start of its queue.
+const AL_QUEUE_HAS_LOOPED: ALuint = 0x9000;
+const AL_LOOPING: ALenum = 0x1007;
+const AL_SAMPLE_OFFSET: ALenum = 0x1025;
 
 fn alSourceAddNotification(
     env: &mut Environment,
@@ -440,7 +444,10 @@ fn alSourceAddNotification(
     callback: GuestFunction,
     user_data: MutVoidPtr,
 ) -> ALenum {
-    if notification_id != AL_SOURCE_STATE && notification_id != AL_BUFFERS_PROCESSED {
+    if notification_id != AL_SOURCE_STATE
+        && notification_id != AL_BUFFERS_PROCESSED
+        && notification_id != AL_QUEUE_HAS_LOOPED
+    {
         log!(
             "TODO: alSourceAddNotification({}, {:#x}, ...): unsupported notification",
             source,
@@ -490,6 +497,16 @@ fn source_notification_value(
     };
     let context = context.make_current(&mut env.openal_manager);
     let mut value = 0;
+    if notification_id == AL_QUEUE_HAS_LOOPED {
+        // Detected by the playback position going back while looping.
+        let mut looping = 0;
+        unsafe { context.GetSourcei(source, AL_LOOPING, &mut looping) };
+        if looping == 0 {
+            return -1;
+        }
+        unsafe { context.GetSourcei(source, AL_SAMPLE_OFFSET, &mut value) };
+        return value;
+    }
     unsafe { context.GetSourcei(source, notification_id as ALenum, &mut value) };
     value
 }
@@ -513,6 +530,7 @@ pub fn handle_notifications(env: &mut Environment) {
         let value = source_notification_value(env, context, source, notification_id);
         let happened = match notification_id {
             AL_SOURCE_STATE => value != last_value,
+            AL_QUEUE_HAS_LOOPED => value >= 0 && last_value >= 0 && value < last_value,
             _ => value > 0 && value != last_value,
         };
         State::get(env).notifications[i].last_value = value;

@@ -41,6 +41,19 @@ fn CFStringAppend(
     msg![env; the_string appendString:appended_string]
 }
 
+fn CFStringAppendCharacters(
+    env: &mut Environment,
+    string: CFMutableStringRef,
+    chars: ConstPtr<unichar>,
+    num_chars: CFIndex,
+) {
+    let num_chars: GuestUSize = num_chars.try_into().unwrap();
+    let chars: Vec<unichar> = (0..num_chars).map(|i| env.mem.read(chars + i)).collect();
+    let appended = ns_string::from_u16_vec(env, chars);
+    () = msg![env; string appendString:appended];
+    crate::objc::release(env, appended);
+}
+
 fn CFStringAppendCString(
     env: &mut Environment,
     string: CFMutableStringRef,
@@ -446,6 +459,7 @@ fn CFStringNormalize(
 
 pub const FUNCTIONS: FunctionExports = &[
     export_c_func!(CFStringAppend(_, _)),
+    export_c_func!(CFStringAppendCharacters(_, _, _)),
     export_c_func!(CFStringAppendCString(_, _, _)),
     export_c_func!(CFStringAppendFormat(_, _, _, _)),
     export_c_func!(CFStringConvertEncodingToNSStringEncoding(_)),

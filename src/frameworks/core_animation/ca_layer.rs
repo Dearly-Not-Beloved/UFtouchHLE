@@ -7,6 +7,7 @@
 
 use crate::dyld::{ConstantExports, HostConstant};
 use crate::frameworks::core_animation::ca_transaction;
+use crate::frameworks::core_animation::ca_transform3d::CATransform3D;
 use crate::frameworks::core_foundation::time::CFTimeInterval;
 use crate::frameworks::core_graphics::cg_affine_transform::{
     CGAffineTransform, CGAffineTransformIdentity,
@@ -294,6 +295,15 @@ pub const CLASSES: ClassExports = objc_classes! {
     if is_implicit_animation_enabled(env, this) && old_affine_transform != affine_transform {
         log!("TODO: Implicit animation for affineTransform change from {old_affine_transform:?} to {affine_transform:?}");
     }
+}
+
+// 3D transforms are converted to affine ones (see ca_transform3d).
+- (CATransform3D)transform {
+    let affine_transform = env.objc.borrow::<CALayerHostObject>(this).affine_transform;
+    CATransform3D::from_affine(affine_transform)
+}
+- (())setTransform:(CATransform3D)transform {
+    () = msg![env; this setAffineTransform:(transform.to_affine())];
 }
 
 - (CGRect)frame {

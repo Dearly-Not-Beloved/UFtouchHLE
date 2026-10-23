@@ -7,8 +7,9 @@
 
 use crate::dyld::{export_c_func, FunctionExports};
 use crate::frameworks::core_graphics::cg_context::{
-    CGContextRef, CGContextRelease, CGContextRetain,
+    CGContextFillRect, CGContextRef, CGContextRelease, CGContextRetain,
 };
+use crate::frameworks::core_graphics::CGRect;
 use crate::objc::nil;
 use crate::Environment;
 
@@ -39,7 +40,16 @@ pub fn UIGraphicsGetCurrentContext(env: &mut Environment) -> CGContextRef {
         .unwrap_or(nil)
 }
 
+/// Fill a rectangle in the current context with its fill color.
+fn UIRectFill(env: &mut Environment, rect: CGRect) {
+    let context = UIGraphicsGetCurrentContext(env);
+    if context != nil {
+        CGContextFillRect(env, context, rect);
+    }
+}
+
 pub const FUNCTIONS: FunctionExports = &[
+    export_c_func!(UIRectFill(_)),
     export_c_func!(UIGraphicsPushContext(_)),
     export_c_func!(UIGraphicsPopContext()),
     export_c_func!(UIGraphicsGetCurrentContext()),

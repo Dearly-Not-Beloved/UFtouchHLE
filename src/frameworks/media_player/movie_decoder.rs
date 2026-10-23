@@ -426,6 +426,17 @@ impl MovieDecoder {
         (self.width, self.height)
     }
 
+    /// How long the video is.
+    pub fn duration(&self) -> Duration {
+        let end = self
+            .samples
+            .iter()
+            .map(|sample| sample.time + sample.duration)
+            .max()
+            .unwrap_or(0);
+        Duration::from_secs_f64(end.max(0) as f64 / self.timescale as f64)
+    }
+
     /// When the next frame is due, relative to the start of the movie, or
     /// [None] if there are no more frames.
     pub fn next_frame_time(&self) -> Option<Duration> {

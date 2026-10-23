@@ -45,3 +45,8 @@ pub struct State {
     av_audio_session: av_audio_session::State,
     av_player: av_player::State,
 }
+
+/// For use by `NSRunLoop`: update video playback.
+pub fn handle_players(env: &mut crate::Environment) {
+    av_player::handle_players(env);
+}
