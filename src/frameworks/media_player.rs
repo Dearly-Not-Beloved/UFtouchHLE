@@ -15,6 +15,31 @@ mod movie_decoder;
 mod movie_player;
 mod music_player;
 
+use crate::dyld::{ConstantExports, HostConstant};
+
+pub const CONSTANTS: ConstantExports = &[
+    (
+        "_MPMoviePlayerLoadStateDidChangeNotification",
+        HostConstant::NSString("MPMoviePlayerLoadStateDidChangeNotification"),
+    ),
+    (
+        "_MPMoviePlayerPlaybackStateDidChangeNotification",
+        HostConstant::NSString("MPMoviePlayerPlaybackStateDidChangeNotification"),
+    ),
+    (
+        "_MPMediaItemPropertyAssetURL",
+        HostConstant::NSString("assetURL"),
+    ),
+    (
+        "_MPMediaLibraryDidChangeNotification",
+        HostConstant::NSString("MPMediaLibraryDidChangeNotification"),
+    ),
+    (
+        "_MPMediaPlaylistPropertyName",
+        HostConstant::NSString("name"),
+    ),
+];
+
 pub const DYLIB: crate::dyld::HostDylib = crate::dyld::HostDylib {
     path: "/System/Library/Frameworks/MediaPlayer.framework/MediaPlayer",
     aliases: &[],
@@ -28,7 +53,7 @@ pub const DYLIB: crate::dyld::HostDylib = crate::dyld::HostDylib {
         media_playlist::CLASSES,
         media_query::CLASSES,
     ],
-    constant_exports: &[movie_player::CONSTANTS, music_player::CONSTANTS],
+    constant_exports: &[movie_player::CONSTANTS, music_player::CONSTANTS, CONSTANTS],
     function_exports: &[],
 };
 

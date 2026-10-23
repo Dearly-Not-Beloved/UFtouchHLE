@@ -61,6 +61,7 @@ const kEAGLRenderingAPIOpenGLES3: EAGLRenderingAPI = 3;
 
 pub(super) struct EAGLContextHostObject {
     pub(super) gles_ctx: Option<Box<dyn GLESContext>>,
+    api: EAGLRenderingAPI,
     /// Mapping of OpenGL ES renderbuffer names to `EAGLDrawable` instances
     /// (always `CAEAGLLayer*`). Retains the instance so it won't dangle.
     renderbuffer_drawable_bindings: Rc<RefCell<HashMap<GLuint, id>>>,
@@ -108,6 +109,18 @@ const PRESENT_FRAME_TEXTURE: GLuint = 0xFFFF_FF01;
 const PRESENT_UPSCALED_TEXTURE: GLuint = 0xFFFF_FF02;
 const PRESENT_UPSCALED_FRAMEBUFFER: GLuint = 0xFFFF_FF03;
 
+fn create_context(env: &mut Environment, api: EAGLRenderingAPI) -> Box<dyn GLESContext> {
+    if api == 1 {
+        return create_gles1_ctx(env);
+    }
+    env.on_parent_stack_in_coroutine(|window, _| {
+        Box::new(
+            crate::gles::gles1_on_gl2::GLES1OnGL2Context::new_programmable(window)
+                .expect("Could not create ES 2.0 context"),
+        ) as Box<dyn GLESContext>
+    })
+}
+
 pub const CLASSES: ClassExports = objc_classes! {
 
 (env, this, _cmd);
@@ -117,6 +130,7 @@ pub const CLASSES: ClassExports = objc_classes! {
 + (id)alloc {
     let host_object = Box::new(EAGLContextHostObject {
         gles_ctx: None,
+        api: 1,
         renderbuffer_drawable_bindings: Rc::new(RefCell::new(HashMap::new())),
         fps_counter: None,
         next_frame_due: None,
@@ -149,9 +163,9 @@ pub const CLASSES: ClassExports = objc_classes! {
 }
 
 - (id)initWithAPI:(EAGLRenderingAPI)api sharegroup:(id)group {
-    if api != kEAGLRenderingAPIOpenGLES1 {
+    if api != kEAGLRenderingAPIOpenGLES1 && api != kEAGLRenderingAPIOpenGLES2 {
         log!(
-            "TODO: App requested EAGL initWithAPI:{} sharegroup:{:?}, returning nil as we only support API 1 for now",
+            "TODO: App requested EAGL initWithAPI:{} sharegroup:{:?}, returning nil as only APIs 1 and 2 are supported",
             api,
             group
         );
@@ -174,7 +188,7 @@ pub const CLASSES: ClassExports = objc_classes! {
     }
     env.window.as_mut().unwrap().set_share_with_current_context(true);
 
-    let mut gles1_ins = create_gles1_ctx(env);
+    let mut gles1_ins = create_context(env, api);
 
     let window = env.window.as_mut().expect("OpenGL ES is not supported in headless mode");
     {
@@ -183,6 +197,8 @@ pub const CLASSES: ClassExports = objc_classes! {
     }
 
     env.objc.borrow_mut::<EAGLContextHostObject>(this).gles_ctx = Some(gles1_ins);
+    env.objc.borrow_mut::<EAGLContextHostObject>(this).api = api;
+    if api == 2 { env.framework_state.opengles.programmable_contexts.insert(this); }
 
     env.window.as_mut().unwrap().set_share_with_current_context(false);
 
@@ -193,15 +209,15 @@ pub const CLASSES: ClassExports = objc_classes! {
 }
 
 - (id)initWithAPI:(EAGLRenderingAPI)api {
-    if api != kEAGLRenderingAPIOpenGLES1 {
+    if api != kEAGLRenderingAPIOpenGLES1 && api != kEAGLRenderingAPIOpenGLES2 {
         log!(
-            "TODO: App requested EAGL initWithAPI:{}, returning nil as we only support API 1 for now",
+            "TODO: App requested EAGL initWithAPI:{}, returning nil as only APIs 1 and 2 are supported",
             api
         );
         return nil;
     }
 
-    let mut gles1_ins = create_gles1_ctx(env);
+    let mut gles1_ins = create_context(env, api);
 
     let window = env.window.as_mut().expect("OpenGL ES is not supported in headless mode");
     {
@@ -210,13 +226,14 @@ pub const CLASSES: ClassExports = objc_classes! {
     }
 
     env.objc.borrow_mut::<EAGLContextHostObject>(this).gles_ctx = Some(gles1_ins);
+    env.objc.borrow_mut::<EAGLContextHostObject>(this).api = api;
+    if api == 2 { env.framework_state.opengles.programmable_contexts.insert(this); }
 
     this
 }
 
 - (EAGLRenderingAPI)API {
-    // TODO: support later API versions
-    kEAGLRenderingAPIOpenGLES1
+    env.objc.borrow::<EAGLContextHostObject>(this).api
 }
 
 - (id)sharegroup {
@@ -226,6 +243,7 @@ pub const CLASSES: ClassExports = objc_classes! {
 }
 
 - (())dealloc {
+    env.framework_state.opengles.programmable_contexts.remove(&this);
     env.framework_state.opengles.pending_errors.remove(&this);
     let host_obj = env.objc.borrow_mut::<EAGLContextHostObject>(this);
     for &(guest_buf, _host_buf) in host_obj.mapped_buffers.values() {

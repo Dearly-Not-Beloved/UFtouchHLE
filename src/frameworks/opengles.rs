@@ -10,12 +10,13 @@
 //! topic.
 
 mod eagl;
+mod gles2_guest;
 mod gles_guest;
 mod matrix_palette;
 
 pub use eagl::redraw_last_frame;
 
-use touchHLE_gl_bindings::gles11::types::GLenum;
+use touchHLE_gl_bindings::gles11::types::{GLenum, GLuint};
 
 use crate::mem::ConstPtr;
 
@@ -24,14 +25,18 @@ pub const DYLIB: crate::dyld::HostDylib = crate::dyld::HostDylib {
     aliases: &[],
     class_exports: &[eagl::CLASSES],
     constant_exports: &[eagl::CONSTANTS],
-    function_exports: &[gles_guest::FUNCTIONS],
+    function_exports: &[gles_guest::FUNCTIONS, gles2_guest::FUNCTIONS],
 };
 
 #[derive(Default)]
 pub struct State {
+    /// ES 2 contexts currently use the readback compositor, which keeps the
+    /// app's shaders and vertex attributes separate from presentation.
+    pub(crate) programmable_contexts: std::collections::HashSet<crate::objc::id>,
     /// Current EAGLContext for each thread
     current_ctxs: std::collections::HashMap<crate::ThreadId, Option<crate::objc::id>>,
     strings_cache: std::collections::HashMap<GLenum, ConstPtr<u8>>,
+    programmable_strings_cache: std::collections::HashMap<GLenum, ConstPtr<u8>>,
     /// Sizes of the textures used by `eagl::present_renderbuffer` to present
     /// frames, so they can be reused. Keyed by sharegroup (see
     /// [eagl::sharegroup_key]), since that's what texture names belong to.
@@ -39,6 +44,10 @@ pub struct State {
     /// Errors the app hasn't retrieved with `glGetError` yet, kept for each
     /// context while touchHLE uses it (see [without_leaving_errors]).
     pending_errors: std::collections::HashMap<crate::objc::id, GLenum>,
+    /// Textures allocated without data, which the app may render to, keyed by
+    /// sharegroup and texture name (see `scale_render_target` in `gles_guest`).
+    render_target_textures:
+        std::collections::HashMap<(usize, GLuint), gles_guest::RenderTargetTexture>,
 }
 impl State {
     fn current_ctx_for_thread(&mut self, thread: crate::ThreadId) -> &mut Option<crate::objc::id> {

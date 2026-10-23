@@ -249,3 +249,8 @@ com.ea.nfshp.ipad.inc: --force-composition
 # iPhone 4. Some letters lose a column of pixels on desktop GPUs without the
 # subpixel offset.
 jp.co.capcom.deadrisingus: --device-model=iPhone3,1 --subpixel-offset=0.01
+
+# Grand Theft Auto: Vice City
+# Requires a device with OpenGL ES 2.0 support. On an iPhone 4 (iPhone3,1) it
+# renders at 65% resolution, on an iPhone 4S at full Retina resolution.
+com.rockstargames.gta3vc: --device-model=iPhone4,1 --retina

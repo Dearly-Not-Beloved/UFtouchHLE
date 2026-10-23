@@ -13,7 +13,7 @@ use crate::audio::openal::{
 use crate::dyld::{ConstantExports, HostConstant};
 use crate::frameworks::core_graphics::cg_affine_transform::CGAffineTransform;
 use crate::frameworks::core_graphics::{cg_image, CGFloat, CGPoint, CGRect, CGSize};
-use crate::frameworks::foundation::{ns_string, ns_url, NSInteger, NSTimeInterval};
+use crate::frameworks::foundation::{ns_string, ns_url, NSInteger, NSTimeInterval, NSUInteger};
 use crate::frameworks::uikit::ui_device::UIDeviceOrientation;
 use crate::frameworks::uikit::ui_device::{
     UIDeviceOrientationLandscapeLeft, UIDeviceOrientationLandscapeRight,
@@ -156,6 +156,9 @@ pub const CLASSES: ClassExports = objc_classes! {
     State::get(env).pending_notifications.push_back(
         (MPMoviePlayerContentPreloadDidFinishNotification, this, Instant::now())
     );
+    State::get(env).pending_notifications.push_back(
+        ("MPMoviePlayerLoadStateDidChangeNotification", this, Instant::now())
+    );
 
     this
 }
@@ -190,6 +193,17 @@ pub const CLASSES: ClassExports = objc_classes! {
 - (())setFullscreen:(bool)fullsreen {
     todo_objc_setter!(this, fullsreen);
 }
+- (())setFullscreen:(bool)fullscreen animated:(bool)_animated {
+    // Movies are always shown full screen.
+    todo_objc_setter!(this, fullscreen);
+}
+- (bool)isFullscreen {
+    true
+}
+- (())setRepeatMode:(NSInteger)mode {
+    // TODO: MPMovieRepeatModeOne
+    todo_objc_setter!(this, mode);
+}
 - (())setInitialPlaybackTime:(NSTimeInterval)initial_time {
     todo_objc_setter!(this, initial_time);
 }
@@ -199,7 +213,20 @@ pub const CLASSES: ClassExports = objc_classes! {
 }
 
 - (MPMoviePlaybackState)playbackState {
-    MPMoviePlaybackStateStopped // TODO
+    if State::get(env).active_player == Some(this) { 1 } else { MPMoviePlaybackStateStopped }
+}
+
+- (NSUInteger)loadState {
+    // These players use local files: both playable and playthroughOK.
+    1 | 2
+}
+
+- (bool)isPreparedToPlay {
+    true
+}
+
+- (())prepareToPlay {
+    // Local files are prepared when the player is initialized.
 }
 
 // Apparently an undocumented, private API, but Spore Origins uses it.
@@ -503,7 +530,7 @@ fn update_playback(env: &mut Environment) {
 
     // The audio is the clock if there is any, so that the video stays in
     // sync with it, including when touchHLE is paused.
-    let (time, audio_finished) = if let Some((source, _)) = playback.audio {
+    let audio_clock = playback.audio.and_then(|(source, _)| {
         let al = env
             .framework_state
             .audio_toolbox
@@ -514,13 +541,21 @@ fn update_playback(env: &mut Environment) {
             al.GetSourcef(source, AL_SEC_OFFSET, &mut seconds);
             al.GetSourcei(source, AL_SOURCE_STATE, &mut state);
         }
-        (
+        // If the audio output doesn't work (e.g. a Bluetooth speaker that
+        // isn't playing), the audio never starts, so it can't be the clock.
+        if seconds <= 0.0
+            && state != AL_STOPPED
+            && playback.started.elapsed() > Duration::from_secs(1)
+        {
+            return None;
+        }
+        Some((
             Duration::from_secs_f32(seconds.max(0.0)),
             state == AL_STOPPED,
-        )
-    } else {
-        (playback.started.elapsed(), false)
-    };
+        ))
+    });
+    let audio_clock_works = audio_clock.is_some();
+    let (time, audio_finished) = audio_clock.unwrap_or_else(|| (playback.started.elapsed(), false));
 
     let mut latest_frame = None;
     let mut video_finished = false;
@@ -548,7 +583,7 @@ fn update_playback(env: &mut Environment) {
         release(env, image);
     }
 
-    if audio_finished || (video_finished && playback.audio.is_none()) {
+    if audio_finished || (video_finished && !audio_clock_works) {
         finish_playback(env, playback, /* notify: */ true);
     } else {
         State::get(env).playback = Some(playback);

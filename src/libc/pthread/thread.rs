@@ -49,7 +49,7 @@ const DEFAULT_ATTR: pthread_attr_t = pthread_attr_t {
     magic: MAGIC_ATTR,
     detachstate: PTHREAD_CREATE_JOINABLE,
     stacksize: mem::Mem::SECONDARY_THREAD_DEFAULT_STACK_SIZE,
-    _unused: [0; 7],
+    _unused: [31, 0, 0, 0, 0, 0, 0],
 };
 
 /// Apple's implementation is a 4-byte magic number followed by a massive
@@ -118,7 +118,7 @@ fn pthread_attr_getstacksize(
     if attr.is_null() {
         return EINVAL;
     }
-    check_magic!(env, attr, MAGIC_THREAD);
+    check_magic!(env, attr, MAGIC_ATTR);
     let size = env.mem.read(attr).stacksize;
     env.mem.write(stacksize, size);
     0 // success
@@ -170,12 +170,30 @@ fn pthread_attr_setschedparam(
 ) -> i32 {
     check_magic!(env, attr, MAGIC_ATTR);
     let sched_param = env.mem.read(param);
+    let mut value = env.mem.read(attr);
+    value._unused[0] = sched_param.sched_priority as u32;
+    env.mem.write(attr, value);
     log!(
         "TODO: pthread_attr_setschedparam({:?}, {:?}) (ignored)",
         attr,
         sched_param
     );
     0 // success
+}
+fn pthread_attr_getschedparam(
+    env: &mut Environment,
+    attr: ConstPtr<pthread_attr_t>,
+    param: MutPtr<sched_param>,
+) -> i32 {
+    check_magic!(env, attr, MAGIC_ATTR);
+    let attr = env.mem.read(attr);
+    env.mem.write(
+        param,
+        sched_param {
+            sched_priority: attr._unused[0] as i32,
+        },
+    );
+    0
 }
 fn pthread_attr_destroy(env: &mut Environment, attr: MutPtr<pthread_attr_t>) -> i32 {
     check_magic!(env, attr, MAGIC_ATTR);
@@ -418,6 +436,7 @@ pub const FUNCTIONS: FunctionExports = &[
     export_c_func!(pthread_attr_setinheritsched(_, _)),
     export_c_func!(pthread_attr_setschedpolicy(_, _)),
     export_c_func!(pthread_attr_setschedparam(_, _)),
+    export_c_func!(pthread_attr_getschedparam(_, _)),
     export_c_func!(pthread_attr_destroy(_)),
     export_c_func!(pthread_create(_, _, _, _)),
     export_c_func!(pthread_equal(_, _)),

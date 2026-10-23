@@ -958,24 +958,25 @@ where
         if base == 8 || base == 16 {
             let curr: u8 = getc_fn(env, subject, offset + whitespace_len + len)?.into();
             if curr == b'0' {
+                // The leading zero is a digit unless it belongs to a 0x
+                // prefix. In particular, %x must successfully read "0".
+                chars.push(curr);
                 len += 1;
                 if len == max_length {
                     return Ok(());
                 }
-                prefix_length += 1;
                 if base == 16 {
                     let next: u8 = getc_fn(env, subject, offset + whitespace_len + len)?.into();
                     if next == b'x' || next == b'X' {
+                        chars.pop();
+                        prefix_length += 2;
                         len += 1;
                         if len == max_length {
                             return Ok(());
                         }
-                        prefix_length += 1;
                     } else {
                         ungetc_fn(env, subject, next);
                     }
-                } else {
-                    ungetc_fn(env, subject, curr);
                 }
             } else {
                 ungetc_fn(env, subject, curr);

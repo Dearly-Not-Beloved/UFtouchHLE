@@ -6,11 +6,12 @@
 //! `UIScreen`.
 
 use crate::frameworks::core_graphics::{CGFloat, CGPoint, CGRect, CGSize};
-use crate::objc::{id, msg, msg_class, objc_classes, ClassExports, TrivialHostObject};
+use crate::objc::{id, msg, msg_class, objc_classes, ClassExports, TrivialHostObject, SEL};
 
 #[derive(Default)]
 pub struct State {
     main_screen: Option<id>,
+    current_mode: Option<id>,
 }
 
 pub const CLASSES: ClassExports = objc_classes! {
@@ -70,9 +71,44 @@ pub const CLASSES: ClassExports = objc_classes! {
 }
 
 - (CGFloat)scale {
-    // TODO: support retina
-    1.0
+    if env.options.retina { 2.0 } else { 1.0 }
 }
+
+- (id)currentMode {
+    if let Some(mode) = env.framework_state.uikit.ui_screen.current_mode {
+        mode
+    } else {
+        let class = env.objc.get_known_class("UIScreenMode", &mut env.mem);
+        let mode = env.objc.alloc_static_object(class, Box::new(TrivialHostObject), &mut env.mem);
+        env.framework_state.uikit.ui_screen.current_mode = Some(mode);
+        mode
+    }
+}
+
+- (id)availableModes {
+    let mode: id = msg![env; this currentMode];
+    msg_class![env; NSArray arrayWithObject:mode]
+}
+
+- (id)displayLinkWithTarget:(id)target selector:(SEL)selector {
+    msg_class![env; CADisplayLink displayLinkWithTarget:target selector:selector]
+}
+
+@end
+
+@implementation UIScreenMode: NSObject
+
+- (id)retain { this }
+- (())release {}
+- (id)autorelease { this }
+
+- (CGSize)size {
+    let (width, height) = env.window().device_family().portrait_size();
+    let scale: CGFloat = if env.options.retina { 2.0 } else { 1.0 };
+    CGSize { width: width as f32 * scale, height: height as f32 * scale }
+}
+
+- (CGFloat)pixelAspectRatio { 1.0 }
 
 @end
 

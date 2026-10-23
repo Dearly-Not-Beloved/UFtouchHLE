@@ -42,8 +42,6 @@ pub use objects::{
 pub use properties::todo_objc_setter;
 pub use selectors::{selector, SEL};
 
-use crate::mem::ConstVoidPtr;
-use crate::Environment;
 use classes::{
     class_getInstanceSize, class_getMethodImplementation, class_getProperty, class_getSuperclass,
     class_replaceMethod, objc_getClass, ClassHostObject, FakeClass, UnimplementedClass,
@@ -118,21 +116,6 @@ const CONSTANTS: ConstantExports = &[
     ("__objc_empty_cache", HostConstant::NullPtr),
 ];
 
-/// Block support is iOS 4+, but it seems like Block Runtime Helpers
-/// could still be called on even if minimal iOS version is set to 3.x?
-///
-/// ref. <https://clang.llvm.org/docs/Block-ABI-Apple.html#runtime-helper-functions>
-fn _Block_object_dispose(_env: &mut Environment, object: ConstVoidPtr, flags: i32) {
-    // `BLOCK_FIELD_IS_BYREF` flag defines an on stack structure holding
-    // the __block variable. It is _probably_ safe to ignore.
-    // TODO: properly implement for block support
-    assert!(flags == 8); // BLOCK_FIELD_IS_BYREF
-    log!(
-        "Warning: Ignoring _Block_object_dispose({:?}, BLOCK_FIELD_IS_BYREF)",
-        object
-    );
-}
-
 const FUNCTIONS: FunctionExports = &[
     export_c_func!(class_getInstanceSize(_)),
     export_c_func!(class_getSuperclass(_)),
@@ -150,5 +133,4 @@ const FUNCTIONS: FunctionExports = &[
     export_c_func!(objc_sync_exit(_)),
     export_c_func!(object_getClass(_)),
     export_c_func!(sel_registerName(_)),
-    export_c_func!(_Block_object_dispose(_, _)),
 ];

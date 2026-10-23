@@ -85,6 +85,10 @@ pub const CLASSES: ClassExports = objc_classes! {
     msg![env; user_info objectForKey:key]
 }
 
+- (id)description {
+    msg![env; this localizedDescription]
+}
+
 - (())dealloc {
     let &ErrorHostObject{ domain, user_info, .. } = env.objc.borrow(this);
     release(env, domain);

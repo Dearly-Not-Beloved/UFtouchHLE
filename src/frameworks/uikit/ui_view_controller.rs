@@ -38,6 +38,19 @@ struct UIViewControllerHostObject {
     /// `NSBundle*`
     bundle: id,
 }
+
+/// Establish a decoded root view's runtime size before awakeFromNib.
+pub(super) fn size_nib_view(env: &mut Environment, controller: id) {
+    let view = env
+        .objc
+        .borrow::<UIViewControllerHostObject>(controller)
+        .view;
+    if view != nil {
+        let screen: id = msg_class![env; UIScreen mainScreen];
+        let frame: CGRect = msg![env; screen applicationFrame];
+        let _: () = msg![env; view setFrame:frame];
+    }
+}
 impl HostObject for UIViewControllerHostObject {}
 
 type UIModalTransitionStyle = NSInteger;
@@ -72,6 +85,12 @@ pub const CLASSES: ClassExports = objc_classes! {
     let view: id = msg![env; coder decodeObjectForKey:key_ns_string];
 
     () = msg![env; this setView:view];
+
+    if view != nil {
+        let screen: id = msg_class![env; UIScreen mainScreen];
+        let frame: CGRect = msg![env; screen applicationFrame];
+        () = msg![env; view setFrame:frame];
+    }
 
     this
 }
@@ -117,6 +136,13 @@ pub const CLASSES: ClassExports = objc_classes! {
         // Also we assume here the case of a "detached nib file"
         // TODO: support "integrated nib file"
         assert!(view != nil);
+
+        // The archived frame is the size used in Interface Builder, which can
+        // differ from this device. Establish the runtime frame before
+        // viewDidLoad lets the app size its renderer.
+        let screen: id = msg_class![env; UIScreen mainScreen];
+        let frame: CGRect = msg![env; screen applicationFrame];
+        () = msg![env; view setFrame:frame];
 
         return;
     };

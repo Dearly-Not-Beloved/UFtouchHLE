@@ -810,6 +810,7 @@ fn sscanf_common(
         |env, s, idx| Ok(env.mem.read(s + idx)),
         |_, _, _| (),
         src.cast_mut(),
+        true,
         format,
         args,
     )
@@ -842,6 +843,7 @@ fn sscanf_common_generic<
     getc_fn: F1,
     ungetc_fn: F2,
     subject: MutPtr<U>,
+    string_input: bool,
     format: ConstPtr<u8>,
     mut args: VaList,
 ) -> i32
@@ -939,6 +941,28 @@ where
         }
 
         match specifier {
+            b'c' => {
+                assert!(length_modifier.is_none()); // TODO: wide characters
+                let dest: MutPtr<u8> = args.next(env);
+                let mut written = 0;
+                while written < max_width.max(1) {
+                    let Ok(c) = getc_fn(env, subject, src_char_idx) else {
+                        break;
+                    };
+                    let c = c.into();
+                    // A NUL ends a sscanf string, but is valid in a file.
+                    if string_input && c == 0 {
+                        break;
+                    }
+                    env.mem.write(dest + written, c);
+                    written += 1;
+                    src_char_idx += 1;
+                }
+                if written == 0 {
+                    return if matched_args == 0 { EOF } else { matched_args };
+                }
+                // %c does not append a NUL terminator or skip whitespace.
+            }
             b'd' | b'i' => {
                 let base: u32 = if specifier == b'd' {
                     10
@@ -1146,6 +1170,11 @@ where
                         break;
                     }
                 }
+                // An empty input cannot satisfy %s. In particular, don't
+                // claim another assignment after reaching the input's end.
+                if written == 0 {
+                    return if matched_args == 0 { EOF } else { matched_args };
+                }
                 env.mem.write(dst_ptr, b'\0');
                 log_dbg!(
                     "sscanf_common_generic read %s '{:?}'",
@@ -1260,6 +1289,7 @@ fn fscanf(
             assert_eq!(c as i32, ungetc(env, c as i32, file));
         },
         stream,
+        false,
         format,
         args.start(),
     )

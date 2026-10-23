@@ -283,6 +283,30 @@ pub const CLASSES: ClassExports = objc_classes! {
                ofType:(id)extension { // NSString*
     msg![env; this pathForResource:name ofType:extension inDirectory:nil]
 }
+
+- (id)pathsForResourcesOfType:(id)extension inDirectory:(id)directory {
+    let root: id = msg![env; this resourcePath];
+    let root: id = if directory == nil { root } else {
+        msg![env; root stringByAppendingPathComponent:directory]
+    };
+    let root = to_rust_string(env, root).to_string();
+    let extension = if extension == nil { None } else {
+        Some(to_rust_string(env, extension).to_string())
+    };
+    let root = crate::fs::GuestPath::new(&root);
+    let paths = env.fs.enumerate_recursive(root).unwrap_or_default();
+    let paths: Vec<_> = paths.into_iter().filter_map(|relative| {
+        let path = root.join(relative.as_str());
+        if !env.fs.is_file(&path) { return None; }
+        if let Some(extension) = &extension {
+            if !relative.as_str().ends_with(&format!(".{extension}")) { return None; }
+        }
+        Some(path.as_str().to_string())
+    }).collect();
+    let paths = paths.into_iter().map(|path| from_rust_string(env, path)).collect();
+    let array = super::ns_array::from_vec(env, paths);
+    autorelease(env, array)
+}
 - (id)URLForResource:(id)name // NSString*
        withExtension:(id)extension // NSString *
         subdirectory:(id)subpath { // NSString *

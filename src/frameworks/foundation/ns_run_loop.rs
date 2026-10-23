@@ -452,6 +452,7 @@ pub fn run_run_loop(
         }
 
         if is_main_run_loop {
+            crate::libc::dispatch::drain_main_queue(env);
             media_player::handle_players(env);
         }
 

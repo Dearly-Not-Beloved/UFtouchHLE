@@ -100,6 +100,8 @@ pub struct Options {
     /// Device model reported to the app (`hw.machine`), e.g. `iPhone2,1`.
     /// [None] means the original iPhone (`iPhone1,1`).
     pub device_model: Option<&'static str>,
+    /// Report a Retina display (`[UIScreen scale]` of 2).
+    pub retina: bool,
     /// Shift for everything the app draws, in pixels (see
     /// `draw_with_subpixel_offset` in `gles_guest`).
     pub subpixel_offset: Option<f32>,
@@ -140,6 +142,7 @@ impl Default for Options {
             keep_screen_on: KEEP_SCREEN_ON_DEFAULT,
             device_family: None,
             device_model: None,
+            retina: false,
             subpixel_offset: None,
             initial_orientation: DeviceOrientation::Portrait,
             scale_hack: NonZeroU32::new(1).unwrap(),
@@ -224,6 +227,8 @@ impl Options {
             }
             // Options are parsed only a few times, so leaking is fine.
             self.device_model = Some(Box::leak(value.to_string().into_boxed_str()));
+        } else if arg == "--retina" {
+            self.retina = true;
         } else if let Some(value) = arg.strip_prefix("--subpixel-offset=") {
             let offset: f32 = value
                 .parse()

@@ -388,6 +388,7 @@ const UNSUPPORTED_TEX_PARAMS: ParamTable =
     ParamTable(&[(gl21::TEXTURE_MAX_LEVEL, ParamType::Float, 1)]);
 
 pub struct GLES1OnGL2State {
+    programmable: bool,
     pointer_is_fixed_point: [bool; ARRAYS.len()],
     fixed_point_texture_units: HashSet<GLenum>,
     fixed_point_translation_buffers: [Vec<GLfloat>; ARRAYS.len()],
@@ -395,8 +396,32 @@ pub struct GLES1OnGL2State {
 
 pub struct GLES1OnGL2Context {
     gl_ctx: GLContext,
+    offscreen_window: Option<sdl2::video::Window>,
     state: GLES1OnGL2State,
     is_loaded: bool,
+}
+impl GLES1OnGL2Context {
+    /// ES 2 renders to FBOs; give it a separate drawable so multiple Cocoa
+    /// contexts do not compete for the presentation window's surface.
+    pub fn new_programmable(window: &mut Window) -> Result<Self, String> {
+        let (gl_ctx, offscreen_window) = if cfg!(target_os = "android") {
+            (window.create_gl_context(GLVersion::GLES20)?, None)
+        } else {
+            let (ctx, drawable) = window.create_offscreen_gl_context()?;
+            (ctx, Some(drawable))
+        };
+        Ok(Self {
+            offscreen_window,
+            gl_ctx,
+            state: GLES1OnGL2State {
+                programmable: true,
+                pointer_is_fixed_point: [false; ARRAYS.len()],
+                fixed_point_texture_units: HashSet::new(),
+                fixed_point_translation_buffers: std::array::from_fn(|_| Vec::new()),
+            },
+            is_loaded: false,
+        })
+    }
 }
 impl GLESContext for GLES1OnGL2Context {
     fn description() -> &'static str {
@@ -405,8 +430,10 @@ impl GLESContext for GLES1OnGL2Context {
 
     fn new(window: &mut Window) -> Result<Self, String> {
         Ok(Self {
+            offscreen_window: None,
             gl_ctx: window.create_gl_context(GLVersion::GL21Compat)?,
             state: GLES1OnGL2State {
+                programmable: false,
                 pointer_is_fixed_point: [false; ARRAYS.len()],
                 fixed_point_texture_units: HashSet::new(),
                 fixed_point_translation_buffers: [Vec::new(), Vec::new(), Vec::new(), Vec::new()],
@@ -426,10 +453,24 @@ impl GLESContext for GLES1OnGL2Context {
         }
 
         unsafe {
-            window.make_gl_context_current(&self.gl_ctx);
+            if let Some(offscreen) = &self.offscreen_window {
+                self.gl_ctx.make_current_in(offscreen);
+            } else {
+                window.make_gl_context_current(&self.gl_ctx);
+            }
         }
         if !self.is_loaded || super::FUNCTION_POINTERS_ARE_PER_CONTEXT {
-            gl21::load_with(|s| window.gl_get_proc_address(s));
+            gl21::load_with(|name| {
+                let native_name = if cfg!(target_os = "android") && self.state.programmable {
+                    name.strip_suffix("EXT").unwrap_or(name)
+                } else {
+                    name
+                };
+                window.gl_get_proc_address(native_name)
+            });
+            if cfg!(target_os = "android") && self.state.programmable {
+                touchHLE_gl_bindings::gles20::load_with(|name| window.gl_get_proc_address(name));
+            }
             self.is_loaded = true;
         }
 
@@ -671,6 +712,10 @@ impl GLES1OnGL2<'_> {
 }
 
 impl GLES for GLES1OnGL2<'_> {
+    fn programmable(&mut self) -> Option<&mut dyn super::programmable::Programmable> {
+        self.state.programmable.then_some(self)
+    }
+
     unsafe fn driver_description(&self) -> String {
         let version = CStr::from_ptr(gl21::GetString(gl21::VERSION) as *const _);
         let vendor = CStr::from_ptr(gl21::GetString(gl21::VENDOR) as *const _);
@@ -750,6 +795,9 @@ impl GLES for GLES1OnGL2<'_> {
         gl21::DisableClientState(array);
     }
     unsafe fn GetBooleanv(&mut self, pname: GLenum, params: *mut GLboolean) {
+        if self.state.programmable {
+            return gl21::GetBooleanv(pname, params);
+        }
         let (type_, count) = GET_PARAMS.get_type_info(pname);
         match type_ {
             ParamType::Boolean => {
@@ -772,6 +820,9 @@ impl GLES for GLES1OnGL2<'_> {
     }
     // TODO: GetFixedv
     unsafe fn GetFloatv(&mut self, pname: GLenum, params: *mut GLfloat) {
+        if self.state.programmable {
+            return gl21::GetFloatv(pname, params);
+        }
         let (type_, _count) = GET_PARAMS.get_type_info(pname);
         match type_ {
             // OpenGL converts integer and boolean values itself. (This is
@@ -783,6 +834,25 @@ impl GLES for GLES1OnGL2<'_> {
         }
     }
     unsafe fn GetIntegerv(&mut self, pname: GLenum, params: *mut GLint) {
+        if self.state.programmable {
+            if cfg!(target_os = "android") {
+                return gl21::GetIntegerv(pname, params);
+            }
+            let mapping = match pname {
+                0x8dfb => Some((gl21::MAX_VERTEX_UNIFORM_COMPONENTS, 4)),
+                0x8dfd => Some((gl21::MAX_FRAGMENT_UNIFORM_COMPONENTS, 4)),
+                0x8dfc => Some((gl21::MAX_VARYING_FLOATS, 4)),
+                _ => None,
+            };
+            if let Some((name, divisor)) = mapping {
+                gl21::GetIntegerv(name, params);
+                *params /= divisor;
+            } else {
+                gl21::GetIntegerv(pname, params);
+            }
+            return;
+        }
+
         let (type_, _count) = GET_PARAMS.get_type_info(pname);
         // TODO: type conversion
         let allowed_float = type_ == ParamType::Float && pname == gl21::POINT_SIZE_MAX;
@@ -965,7 +1035,11 @@ impl GLES for GLES1OnGL2<'_> {
         gl21::FrontFace(mode);
     }
     unsafe fn DepthRangef(&mut self, near: GLclampf, far: GLclampf) {
-        gl21::DepthRange(near.into(), far.into())
+        if cfg!(target_os = "android") && self.state.programmable {
+            touchHLE_gl_bindings::gles20::DepthRangef(near, far)
+        } else {
+            gl21::DepthRange(near.into(), far.into())
+        }
     }
     unsafe fn DepthRangex(&mut self, near: GLclampx, far: GLclampx) {
         gl21::DepthRange(fixed_to_float(near).into(), fixed_to_float(far).into())
@@ -1366,7 +1440,11 @@ impl GLES for GLES1OnGL2<'_> {
             gl21::TRIANGLES
         ]
         .contains(&mode));
-        assert!(type_ == gl21::UNSIGNED_BYTE || type_ == gl21::UNSIGNED_SHORT);
+        assert!(
+            type_ == gl21::UNSIGNED_BYTE
+                || type_ == gl21::UNSIGNED_SHORT
+                || (self.state.programmable && type_ == gl21::UNSIGNED_INT)
+        );
 
         let fixed_point_arrays_state_backup = if self
             .state
@@ -1474,7 +1552,11 @@ impl GLES for GLES1OnGL2<'_> {
         )
     }
     unsafe fn ClearDepthf(&mut self, depth: GLclampf) {
-        gl21::ClearDepth(depth.into())
+        if cfg!(target_os = "android") && self.state.programmable {
+            touchHLE_gl_bindings::gles20::ClearDepthf(depth)
+        } else {
+            gl21::ClearDepth(depth.into())
+        }
     }
     unsafe fn ClearDepthx(&mut self, depth: GLclampx) {
         self.ClearDepthf(fixed_to_float(depth))
@@ -2156,5 +2238,150 @@ impl GLES for GLES1OnGL2<'_> {
     }
     unsafe fn UnmapBufferOES(&mut self, target: GLenum) -> GLboolean {
         gl21::UnmapBuffer(target)
+    }
+}
+
+impl super::programmable::Programmable for GLES1OnGL2<'_> {
+    unsafe fn ShaderSource(&mut self, shader: GLuint, source: &[u8]) {
+        let source = if cfg!(target_os = "android") {
+            source.to_vec()
+        } else {
+            super::programmable::desktop_shader_source(source)
+        };
+        let pointer = source.as_ptr().cast();
+        let length = i32::try_from(source.len()).unwrap();
+        gl21::ShaderSource(shader, 1, &pointer, &length);
+    }
+    unsafe fn CreateShader(&mut self, type_: GLenum) -> GLuint {
+        gl21::CreateShader(type_)
+    }
+    unsafe fn CreateProgram(&mut self) -> GLuint {
+        gl21::CreateProgram()
+    }
+    unsafe fn CompileShader(&mut self, shader: GLuint) {
+        gl21::CompileShader(shader)
+    }
+    unsafe fn AttachShader(&mut self, program: GLuint, shader: GLuint) {
+        gl21::AttachShader(program, shader)
+    }
+    unsafe fn BindAttribLocation(
+        &mut self,
+        program: GLuint,
+        index: GLuint,
+        name: *const std::ffi::c_char,
+    ) {
+        gl21::BindAttribLocation(program, index, name)
+    }
+    unsafe fn LinkProgram(&mut self, program: GLuint) {
+        gl21::LinkProgram(program)
+    }
+    unsafe fn UseProgram(&mut self, program: GLuint) {
+        gl21::UseProgram(program)
+    }
+    unsafe fn DeleteShader(&mut self, shader: GLuint) {
+        gl21::DeleteShader(shader)
+    }
+    unsafe fn DeleteProgram(&mut self, program: GLuint) {
+        gl21::DeleteProgram(program)
+    }
+    unsafe fn GetShaderiv(&mut self, shader: GLuint, pname: GLenum, params: *mut GLint) {
+        gl21::GetShaderiv(shader, pname, params)
+    }
+    unsafe fn GetProgramiv(&mut self, program: GLuint, pname: GLenum, params: *mut GLint) {
+        gl21::GetProgramiv(program, pname, params)
+    }
+    unsafe fn GetShaderInfoLog(
+        &mut self,
+        shader: GLuint,
+        capacity: GLsizei,
+        length: *mut GLsizei,
+        log: *mut std::ffi::c_char,
+    ) {
+        gl21::GetShaderInfoLog(shader, capacity, length, log)
+    }
+    unsafe fn GetProgramInfoLog(
+        &mut self,
+        program: GLuint,
+        capacity: GLsizei,
+        length: *mut GLsizei,
+        log: *mut std::ffi::c_char,
+    ) {
+        gl21::GetProgramInfoLog(program, capacity, length, log)
+    }
+    unsafe fn GetUniformLocation(
+        &mut self,
+        program: GLuint,
+        name: *const std::ffi::c_char,
+    ) -> GLint {
+        gl21::GetUniformLocation(program, name)
+    }
+    unsafe fn GetAttribLocation(
+        &mut self,
+        program: GLuint,
+        name: *const std::ffi::c_char,
+    ) -> GLint {
+        gl21::GetAttribLocation(program, name)
+    }
+    unsafe fn EnableVertexAttribArray(&mut self, index: GLuint) {
+        gl21::EnableVertexAttribArray(index)
+    }
+    unsafe fn DisableVertexAttribArray(&mut self, index: GLuint) {
+        gl21::DisableVertexAttribArray(index)
+    }
+    unsafe fn VertexAttribPointer(
+        &mut self,
+        index: GLuint,
+        size: GLint,
+        type_: GLenum,
+        normalized: GLboolean,
+        stride: GLsizei,
+        pointer: *const GLvoid,
+    ) {
+        gl21::VertexAttribPointer(index, size, type_, normalized, stride, pointer)
+    }
+    unsafe fn VertexAttrib4fv(&mut self, index: GLuint, value: *const GLfloat) {
+        gl21::VertexAttrib4fv(index, value)
+    }
+    unsafe fn Uniform1i(&mut self, location: GLint, value: GLint) {
+        gl21::Uniform1i(location, value)
+    }
+    unsafe fn Uniform1fv(&mut self, location: GLint, count: GLsizei, value: *const GLfloat) {
+        gl21::Uniform1fv(location, count, value)
+    }
+    unsafe fn Uniform2fv(&mut self, location: GLint, count: GLsizei, value: *const GLfloat) {
+        gl21::Uniform2fv(location, count, value)
+    }
+    unsafe fn Uniform3fv(&mut self, location: GLint, count: GLsizei, value: *const GLfloat) {
+        gl21::Uniform3fv(location, count, value)
+    }
+    unsafe fn Uniform4fv(&mut self, location: GLint, count: GLsizei, value: *const GLfloat) {
+        gl21::Uniform4fv(location, count, value)
+    }
+    unsafe fn UniformMatrix2fv(
+        &mut self,
+        location: GLint,
+        count: GLsizei,
+        transpose: GLboolean,
+        value: *const GLfloat,
+    ) {
+        gl21::UniformMatrix2fv(location, count, transpose, value)
+    }
+    unsafe fn UniformMatrix3fv(
+        &mut self,
+        location: GLint,
+        count: GLsizei,
+        transpose: GLboolean,
+        value: *const GLfloat,
+    ) {
+        gl21::UniformMatrix3fv(location, count, transpose, value)
+    }
+    unsafe fn UniformMatrix4fv(
+        &mut self,
+        location: GLint,
+        count: GLsizei,
+        transpose: GLboolean,
+        value: *const GLfloat,
+    ) {
+        gl21::UniformMatrix4fv(location, count, transpose, value)
     }
 }

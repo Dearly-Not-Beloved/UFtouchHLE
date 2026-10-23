@@ -88,6 +88,12 @@ Device options:
         features touchHLE doesn't support (like OpenGL ES 2.0) on newer ones,
         so only change this for apps that need it.
 
+    --retina
+        Tells the app the screen is a Retina display (twice the resolution in
+        each direction, like the iPhone 4's). Apps that support it can then
+        render at the higher resolution. Use it together with a
+        --device-model= that has a Retina display, e.g. iPhone4,1.
+
 Game controller options:
     --deadzone=...
         Configures the size of the \"dead zone\" for analog stick inputs.

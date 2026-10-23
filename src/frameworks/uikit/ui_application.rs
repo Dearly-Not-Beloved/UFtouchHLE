@@ -292,6 +292,10 @@ pub(super) fn UIApplicationMain(
         };
         let ui_application: id = msg![env; principal_class new];
 
+        if env.bundle.status_bar_hidden() {
+            let _: () = msg![env; ui_application setStatusBarHidden:true];
+        }
+
         let device_family = env.options.device_family;
         if let Some(main_nib_filename) = env.bundle.main_nib_filename(device_family) {
             let ns_main_nib_filename = from_rust_string(env, main_nib_filename.to_string());
@@ -312,10 +316,6 @@ pub(super) fn UIApplicationMain(
                     env.bundle.main_nib_filename(device_family)
                 );
             }
-        }
-
-        if env.bundle.status_bar_hidden() {
-            let _: () = msg![env; ui_application setStatusBarHidden:true];
         }
 
         let delegate: id = msg![env; ui_application delegate];
@@ -535,6 +535,17 @@ pub(super) fn exit(env: &mut Environment) {
     };
 
     crate::objc::TERMINATING.store(true, std::sync::atomic::Ordering::Relaxed);
+    // On iPhone OS 4 and later, apps are normally suspended rather than told
+    // they will terminate, so some apps' applicationWillTerminate: never
+    // finishes: e.g. Grand Theft Auto: Vice City waits for its rendering
+    // thread, which waits for the main thread. Don't let that keep touchHLE
+    // open. (On Android, MainActivity does the same.)
+    #[cfg(not(target_os = "android"))]
+    std::thread::spawn(|| {
+        std::thread::sleep(std::time::Duration::from_secs(5));
+        echo!("The app didn't finish quitting within 5 seconds, quitting anyway.");
+        std::process::exit(0);
+    });
     {
         let pool: id = msg_class![env; NSAutoreleasePool new];
         let delegate: id = msg![env; ui_application delegate];

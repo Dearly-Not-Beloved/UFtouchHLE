@@ -323,6 +323,8 @@ pub enum BatteryState {
 pub enum GLVersion {
     /// OpenGL ES 1.1
     GLES11,
+    /// OpenGL ES 2.0
+    GLES20,
     /// OpenGL 2.1 compatibility profile
     GL21Compat,
 }
@@ -330,6 +332,12 @@ pub enum GLVersion {
 pub struct GLContext(sdl2::video::GLContext);
 
 impl GLContext {
+    pub unsafe fn make_current_in(&self, window: &sdl2::video::Window) {
+        window
+            .gl_make_current(&self.0)
+            .expect("Could not activate offscreen context");
+    }
+
     pub fn is_current(&self) -> bool {
         self.0.is_current()
     }
@@ -1413,11 +1421,30 @@ impl Window {
         (x, y, pressed)
     }
 
+    pub fn create_offscreen_gl_context(&self) -> Result<(GLContext, sdl2::video::Window), String> {
+        let attr = self.video_ctx.gl_attr();
+        attr.set_context_version(2, 1);
+        attr.set_context_profile(sdl2::video::GLProfile::Compatibility);
+        let window = self
+            .video_ctx
+            .window("touchHLE rendering", 1, 1)
+            .hidden()
+            .opengl()
+            .build()
+            .map_err(|e| e.to_string())?;
+        let context = window.gl_create_context()?;
+        Ok((GLContext(context), window))
+    }
+
     pub fn create_gl_context(&self, version: GLVersion) -> Result<GLContext, String> {
         let attr = self.video_ctx.gl_attr();
         match version {
             GLVersion::GLES11 => {
                 attr.set_context_version(1, 1);
+                attr.set_context_profile(sdl2::video::GLProfile::GLES);
+            }
+            GLVersion::GLES20 => {
+                attr.set_context_version(2, 0);
                 attr.set_context_profile(sdl2::video::GLProfile::GLES);
             }
             GLVersion::GL21Compat => {

@@ -22,7 +22,9 @@ use crate::frameworks::uikit::ui_device::{
     UIDeviceOrientationLandscapeLeft, UIDeviceOrientationLandscapeRight,
     UIDeviceOrientationPortraitUpsideDown,
 };
-use crate::objc::{id, msg, msg_class, msg_super, nil, objc_classes, ClassExports};
+use crate::objc::{
+    id, msg, msg_class, msg_super, nil, objc_classes, release, retain, ClassExports,
+};
 
 #[derive(Default)]
 pub struct State {
@@ -33,6 +35,7 @@ pub struct State {
     /// The most recent window which received `makeKeyAndVisible` message.
     /// Non-retaining!
     pub key_window: Option<id>,
+    root_view_controllers: std::collections::HashMap<id, id>,
 }
 
 pub const CLASSES: ClassExports = objc_classes! {
@@ -64,6 +67,11 @@ pub const CLASSES: ClassExports = objc_classes! {
 // NSCoding implementation
 - (id)initWithCoder:(id)coder {
     let this = msg_super![env; this initWithCoder:coder];
+    // A main window archived by Interface Builder may use another device's
+    // dimensions. Fit it to the emulated screen before mounting its controller.
+    let screen: id = msg_class![env; UIScreen mainScreen];
+    let bounds: CGRect = msg![env; screen bounds];
+    () = msg![env; this setFrame:bounds];
     // Undocumented: windows seem to be hidden by default on iOS, unlike views.
     // Super call to bypass the overriden setter on this class, which would post
     // a notification.
@@ -81,6 +89,9 @@ pub const CLASSES: ClassExports = objc_classes! {
 }
 
 - (())dealloc {
+    if let Some(controller) = env.framework_state.uikit.ui_view.ui_window.root_view_controllers.remove(&this) {
+        release(env, controller);
+    }
     if let Some(key_window) = env.framework_state.uikit.ui_view.ui_window.key_window {
         if key_window == this {
             env.framework_state.uikit.ui_view.ui_window.key_window = None;
@@ -128,6 +139,29 @@ pub const CLASSES: ClassExports = objc_classes! {
 
     // TODO: post UIWindowDidBecomeVisibleNotification
     () = msg![env; this setHidden:false];
+}
+
+- (id)rootViewController {
+    env.framework_state.uikit.ui_view.ui_window.root_view_controllers.get(&this).copied().unwrap_or(nil)
+}
+
+- (())setRootViewController:(id)controller {
+    let old: id = msg![env; this rootViewController];
+    if old == controller { return; }
+    retain(env, controller);
+    if old != nil {
+        let view: id = msg![env; old view];
+        () = msg![env; view removeFromSuperview];
+    }
+    env.framework_state.uikit.ui_view.ui_window.root_view_controllers.remove(&this);
+    release(env, old);
+    if controller != nil {
+        env.framework_state.uikit.ui_view.ui_window.root_view_controllers.insert(this, controller);
+        let view: id = msg![env; controller view];
+        let bounds: CGRect = msg![env; this bounds];
+        () = msg![env; view setFrame:bounds];
+        () = msg![env; this addSubview:view];
+    }
 }
 
 // We only model the single main screen

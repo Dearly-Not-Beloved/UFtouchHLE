@@ -6677,6 +6677,154 @@ cleanup:
   return result;
 }
 
+int test_scanf_leading_zero() {
+  unsigned int value = 99;
+  int wheel = -1;
+  float scale = -1;
+  if (sscanf("0 254 0.8", "%x %d %f", &value, &wheel, &scale) != 3 ||
+      value != 0 || wheel != 254 || fabsf(scale - 0.8f) > 0.0001f)
+    return -1;
+  if (sscanf("0Z", "%1x", &value) != 1 || value != 0)
+    return -2;
+  int next = -1;
+  if (sscanf("0 17", "%i %d", &wheel, &next) != 2 || wheel != 0 || next != 17)
+    return -3;
+  FILE *file = tmpfile();
+  if (file == NULL)
+    return -4;
+  fputs("0 254 0.8", file);
+  rewind(file);
+  int result = 0;
+  if (fscanf(file, "%x %d %f", &value, &wheel, &scale) != 3 || value != 0 ||
+      wheel != 254 || fabsf(scale - 0.8f) > 0.0001f)
+    result = -5;
+  fclose(file);
+  return result;
+}
+
+int test_scanf_characters() {
+  char buffer[3] = {'?', '?', '!'};
+  if (sscanf(" \nX", "%2c", buffer) != 1 || buffer[0] != ' ' ||
+      buffer[1] != '\n' || buffer[2] != '!')
+    return -1;
+  buffer[0] = '?';
+  if (sscanf("", "%c", buffer) != EOF || buffer[0] != '?')
+    return -2;
+  if (sscanf("Z", "%c", buffer) != 1 || buffer[0] != 'Z' || buffer[2] != '!')
+    return -3;
+  FILE *file = tmpfile();
+  if (file == NULL)
+    return -4;
+  const char bytes[2] = {0, 'Z'};
+  fwrite(bytes, 1, 2, file);
+  rewind(file);
+  int result = 0;
+  if (fscanf(file, "%2c", buffer) != 1 || buffer[0] != 0 || buffer[1] != 'Z' ||
+      buffer[2] != '!')
+    result = -5;
+  fclose(file);
+  return result;
+}
+
+int test_sscanf_string_input_end() {
+  char first[16] = "unchanged";
+  char second[16] = "untouched";
+  int value = 0;
+  if (sscanf("", "%s", first) != EOF || strcmp(first, "unchanged") != 0)
+    return -1;
+  if (sscanf(" \t\n", "%s", first) != EOF || strcmp(first, "unchanged") != 0)
+    return -2;
+  if (sscanf("42", "%d %s", &value, first) != 1 || value != 42 ||
+      strcmp(first, "unchanged") != 0)
+    return -3;
+  if (sscanf("ab", "%2s %s", first, second) != 1 || strcmp(first, "ab") != 0 ||
+      strcmp(second, "untouched") != 0)
+    return -4;
+  return 0;
+}
+
+int test_fread_partial_eof() {
+  FILE *file = tmpfile();
+  if (file == NULL)
+    return -1;
+  const char contents[] = "abcde";
+  char buffer[8];
+  memset(buffer, 0x55, sizeof(buffer));
+  int result = 0;
+  if (fwrite(contents, 1, 5, file) != 5 || fseek(file, 0, SEEK_SET) != 0) {
+    result = -2;
+  } else if (fread(buffer, 2, 4, file) != 2 || !feof(file) || ferror(file) ||
+             memcmp(buffer, contents, 5) != 0 || buffer[5] != 0x55) {
+    result = -3;
+  } else if (fseek(file, 0, SEEK_SET) != 0 || feof(file) ||
+             fread(buffer, 1, 5, file) != 5 || feof(file) ||
+             fread(buffer, 1, 1, file) != 0 || !feof(file)) {
+    result = -4;
+  }
+  fclose(file);
+  return result;
+}
+
+// Exercise the compiler's 32/64-bit Blocks ABI without requiring -fblocks.
+extern void *_NSConcreteStackBlock[];
+extern void *_Block_copy(const void *);
+extern void _Block_release(const void *);
+
+struct TestBlock;
+struct TestBlockDescriptor {
+  unsigned long reserved;
+  unsigned long size;
+  void (*copy)(void *, const void *);
+  void (*dispose)(const void *);
+};
+struct TestBlock {
+  void *isa;
+  int flags;
+  int reserved;
+  void (*invoke)(struct TestBlock *);
+  const struct TestBlockDescriptor *descriptor;
+  int captured;
+  int *output;
+};
+static int block_copy_calls;
+static int block_dispose_calls;
+static void test_block_copy_helper(void *dest, const void *src) {
+  block_copy_calls++;
+}
+static void test_block_dispose_helper(const void *block) {
+  block_dispose_calls++;
+}
+static void test_block_invoke(struct TestBlock *block) {
+  *block->output = block->captured;
+}
+
+int test_Block_copy_lifetime() {
+  static const struct TestBlockDescriptor descriptor = {
+      0, sizeof(struct TestBlock), test_block_copy_helper,
+      test_block_dispose_helper};
+  int output = 0;
+  struct TestBlock local = {
+      _NSConcreteStackBlock, 1 << 25, 0,      test_block_invoke,
+      &descriptor,           71,      &output};
+  block_copy_calls = 0;
+  block_dispose_calls = 0;
+  struct TestBlock *copy = _Block_copy(&local);
+  if (copy == &local || block_copy_calls != 1)
+    return -1;
+  local.captured = -1;
+  struct TestBlock *second = _Block_copy(copy);
+  if (second != copy || block_copy_calls != 1)
+    return -2;
+  _Block_release(copy);
+  if (block_dispose_calls != 0)
+    return -3;
+  second->invoke(second);
+  if (output != 71)
+    return -4;
+  _Block_release(second);
+  return block_dispose_calls == 1 ? 0 : -5;
+}
+
 // clang-format off
 #define FUNC_DEF(func)                                                         \
   { &func, #func }
@@ -6792,6 +6940,11 @@ struct {
     FUNC_DEF(test_NSNotificationCenter_addObserver_nilName_withObject),
     FUNC_DEF(test_NSNotificationCenter_addObserver_nilName_removeObserver),
     FUNC_DEF(test_NSMutableArray_removeObjectsInArray_otherArray),
+    FUNC_DEF(test_scanf_leading_zero),
+    FUNC_DEF(test_scanf_characters),
+    FUNC_DEF(test_sscanf_string_input_end),
+    FUNC_DEF(test_fread_partial_eof),
+    FUNC_DEF(test_Block_copy_lifetime),
     FUNC_DEF(test_malloc_zone_basic),
     FUNC_DEF(test_malloc_zone_struct_dispatch),
     FUNC_DEF(test_fcvt),

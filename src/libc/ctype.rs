@@ -66,7 +66,7 @@ struct RuneLocale {
 }
 unsafe impl SafeRead for RuneLocale {}
 
-fn get_default_rune_locale(env: &mut Environment) -> ConstVoidPtr {
+fn default_rune_locale() -> RuneLocale {
     let mut runetype = [0u32; LOOKUP_TABLE_SIZE];
     let mut map_lower = [0 as darwin_rune_t; LOOKUP_TABLE_SIZE];
     let mut map_upper = [0 as darwin_rune_t; LOOKUP_TABLE_SIZE];
@@ -75,7 +75,7 @@ fn get_default_rune_locale(env: &mut Environment) -> ConstVoidPtr {
         let c: u8 = idx.try_into().unwrap();
 
         let as_lower = c.to_ascii_lowercase();
-        let as_upper = c.to_ascii_lowercase();
+        let as_upper = c.to_ascii_uppercase();
 
         let mut as_runetype = 0u32;
         if c.is_ascii_alphabetic() {
@@ -126,27 +126,49 @@ fn get_default_rune_locale(env: &mut Environment) -> ConstVoidPtr {
     let mut encoding = [0u8; 32];
     encoding[0..4].copy_from_slice(b"NONE"); // this is the real value!
 
+    RuneLocale {
+        magic: *b"RuneMagA",
+        encoding,
+        getrune: GuestFunction::null_ptr(), // TODO
+        putrune: GuestFunction::null_ptr(), // TODO
+        invalid_rune: -1,                   // probably not correct
+        runetype,
+        map_lower,
+        map_upper,
+        variable: Ptr::null(),
+        variable_len: 0,
+        ncharclasses: 0,
+        charclass: Ptr::null(),
+    }
+}
+
+fn get_default_rune_locale(env: &mut Environment) -> ConstVoidPtr {
     env.mem
-        .alloc_and_write(RuneLocale {
-            magic: *b"RuneMagA",
-            encoding,
-
-            getrune: GuestFunction::null_ptr(), // TODO
-            putrune: GuestFunction::null_ptr(), // TODO
-            invalid_rune: -1,                   // probably not correct
-
-            runetype,
-            map_lower,
-            map_upper,
-
-            variable: Ptr::null(),
-            variable_len: 0,
-
-            ncharclasses: 0,
-            charclass: Ptr::null(),
-        })
+        .alloc_and_write(default_rune_locale())
         .cast()
         .cast_const()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::default_rune_locale;
+
+    #[test]
+    fn inlined_case_conversion_matches_function_calls() {
+        let locale = default_rune_locale();
+        for c in 0u8..=255 {
+            assert_eq!(locale.map_lower[c as usize] as u8, c.to_ascii_lowercase());
+            assert_eq!(locale.map_upper[c as usize] as u8, c.to_ascii_uppercase());
+            assert_eq!(
+                locale.runetype[c as usize] & 0x1000 != 0,
+                c.is_ascii_lowercase()
+            );
+            assert_eq!(
+                locale.runetype[c as usize] & 0x8000 != 0,
+                c.is_ascii_uppercase()
+            );
+        }
+    }
 }
 
 pub const CONSTANTS: ConstantExports = &[(

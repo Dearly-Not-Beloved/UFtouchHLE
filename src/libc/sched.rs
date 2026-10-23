@@ -16,4 +16,19 @@ fn sched_yield(env: &mut Environment) -> i32 {
     0 // success
 }
 
-pub const FUNCTIONS: FunctionExports = &[export_c_func!(sched_yield())];
+// Darwin reports the same priority range for each scheduling policy. The
+// scheduler currently ignores priorities, but apps use these bounds to
+// calculate the values passed to pthread_setschedparam.
+fn sched_get_priority_min(_env: &mut Environment, _policy: i32) -> i32 {
+    15
+}
+
+fn sched_get_priority_max(_env: &mut Environment, _policy: i32) -> i32 {
+    47
+}
+
+pub const FUNCTIONS: FunctionExports = &[
+    export_c_func!(sched_yield()),
+    export_c_func!(sched_get_priority_min(_)),
+    export_c_func!(sched_get_priority_max(_)),
+];

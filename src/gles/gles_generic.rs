@@ -71,6 +71,11 @@ pub trait GLESContext {
 #[allow(clippy::upper_case_acronyms)]
 #[allow(clippy::too_many_arguments)] // not our fault :(
 pub trait GLES {
+    /// ES 2 operations, if this is a programmable context.
+    fn programmable(&mut self) -> Option<&mut dyn super::programmable::Programmable> {
+        None
+    }
+
     /// Get some string describing the underlying driver. For OpenGL this is
     /// `GL_VENDOR`, `GL_RENDERER` and `GL_VERSION`.
     unsafe fn driver_description(&self) -> String;

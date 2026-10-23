@@ -218,14 +218,21 @@ fn fread(
         0
     };
     let FILE { fd } = env.mem.read(file_ptr);
-    match posix_io::read(env, fd, buffer, total_size) {
-        // TODO: ferror() support.
-        -1 => already_read / item_size,
-        bytes_read => {
-            let bytes_read: GuestUSize = bytes_read.try_into().unwrap();
-            (bytes_read + already_read) / item_size
+    // Unlike read(), fread() fills the request unless it reaches EOF or an
+    // error. Probe again after a short read so feof() is set even when the
+    // final read supplied some bytes (apps distinguish EOF from I/O errors).
+    let mut bytes_read = already_read;
+    while total_size != 0 {
+        let count = posix_io::read(env, fd, buffer, total_size);
+        if count <= 0 {
+            break;
         }
+        let count: GuestUSize = count.try_into().unwrap();
+        bytes_read += count;
+        total_size -= count;
+        buffer = (buffer.cast::<u8>() + count).cast();
     }
+    bytes_read / item_size
 }
 
 fn fgetc(env: &mut Environment, file_ptr: MutPtr<FILE>) -> i32 {

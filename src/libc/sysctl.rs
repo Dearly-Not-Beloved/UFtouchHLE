@@ -82,11 +82,16 @@ const DEVICE_MODELS: &[(&str, &str)] = &[
     ("iPhone1,2", "N82AP"),
     ("iPhone2,1", "N88AP"),
     ("iPhone3,1", "N90AP"),
+    ("iPhone4,1", "N94AP"),
+    ("iPhone5,1", "N41AP"),
     ("iPod1,1", "N45AP"),
     ("iPod2,1", "N72AP"),
     ("iPod3,1", "N18AP"),
     ("iPod4,1", "N81AP"),
+    ("iPod5,1", "N78AP"),
     ("iPad1,1", "K48AP"),
+    ("iPad2,1", "K93AP"),
+    ("iPad3,1", "J1AP"),
 ];
 
 /// The `hw.model` for a `hw.machine` value, if it's known.

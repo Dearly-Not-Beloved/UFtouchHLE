@@ -16,7 +16,7 @@ use touchHLE_gl_bindings::gles11::{
     ARRAY_BUFFER, ELEMENT_ARRAY_BUFFER, ELEMENT_ARRAY_BUFFER_BINDING, WRITE_ONLY_OES,
 };
 
-use crate::dyld::{export_c_func, FunctionExports};
+use crate::dyld::{export_c_func, export_c_func_aliased, FunctionExports};
 use crate::frameworks::opengles::eagl::EAGLContextHostObject;
 use crate::frameworks::opengles::matrix_palette::{self, ArrayPointer};
 use crate::gles::{gles11_raw as gles11, GLES}; // constants only
@@ -61,7 +61,7 @@ const SUPPORTED_COMPRESSED_TEXTURE_FORMATS: &[GLenum] = &[
 ///
 /// In case of missing EAGL context for a current thread,
 /// returns a default value.
-fn with_ctx_and_mem<T, U: Default>(env: &mut Environment, f: T) -> U
+pub(super) fn with_ctx_and_mem<T, U: Default>(env: &mut Environment, f: T) -> U
 where
     T: FnOnce(&mut dyn GLES, &mut Mem) -> U,
 {
@@ -388,6 +388,38 @@ fn glFlush(env: &mut Environment) {
     with_ctx_and_mem(env, |gles, _mem| unsafe { gles.Flush() })
 }
 fn glGetString(env: &mut Environment, name: GLenum) -> ConstPtr<GLubyte> {
+    let programmable = (*env
+        .framework_state
+        .opengles
+        .current_ctx_for_thread(env.current_thread))
+    .is_some_and(|ctx| {
+        env.framework_state
+            .opengles
+            .programmable_contexts
+            .contains(&ctx)
+    });
+    if programmable {
+        if let Some(&cached) = env
+            .framework_state
+            .opengles
+            .programmable_strings_cache
+            .get(&name)
+        {
+            return cached;
+        }
+        let bytes: &[u8] = match name {
+            0x1f02 => b"OpenGL ES 2.0 touchHLE",
+            0x8b8c => b"OpenGL ES GLSL ES 1.00 touchHLE",
+            0x1f03 => b"GL_IMG_texture_compression_pvrtc GL_EXT_texture_filter_anisotropic GL_OES_element_index_uint GL_OES_packed_depth_stencil",
+            _ => b"touchHLE",
+        };
+        let value = env.mem.alloc_and_write_cstr(bytes).cast_const();
+        env.framework_state
+            .opengles
+            .programmable_strings_cache
+            .insert(name, value);
+        return value;
+    }
     let res = if let Some(&str) = env.framework_state.opengles.strings_cache.get(&name) {
         str
     } else {
@@ -906,7 +938,19 @@ fn glMatrixIndexPointerOES(
 }
 
 // Drawing
+fn is_programmable(env: &mut Environment) -> bool {
+    let state = &mut env.framework_state.opengles;
+    state
+        .current_ctx_for_thread(env.current_thread)
+        .is_some_and(|ctx| state.programmable_contexts.contains(&ctx))
+}
+
 fn glDrawArrays(env: &mut Environment, mode: GLenum, first: GLint, count: GLsizei) {
+    if is_programmable(env) {
+        return with_ctx_and_mem(env, |gles, _| unsafe {
+            gles.DrawArrays(mode, first, count)
+        });
+    }
     let offset = env.options.subpixel_offset;
     let skinned = with_palette(env, |env, state| {
         if !state.is_active() {
@@ -938,6 +982,17 @@ fn glDrawElements(
     type_: GLenum,
     indices: ConstVoidPtr,
 ) {
+    if is_programmable(env) {
+        return with_ctx_and_mem(env, |gles, mem| unsafe {
+            let indices = translate_pointer_or_offset_to_host(
+                gles,
+                mem,
+                indices,
+                gles11::ELEMENT_ARRAY_BUFFER_BINDING,
+            );
+            gles.DrawElements(mode, count, type_, indices);
+        });
+    }
     let offset = env.options.subpixel_offset;
     let skinned = with_palette(env, |env, state| {
         if !state.is_active() {
@@ -1354,6 +1409,69 @@ fn image_size_estimate(pixel_count: GuestUSize, format: GLenum, type_: GLenum) -
     // This is approximate, it doesn't account for alignment.
     pixel_count.checked_mul(bytes_per_pixel).unwrap()
 }
+/// Size and format of a texture allocated without data, which the app may
+/// render to (see [scale_render_target]).
+#[derive(Copy, Clone)]
+pub(super) struct RenderTargetTexture {
+    internalformat: GLint,
+    width: GLsizei,
+    height: GLsizei,
+    format: GLenum,
+    type_: GLenum,
+    scaled: bool,
+}
+
+/// Key for [super::State::render_target_textures].
+fn texture_key(env: &mut Environment, texture: GLuint) -> (usize, GLuint) {
+    let ctx = env
+        .framework_state
+        .opengles
+        .current_ctx_for_thread(env.current_thread)
+        .unwrap();
+    (super::eagl::sharegroup_key(env.objc.borrow(ctx)), texture)
+}
+
+/// With the scale hack, viewports are scaled up, which only matches
+/// framebuffers whose storage is scaled up too. Renderbuffers always are, but
+/// textures can't be in general, since the app may upload images to them. So
+/// a texture the app renders to is scaled up once it's attached to a
+/// framebuffer (e.g. Grand Theft Auto: Vice City renders its 3D scene to a
+/// texture; without this, only a corner of the scene would be visible).
+fn scale_render_target(env: &mut Environment, texture: GLuint) {
+    let factor = env.options.scale_hack.get() as GLsizei;
+    let key = texture_key(env, texture);
+    let Some(info) = env
+        .framework_state
+        .opengles
+        .render_target_textures
+        .get_mut(&key)
+    else {
+        return;
+    };
+    if info.scaled {
+        return;
+    }
+    info.scaled = true;
+    let info = *info;
+    with_ctx_and_mem(env, |gles, _mem| unsafe {
+        let mut old_binding = 0;
+        gles.GetIntegerv(gles11::TEXTURE_BINDING_2D, &mut old_binding);
+        gles.BindTexture(gles11::TEXTURE_2D, texture);
+        gles.TexImage2D(
+            gles11::TEXTURE_2D,
+            0,
+            info.internalformat,
+            info.width * factor,
+            info.height * factor,
+            0,
+            info.format,
+            info.type_,
+            std::ptr::null(),
+        );
+        gles.BindTexture(gles11::TEXTURE_2D, old_binding as GLuint);
+    });
+}
+
 fn glTexImage2D(
     env: &mut Environment,
     target: GLenum,
@@ -1366,6 +1484,30 @@ fn glTexImage2D(
     type_: GLenum,
     pixels: ConstVoidPtr,
 ) {
+    if env.options.scale_hack.get() > 1 && target == gles11::TEXTURE_2D && level == 0 {
+        let texture = with_ctx_and_mem(env, |gles, _mem| unsafe {
+            let mut texture = 0;
+            gles.GetIntegerv(gles11::TEXTURE_BINDING_2D, &mut texture);
+            texture as GLuint
+        });
+        let key = texture_key(env, texture);
+        let render_target_textures = &mut env.framework_state.opengles.render_target_textures;
+        if pixels.is_null() {
+            render_target_textures.insert(
+                key,
+                RenderTargetTexture {
+                    internalformat,
+                    width,
+                    height,
+                    format,
+                    type_,
+                    scaled: false,
+                },
+            );
+        } else {
+            render_target_textures.remove(&key);
+        }
+    }
     with_ctx_and_mem(env, |gles, mem| unsafe {
         let pixels = if pixels.is_null() {
             std::ptr::null()
@@ -1605,6 +1747,9 @@ fn glFramebufferTexture2DOES(
     texture: GLuint,
     level: i32,
 ) {
+    if env.options.scale_hack.get() > 1 && textarget == gles11::TEXTURE_2D && level == 0 {
+        scale_render_target(env, texture);
+    }
     with_ctx_and_mem(env, |gles, _mem| unsafe {
         gles.FramebufferTexture2DOES(target, attachment, textarget, texture, level)
     })
@@ -1822,6 +1967,29 @@ unsafe fn restore_fog_state_values(gles: &mut dyn GLES, from_backup: Option<(f32
 }
 
 pub const FUNCTIONS: FunctionExports = &[
+    export_c_func_aliased!("glBindFramebuffer", glBindFramebufferOES(_, _)),
+    export_c_func_aliased!("glBindRenderbuffer", glBindRenderbufferOES(_, _)),
+    export_c_func_aliased!("glCheckFramebufferStatus", glCheckFramebufferStatusOES(_)),
+    export_c_func_aliased!("glDeleteFramebuffers", glDeleteFramebuffersOES(_, _)),
+    export_c_func_aliased!("glDeleteRenderbuffers", glDeleteRenderbuffersOES(_, _)),
+    export_c_func_aliased!(
+        "glFramebufferRenderbuffer",
+        glFramebufferRenderbufferOES(_, _, _, _)
+    ),
+    export_c_func_aliased!(
+        "glFramebufferTexture2D",
+        glFramebufferTexture2DOES(_, _, _, _, _)
+    ),
+    export_c_func_aliased!("glGenFramebuffers", glGenFramebuffersOES(_, _)),
+    export_c_func_aliased!("glGenRenderbuffers", glGenRenderbuffersOES(_, _)),
+    export_c_func_aliased!(
+        "glGetRenderbufferParameteriv",
+        glGetRenderbufferParameterivOES(_, _, _)
+    ),
+    export_c_func_aliased!(
+        "glRenderbufferStorage",
+        glRenderbufferStorageOES(_, _, _, _)
+    ),
     // Generic state manipulation
     export_c_func!(glGetError()),
     export_c_func!(glEnable(_)),

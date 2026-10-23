@@ -380,6 +380,14 @@ fn load_nib_file(env: &mut Environment, ui_nib: id, path: GuestPathBuf) -> Resul
         () = msg![env; conn connect];
     }
 
+    // A detached controller NIB connects its view through an outlet. Size it
+    // before awakeFromNib, where apps can already initialize their renderer.
+    let owner = env.objc.borrow::<UINibHostObject>(ui_nib).file_owner;
+    let controller_class: Class = msg_class![env; UIViewController class];
+    if msg![env; owner isKindOfClass:controller_class] {
+        super::ui_view_controller::size_nib_view(env, owner);
+    }
+
     // Sending awakeFromNib for all objects
     let enumerator: id = msg![env; objects objectEnumerator];
     loop {

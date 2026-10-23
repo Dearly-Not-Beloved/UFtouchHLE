@@ -9,11 +9,25 @@
 mod av_audio_player;
 mod av_audio_session;
 
+use crate::dyld::{ConstantExports, HostConstant};
+
+pub const CONSTANTS: ConstantExports = &[
+    (
+        "_AVLayerVideoGravityResize",
+        HostConstant::NSString("AVLayerVideoGravityResize"),
+    ),
+    ("_AVMediaTypeAudio", HostConstant::NSString("soun")),
+    (
+        "_AVPlayerItemDidPlayToEndTimeNotification",
+        HostConstant::NSString("AVPlayerItemDidPlayToEndTimeNotification"),
+    ),
+];
+
 pub const DYLIB: crate::dyld::HostDylib = crate::dyld::HostDylib {
     path: "/System/Library/Frameworks/AVFoundation.framework/AVFoundation",
     aliases: &[],
     class_exports: &[av_audio_player::CLASSES, av_audio_session::CLASSES],
-    constant_exports: &[av_audio_session::CONSTANTS],
+    constant_exports: &[av_audio_session::CONSTANTS, CONSTANTS],
     function_exports: &[],
 };
 
