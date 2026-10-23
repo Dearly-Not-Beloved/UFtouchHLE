@@ -8,7 +8,8 @@
 //! See [crate::environment::mutex] for the internal implementation.
 #![allow(rustdoc::broken_intra_doc_links)] // https://github.com/rust-lang/rust/issues/83049
 
-use crate::dyld::{export_c_func, FunctionExports};
+use crate::dyld::{export_c_func, export_c_func_aliased, FunctionExports};
+use crate::environment::ThreadBlock;
 use crate::libc::errno::{EBUSY, EINVAL};
 use crate::mem::{ConstPtr, MutPtr, Ptr, SafeRead};
 use crate::{Environment, MutexId, PTHREAD_MUTEX_DEFAULT};
@@ -194,6 +195,23 @@ pub fn pthread_mutex_unlock(env: &mut Environment, mutex: MutPtr<pthread_mutex_t
     env.unlock_mutex(mutex_id).err().unwrap_or(0)
 }
 
+/// `pthread_mutex_unlock` as called by the app. If another thread is waiting
+/// for the mutex, it's given a chance to lock it. Otherwise, a thread that
+/// unlocks and relocks a mutex in a loop would keep it forever, which can't
+/// happen on a real device, where threads run in parallel. (Host code must not
+/// yield like this, e.g. `pthread_cond_wait` must not be interrupted between
+/// unlocking the mutex and waiting.)
+fn pthread_mutex_unlock_from_guest(env: &mut Environment, mutex: MutPtr<pthread_mutex_t>) -> i32 {
+    let res = pthread_mutex_unlock(env, mutex);
+    if res == 0 {
+        let mutex_id = env.mem.read(mutex).mutex_id;
+        if env.mutex_state.mutex_has_waiters(mutex_id) {
+            env.yield_thread(ThreadBlock::NotBlocked);
+        }
+    }
+    res
+}
+
 pub fn pthread_mutex_destroy(env: &mut Environment, mutex: MutPtr<pthread_mutex_t>) -> i32 {
     match check_or_register_mutex(env, mutex) {
         Ok(_) => {}
@@ -220,6 +238,6 @@ pub const FUNCTIONS: FunctionExports = &[
     export_c_func!(pthread_mutex_init(_, _)),
     export_c_func!(pthread_mutex_lock(_)),
     export_c_func!(pthread_mutex_trylock(_)),
-    export_c_func!(pthread_mutex_unlock(_)),
+    export_c_func_aliased!("pthread_mutex_unlock", pthread_mutex_unlock_from_guest(_)),
     export_c_func!(pthread_mutex_destroy(_)),
 ];

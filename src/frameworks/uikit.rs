@@ -9,12 +9,39 @@
 //! likely to use UIKit in very simple and limited ways, so this implementation
 //! will probably take a lot of shortcuts.
 
+use crate::dyld::{ConstantExports, HostConstant};
 use crate::{msg, Environment};
 use std::time::Instant;
+
+/// Constants for classes touchHLE doesn't implement (yet), or that don't fit
+/// elsewhere.
+const CONSTANTS: ConstantExports = &[
+    // `UIBackgroundTaskIdentifier`, which is an `NSUInteger`.
+    (
+        "_UIBackgroundTaskInvalid",
+        HostConstant::Custom(|env| env.mem.alloc_and_write(0u32).cast_void().cast_const()),
+    ),
+    // `CGFloat`
+    (
+        "_UIScrollViewDecelerationRateNormal",
+        HostConstant::Custom(|env| env.mem.alloc_and_write(0.998f32).cast_void().cast_const()),
+    ),
+    (
+        "_UITextViewTextDidChangeNotification",
+        HostConstant::NSString("UITextViewTextDidChangeNotification"),
+    ),
+    (
+        "_UIImagePickerControllerOriginalImage",
+        HostConstant::NSString("UIImagePickerControllerOriginalImage"),
+    ),
+    // From UIKit's additions to `NSAttributedString`.
+    ("_NSFontAttributeName", HostConstant::NSString("NSFont")),
+];
 
 pub mod ui_accelerometer;
 pub mod ui_activity_indicator_view;
 pub mod ui_application;
+pub mod ui_bezier_path;
 pub mod ui_color;
 pub mod ui_device;
 pub mod ui_event;
@@ -39,6 +66,7 @@ pub const DYLIB: crate::dyld::HostDylib = crate::dyld::HostDylib {
         ui_accelerometer::CLASSES,
         ui_activity_indicator_view::CLASSES,
         ui_application::CLASSES,
+        ui_bezier_path::CLASSES,
         ui_color::CLASSES,
         ui_device::CLASSES,
         ui_event::CLASSES,
@@ -71,6 +99,7 @@ pub const DYLIB: crate::dyld::HostDylib = crate::dyld::HostDylib {
         ui_view_controller::ui_navigation_controller::CLASSES,
     ],
     constant_exports: &[
+        CONSTANTS,
         ui_application::CONSTANTS,
         ui_device::CONSTANTS,
         ui_view::ui_control::ui_text_field::CONSTANTS,
@@ -111,6 +140,11 @@ pub fn handle_events(env: &mut Environment) -> Option<Instant> {
         match event {
             Event::Quit => {
                 echo!("User requested quit, exiting.");
+                // Some apps take a while to quit, or never finish (see
+                // ui_application::exit), so close the window right away.
+                if !cfg!(target_os = "android") {
+                    env.on_parent_stack_in_coroutine(|window, _| window.hide());
+                }
                 ui_application::exit(env);
             }
             Event::TouchesDown(..) | Event::TouchesMove(..) | Event::TouchesUp(..) => {
@@ -154,7 +188,19 @@ pub fn handle_events(env: &mut Environment) -> Option<Instant> {
                 let responder = env.framework_state.uikit.ui_responder.first_responder;
                 let class = msg![env; responder class];
                 let ui_text_field_class = env.objc.get_known_class("UITextField", &mut env.mem);
-                if !responder.is_null() && env.objc.class_is_subclass_of(class, ui_text_field_class)
+                let ui_text_view_class = env.objc.get_known_class("UITextView", &mut env.mem);
+                if !responder.is_null() && env.objc.class_is_subclass_of(class, ui_text_view_class)
+                {
+                    use ui_view::ui_scroll_view::ui_text_view;
+                    match text_event {
+                        TextInputEvent::Text(text) => {
+                            ui_text_view::handle_text(env, responder, text)
+                        }
+                        TextInputEvent::Backspace => ui_text_view::handle_backspace(env, responder),
+                        TextInputEvent::Return => ui_text_view::handle_return(env, responder),
+                    }
+                } else if !responder.is_null()
+                    && env.objc.class_is_subclass_of(class, ui_text_field_class)
                 {
                     match text_event {
                         TextInputEvent::Text(text) => {

@@ -203,6 +203,11 @@ pub const CLASSES: ClassExports = objc_classes! {
     autorelease(env, new)
 }
 
+// `unsigned long` is 32-bit on iPhone OS.
++ (id)numberWithUnsignedLong:(u32)value {
+    msg![env; this numberWithUnsignedInt:value]
+}
+
 + (id)numberWithUnsignedInt:(u32)value {
     // TODO: for greater efficiency we could return a static-lifetime value
 

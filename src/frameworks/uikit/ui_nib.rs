@@ -336,6 +336,13 @@ pub const CLASSES: ClassExports = objc_classes! {
 /// depending on the NIB file format).
 /// The unarchiver should later be manually [release]d
 fn load_nib_file(env: &mut Environment, ui_nib: id, path: GuestPathBuf) -> Result<id, ()> {
+    // Since iOS 6, Xcode can compile a nib to a directory, containing
+    // `runtime.nib` (and `objects-*.nib` for older iOS versions).
+    let path = if env.fs.is_dir(&path) {
+        path.join("runtime.nib")
+    } else {
+        path
+    };
     let path = ns_string::from_rust_string(env, path.as_str().to_string());
     assert!(msg![env; path isAbsolutePath]);
     let ns_data: id = msg_class![env; NSData dataWithContentsOfFile:path];

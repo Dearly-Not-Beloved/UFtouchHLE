@@ -52,6 +52,7 @@ pub const CLASSES: ClassExports = objc_classes! {
 // For the time being, that will always be _touchHLE_NSArray.
 @implementation NSArray: NSObject
 
+
 + (id)allocWithZone:(NSZonePtr)zone {
     // NSArray might be subclassed by something which needs allocWithZone:
     // to have the normal behaviour. Unimplemented: call superclass alloc then.
@@ -248,6 +249,35 @@ pub const CLASSES: ClassExports = objc_classes! {
     true
 }
 
+// Modern Objective-C subscripting (array[index])
+- (id)objectAtIndexedSubscript:(NSUInteger)index {
+    msg![env; this objectAtIndex:index]
+}
+
+- (id)arrayByAddingObject:(id)object {
+    let new_array: id = msg![env; this mutableCopy];
+    () = msg![env; new_array addObject:object];
+    let result: id = msg![env; new_array copy];
+    release(env, new_array);
+    autorelease(env, result)
+}
+
+- (())enumerateObjectsUsingBlock:(id)block {
+    retain(env, this);
+    let count: NSUInteger = msg![env; this count];
+    let invoke = crate::libc::dispatch::block_invoke_function(env, block.cast_const().cast());
+    let stop: MutPtr<bool> = env.mem.alloc_and_write(false);
+    for i in 0..count {
+        let object: id = msg![env; this objectAtIndex:i];
+        let () = invoke.call_from_host(env, (block, object, i, stop));
+        if env.mem.read(stop) {
+            break;
+        }
+    }
+    env.mem.free(stop.cast());
+    release(env, this);
+}
+
 @end
 
 // NSMutableArray is an abstract class. A subclass must provide everything
@@ -260,6 +290,7 @@ pub const CLASSES: ClassExports = objc_classes! {
 // Note that it inherits from NSArray, so we must ensure we override any default
 // methods that would be inappropriate for mutability.
 @implementation NSMutableArray: NSArray
+
 
 + (id)allocWithZone:(NSZonePtr)zone {
     // NSArray might be subclassed by something which needs allocWithZone:
@@ -344,6 +375,16 @@ pub const CLASSES: ClassExports = objc_classes! {
     let other: id = msg_class![env; NSArray alloc];
     let other: id = msg![env; other initWithArray:this];
     other
+}
+
+// Modern Objective-C subscripting (array[index] = object)
+- (())setObject:(id)object atIndexedSubscript:(NSUInteger)index {
+    let count: NSUInteger = msg![env; this count];
+    if index == count {
+        () = msg![env; this addObject:object];
+    } else {
+        () = msg![env; this replaceObjectAtIndex:index withObject:object];
+    }
 }
 
 @end

@@ -21,6 +21,7 @@ const NSApplicationDirectory: NSSearchPathDirectory = 1;
 const NSLibraryDirectory: NSSearchPathDirectory = 5;
 const NSDocumentDirectory: NSSearchPathDirectory = 9;
 const NSCachesDirectory: NSSearchPathDirectory = 13;
+const NSApplicationSupportDirectory: NSSearchPathDirectory = 14;
 
 type NSSearchPathDomainMask = NSUInteger;
 const NSUserDomainMask: NSSearchPathDomainMask = 1;
@@ -41,6 +42,10 @@ pub const CONSTANTS: ConstantExports = &[
     (
         "_NSFileSystemFreeSize",
         HostConstant::NSString(NSFileSystemFreeSize),
+    ),
+    (
+        "_NSFileSystemSize",
+        HostConstant::NSString("NSFileSystemSize"),
     ),
     ("_NSFileType", HostConstant::NSString(NSFileType)),
     (
@@ -74,6 +79,11 @@ fn NSSearchPathForDirectoriesInDomains(
         NSDocumentDirectory => env.fs.home_directory().join("Documents"),
         NSLibraryDirectory => env.fs.home_directory().join("Library"),
         NSCachesDirectory => env.fs.home_directory().join("Library").join("Caches"),
+        NSApplicationSupportDirectory => env
+            .fs
+            .home_directory()
+            .join("Library")
+            .join("Application Support"),
         _ => todo!("NSSearchPathDirectory {}", directory),
     };
     let dir = ns_string::from_rust_string(env, String::from(dir));
@@ -411,9 +421,12 @@ pub const CLASSES: ClassExports = objc_classes! {
 - (id)attributesOfFileSystemForPath:(id)_path
                               error:(MutPtr<id>)error {
     // TODO: other attributes
-    log_once!("Warning: NSFileManager attributesOfFileSystemForPath:error: returns only NSFileSystemFreeSize attribute!");
+    log_once!("Warning: NSFileManager attributesOfFileSystemForPath:error: returns only NSFileSystemFreeSize and NSFileSystemSize attributes!");
 
-    assert!(error.is_null()); // TODO
+    // This never fails.
+    if !error.is_null() {
+        env.mem.write(error, nil);
+    }
 
     let dict = msg_class![env; NSMutableDictionary new];
 
@@ -427,6 +440,11 @@ pub const CLASSES: ClassExports = objc_classes! {
 
     let fs_free_size_key = get_static_str(env, NSFileSystemFreeSize);
     () = msg![env; dict setObject:size_num forKey:fs_free_size_key];
+    // Some apps check the free space against the total too.
+    let total_size: u64 = 16 * 1000 * 1000 * 1000;
+    let total_size_num: id = msg_class![env; NSNumber numberWithUnsignedLongLong:total_size];
+    let fs_size_key = get_static_str(env, "NSFileSystemSize");
+    () = msg![env; dict setObject:total_size_num forKey:fs_size_key];
 
     let dict_imm = msg![env; dict copy];
     release(env, dict);

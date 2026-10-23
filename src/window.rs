@@ -907,6 +907,14 @@ impl Window {
                     self.enable_event_polling = false;
                     continue;
                 }
+                // SDL only sends a quit event when the last window is closed,
+                // but ES 2.0 apps also have a hidden window used for rendering
+                // (see create_offscreen_gl_context).
+                E::Window {
+                    win_event: sdl2::event::WindowEvent::Close,
+                    window_id,
+                    ..
+                } if window_id == self.window.id() => Event::Quit,
                 E::Window { win_event, .. } => {
                     use sdl2::event::WindowEvent as WE;
                     match win_event {
@@ -1759,6 +1767,16 @@ impl Window {
             sdl2_sys::SDL_StartTextInput();
         }
     }
+    /// Hide the window, e.g. while the app is quitting, which may take a few
+    /// seconds.
+    pub fn hide(&mut self) {
+        assert!(self.on_main_stack);
+        self.window.hide();
+        // Let the OS process this now: the app might not return to the event
+        // loop for a while.
+        unsafe { sdl2_sys::SDL_PumpEvents() };
+    }
+
     pub fn stop_text_input(&self) {
         assert!(self.on_main_stack);
         unsafe {

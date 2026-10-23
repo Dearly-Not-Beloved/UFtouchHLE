@@ -11,6 +11,7 @@ use crate::gles::gles11_raw::types::*;
 use crate::gles::programmable::Programmable;
 use crate::mem::{ConstPtr, ConstVoidPtr, GuestUSize, Mem, MutPtr};
 use crate::Environment;
+use touchHLE_gl_bindings::gles20;
 
 fn with_program<U: Default>(
     env: &mut Environment,
@@ -33,7 +34,45 @@ fn glCreateProgram(env: &mut Environment) -> GLuint {
 }
 
 fn glCompileShader(env: &mut Environment, shader: GLuint) {
-    with_program(env, |gl, _| unsafe { gl.CompileShader(shader) })
+    with_program(env, |gl, _| unsafe {
+        gl.CompileShader(shader);
+        // Translation or driver differences can make shaders that work on
+        // iPhone OS fail here, so make that easy to see.
+        let mut status = 0;
+        gl.GetShaderiv(shader, gles20::COMPILE_STATUS, &mut status);
+        if status == 0 {
+            let info_log = shader_info_log(gl, shader);
+            log!("Warning: shader {} failed to compile: {}", shader, info_log);
+        }
+    })
+}
+
+unsafe fn shader_info_log(gl: &mut dyn Programmable, shader: GLuint) -> String {
+    let mut buf = vec![0u8; 4096];
+    let mut len = 0;
+    gl.GetShaderInfoLog(
+        shader,
+        buf.len() as GLsizei,
+        &mut len,
+        buf.as_mut_ptr().cast(),
+    );
+    String::from_utf8_lossy(&buf[..len.max(0) as usize])
+        .trim()
+        .to_string()
+}
+
+unsafe fn program_info_log(gl: &mut dyn Programmable, program: GLuint) -> String {
+    let mut buf = vec![0u8; 4096];
+    let mut len = 0;
+    gl.GetProgramInfoLog(
+        program,
+        buf.len() as GLsizei,
+        &mut len,
+        buf.as_mut_ptr().cast(),
+    );
+    String::from_utf8_lossy(&buf[..len.max(0) as usize])
+        .trim()
+        .to_string()
 }
 
 fn glAttachShader(env: &mut Environment, program: GLuint, shader: GLuint) {
@@ -41,7 +80,15 @@ fn glAttachShader(env: &mut Environment, program: GLuint, shader: GLuint) {
 }
 
 fn glLinkProgram(env: &mut Environment, program: GLuint) {
-    with_program(env, |gl, _| unsafe { gl.LinkProgram(program) })
+    with_program(env, |gl, _| unsafe {
+        gl.LinkProgram(program);
+        let mut status = 0;
+        gl.GetProgramiv(program, gles20::LINK_STATUS, &mut status);
+        if status == 0 {
+            let info_log = program_info_log(gl, program);
+            log!("Warning: program {} failed to link: {}", program, info_log);
+        }
+    })
 }
 
 fn glUseProgram(env: &mut Environment, program: GLuint) {
@@ -277,6 +324,86 @@ fn glUniformMatrix4fv(
     })
 }
 
+fn glUniform1iv(env: &mut Environment, location: GLint, count: GLsizei, value: ConstPtr<GLint>) {
+    with_program(env, |gl, mem| unsafe {
+        let size = GuestUSize::try_from(count).unwrap();
+        gl.Uniform1iv(location, count, mem.ptr_at(value, size));
+    })
+}
+
+fn glUniform2iv(env: &mut Environment, location: GLint, count: GLsizei, value: ConstPtr<GLint>) {
+    with_program(env, |gl, mem| unsafe {
+        let size = GuestUSize::try_from(count).unwrap().checked_mul(2).unwrap();
+        gl.Uniform2iv(location, count, mem.ptr_at(value, size));
+    })
+}
+
+fn glUniform3iv(env: &mut Environment, location: GLint, count: GLsizei, value: ConstPtr<GLint>) {
+    with_program(env, |gl, mem| unsafe {
+        let size = GuestUSize::try_from(count).unwrap().checked_mul(3).unwrap();
+        gl.Uniform3iv(location, count, mem.ptr_at(value, size));
+    })
+}
+
+fn glUniform4iv(env: &mut Environment, location: GLint, count: GLsizei, value: ConstPtr<GLint>) {
+    with_program(env, |gl, mem| unsafe {
+        let size = GuestUSize::try_from(count).unwrap().checked_mul(4).unwrap();
+        gl.Uniform4iv(location, count, mem.ptr_at(value, size));
+    })
+}
+
+fn glValidateProgram(env: &mut Environment, program: GLuint) {
+    with_program(env, |gl, _| unsafe { gl.ValidateProgram(program) })
+}
+
+fn glBlendColor(
+    env: &mut Environment,
+    red: GLfloat,
+    green: GLfloat,
+    blue: GLfloat,
+    alpha: GLfloat,
+) {
+    with_program(env, |gl, _| unsafe {
+        gl.BlendColor(red, green, blue, alpha)
+    })
+}
+
+fn glBlendEquationSeparate(env: &mut Environment, mode_rgb: GLenum, mode_alpha: GLenum) {
+    with_program(env, |gl, _| unsafe {
+        gl.BlendEquationSeparate(mode_rgb, mode_alpha)
+    })
+}
+
+fn glBlendFuncSeparate(
+    env: &mut Environment,
+    src_rgb: GLenum,
+    dst_rgb: GLenum,
+    src_alpha: GLenum,
+    dst_alpha: GLenum,
+) {
+    with_program(env, |gl, _| unsafe {
+        gl.BlendFuncSeparate(src_rgb, dst_rgb, src_alpha, dst_alpha)
+    })
+}
+
+fn glGenVertexArraysOES(env: &mut Environment, n: GLsizei, arrays: MutPtr<GLuint>) {
+    with_program(env, |gl, mem| unsafe {
+        let n_usize = GuestUSize::try_from(n).unwrap();
+        gl.GenVertexArrays(n, mem.ptr_at_mut(arrays, n_usize));
+    })
+}
+
+fn glBindVertexArrayOES(env: &mut Environment, array: GLuint) {
+    with_program(env, |gl, _| unsafe { gl.BindVertexArray(array) })
+}
+
+fn glDeleteVertexArraysOES(env: &mut Environment, n: GLsizei, arrays: ConstPtr<GLuint>) {
+    with_program(env, |gl, mem| unsafe {
+        let n_usize = GuestUSize::try_from(n).unwrap();
+        gl.DeleteVertexArrays(n, mem.ptr_at(arrays, n_usize));
+    })
+}
+
 fn glDiscardFramebufferEXT(
     env: &mut Environment,
     target: GLenum,
@@ -318,4 +445,15 @@ pub const FUNCTIONS: FunctionExports = &[
     export_c_func!(glUniformMatrix3fv(_, _, _, _)),
     export_c_func!(glUniformMatrix4fv(_, _, _, _)),
     export_c_func!(glDiscardFramebufferEXT(_, _, _)),
+    export_c_func!(glUniform1iv(_, _, _)),
+    export_c_func!(glUniform2iv(_, _, _)),
+    export_c_func!(glUniform3iv(_, _, _)),
+    export_c_func!(glUniform4iv(_, _, _)),
+    export_c_func!(glValidateProgram(_)),
+    export_c_func!(glBlendColor(_, _, _, _)),
+    export_c_func!(glBlendEquationSeparate(_, _)),
+    export_c_func!(glBlendFuncSeparate(_, _, _, _)),
+    export_c_func!(glGenVertexArraysOES(_, _)),
+    export_c_func!(glBindVertexArrayOES(_)),
+    export_c_func!(glDeleteVertexArraysOES(_, _)),
 ];

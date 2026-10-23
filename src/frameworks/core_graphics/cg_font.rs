@@ -19,10 +19,10 @@ use crate::objc::{id, msg, msg_class, objc_classes, ClassExports, HostObject};
 use crate::Environment;
 
 // Note: on iOS SDK side this type is defined as a pointer to an opaque struct
-pub(super) type CGFontRef = CFTypeRef;
+pub(crate) type CGFontRef = CFTypeRef;
 
 type CGFontIndex = u16;
-pub(super) type CGGlyph = CGFontIndex;
+pub(crate) type CGGlyph = CGFontIndex;
 
 pub struct CGFontHostObject {
     pub font: Font,
@@ -45,7 +45,7 @@ fn CGFontCreateWithDataProvider(env: &mut Environment, provider: CGDataProviderR
 }
 
 /// Create a new (retained) `CGFont` wrapping a host font.
-pub(super) fn from_font(env: &mut Environment, font: Font) -> CGFontRef {
+pub(crate) fn from_font(env: &mut Environment, font: Font) -> CGFontRef {
     let host_obj = Box::new(CGFontHostObject { font });
     let class = env.objc.get_known_class("_touchHLE_CGFont", &mut env.mem);
     env.objc.alloc_object(class, host_obj, &mut env.mem)

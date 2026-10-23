@@ -381,6 +381,7 @@ pub const CLASSES: ClassExports = objc_classes! {
 // For the time being, that will always be _touchHLE_NSDictionary.
 @implementation NSDictionary: NSObject
 
+
 + (id)allocWithZone:(NSZonePtr)zone {
     // NSDictionary might be subclassed by something which needs allocWithZone:
     // to have the normal behaviour. Unimplemented: call superclass alloc then.
@@ -538,6 +539,34 @@ pub const CLASSES: ClassExports = objc_classes! {
     msg![env; this objectForKey:file_type_key]
 }
 
+// Modern Objective-C subscripting (dict[key])
+- (id)objectForKeyedSubscript:(id)key {
+    msg![env; this objectForKey:key]
+}
+
+- (id)keyEnumerator {
+    let keys: id = msg![env; this allKeys];
+    msg![env; keys objectEnumerator]
+}
+
+- (())enumerateKeysAndObjectsUsingBlock:(id)block {
+    let keys: id = msg![env; this allKeys];
+    retain(env, keys);
+    let count: NSUInteger = msg![env; keys count];
+    let invoke = crate::libc::dispatch::block_invoke_function(env, block.cast_const().cast());
+    let stop: MutPtr<bool> = env.mem.alloc_and_write(false);
+    for i in 0..count {
+        let key: id = msg![env; keys objectAtIndex:i];
+        let object: id = msg![env; this objectForKey:key];
+        let () = invoke.call_from_host(env, (block, key, object, stop));
+        if env.mem.read(stop) {
+            break;
+        }
+    }
+    env.mem.free(stop.cast());
+    release(env, keys);
+}
+
 @end
 
 // NSMutableDictionary is an abstract class. A subclass must provide everything
@@ -547,6 +576,7 @@ pub const CLASSES: ClassExports = objc_classes! {
 // Note that it inherits from NSDictionary, so we must ensure we override
 // any default methods that would be inappropriate for mutability.
 @implementation NSMutableDictionary: NSDictionary
+
 
 + (id)allocWithZone:(NSZonePtr)zone {
     // NSDictionary might be subclassed by something which needs allocWithZone:
@@ -591,6 +621,15 @@ pub const CLASSES: ClassExports = objc_classes! {
     let res = msg![env; res initWithDictionary:tmp];
     release(env, tmp);
     res
+}
+
+// Modern Objective-C subscripting (dict[key] = object)
+- (())setObject:(id)object forKeyedSubscript:(id)key {
+    if object == nil {
+        () = msg![env; this removeObjectForKey:key];
+    } else {
+        () = msg![env; this setObject:object forKey:key];
+    }
 }
 
 @end

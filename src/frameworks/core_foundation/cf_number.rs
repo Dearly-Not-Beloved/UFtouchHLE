@@ -13,7 +13,7 @@ use super::{CFComparisonResult, CFIndex, CFTypeRef};
 use crate::dyld::{export_c_func, ConstantExports, FunctionExports, HostConstant};
 use crate::frameworks::foundation::ns_value::is_conversion_lossless;
 use crate::mem::{ConstVoidPtr, MutVoidPtr};
-use crate::objc::{id, msg, msg_class};
+use crate::objc::{id, msg, msg_class, retain};
 use crate::Environment;
 
 pub type CFNumberType = CFIndex;
@@ -119,6 +119,30 @@ fn CFBooleanGetValue(env: &mut Environment, boolean: CFBooleanRef) -> bool {
 }
 
 pub const CONSTANTS: ConstantExports = &[
+    (
+        "_kCFNumberNaN",
+        HostConstant::Custom(|env| {
+            let num: id = msg_class![env; NSNumber numberWithDouble:(f64::NAN)];
+            retain(env, num);
+            env.mem.alloc_and_write(num).cast_void().cast_const()
+        }),
+    ),
+    (
+        "_kCFNumberNegativeInfinity",
+        HostConstant::Custom(|env| {
+            let num: id = msg_class![env; NSNumber numberWithDouble:(f64::NEG_INFINITY)];
+            retain(env, num);
+            env.mem.alloc_and_write(num).cast_void().cast_const()
+        }),
+    ),
+    (
+        "_kCFNumberPositiveInfinity",
+        HostConstant::Custom(|env| {
+            let num: id = msg_class![env; NSNumber numberWithDouble:(f64::INFINITY)];
+            retain(env, num);
+            env.mem.alloc_and_write(num).cast_void().cast_const()
+        }),
+    ),
     (
         "_kCFBooleanFalse",
         HostConstant::Custom(|env| {

@@ -11,6 +11,7 @@
 //! - [OpenAL 1.1 specification](https://www.openal.org/documentation/openal-1.1-specification.pdf)
 //! - Apple's [Technical Note TN2199: OpenAL FAQ for iPhone OS](https://web.archive.org/web/20090826202158/http://developer.apple.com/iPhone/library/technotes/tn2008/tn2199.html) (also available [here](https://developer.apple.com/library/archive/technotes/tn2199/_index.html))
 
+use crate::abi::{CallFromHost, GuestFunction};
 use crate::audio::openal as al;
 use crate::audio::openal::al_types::*;
 use crate::audio::openal::alc_types::*;
@@ -46,6 +47,8 @@ pub struct State {
     warned_mixer_get_rate: bool,
     warned_mixer_output_rate_proc: bool,
     warned_invalid_host_devices: HashSet<*mut ALCdevice>,
+    /// Registered with `alSourceAddNotification` (see [handle_notifications]).
+    notifications: Vec<SourceNotification>,
 }
 impl State {
     fn get(env: &mut Environment) -> &mut Self {
@@ -412,6 +415,144 @@ fn alcGetContextsDevice(
     };
 
     guest_device
+}
+
+/// An Apple extension, with which apps ask to be told when a source's state
+/// changes or it finishes playing buffers.
+struct SourceNotification {
+    context: MutPtr<GuestALCcontext>,
+    source: ALuint,
+    notification_id: ALuint,
+    /// `void (*)(ALuint sid, ALuint notificationID, ALvoid *userData)`
+    callback: GuestFunction,
+    user_data: MutVoidPtr,
+    /// Value of the source's corresponding property when last checked.
+    last_value: ALint,
+}
+
+const AL_SOURCE_STATE: ALuint = 0x1010;
+const AL_BUFFERS_PROCESSED: ALuint = 0x1016;
+
+fn alSourceAddNotification(
+    env: &mut Environment,
+    source: ALuint,
+    notification_id: ALuint,
+    callback: GuestFunction,
+    user_data: MutVoidPtr,
+) -> ALenum {
+    if notification_id != AL_SOURCE_STATE && notification_id != AL_BUFFERS_PROCESSED {
+        log!(
+            "TODO: alSourceAddNotification({}, {:#x}, ...): unsupported notification",
+            source,
+            notification_id
+        );
+        return 0;
+    }
+    let context = State::get(env).current_ctx;
+    let last_value = source_notification_value(env, context, source, notification_id);
+    State::get(env).notifications.push(SourceNotification {
+        context,
+        source,
+        notification_id,
+        callback,
+        user_data,
+        last_value,
+    });
+    0 // AL_NO_ERROR
+}
+
+fn alSourceRemoveNotification(
+    env: &mut Environment,
+    source: ALuint,
+    notification_id: ALuint,
+    callback: GuestFunction,
+    user_data: MutVoidPtr,
+) {
+    let context = State::get(env).current_ctx;
+    State::get(env).notifications.retain(|n| {
+        !(n.context == context
+            && n.source == source
+            && n.notification_id == notification_id
+            && n.callback.addr_with_thumb_bit() == callback.addr_with_thumb_bit()
+            && n.user_data == user_data)
+    });
+}
+
+fn source_notification_value(
+    env: &mut Environment,
+    context: MutPtr<GuestALCcontext>,
+    source: ALuint,
+    notification_id: ALuint,
+) -> ALint {
+    let state = &mut env.framework_state.openal;
+    let Some(context) = state.contexts.get_mut(&context) else {
+        return 0;
+    };
+    let context = context.make_current(&mut env.openal_manager);
+    let mut value = 0;
+    unsafe { context.GetSourcei(source, notification_id as ALenum, &mut value) };
+    value
+}
+
+/// For use by `NSRunLoop`: call the callbacks for source notifications whose
+/// condition has happened since the last check.
+pub fn handle_notifications(env: &mut Environment) {
+    if State::get(env).notifications.is_empty() {
+        return;
+    }
+    let mut to_call = Vec::new();
+    for i in 0..State::get(env).notifications.len() {
+        let SourceNotification {
+            context,
+            source,
+            notification_id,
+            callback,
+            user_data,
+            last_value,
+        } = State::get(env).notifications[i];
+        let value = source_notification_value(env, context, source, notification_id);
+        let happened = match notification_id {
+            AL_SOURCE_STATE => value != last_value,
+            _ => value > 0 && value != last_value,
+        };
+        State::get(env).notifications[i].last_value = value;
+        if happened {
+            to_call.push((context, source, notification_id, callback, user_data));
+        }
+    }
+    for (context, source, notification_id, callback, user_data) in to_call {
+        // The callback may use OpenAL, so it should see the source's context.
+        let old_context = State::get(env).current_ctx;
+        State::get(env).current_ctx = context;
+        let () = callback.call_from_host(env, (source, notification_id, user_data));
+        State::get(env).current_ctx = old_context;
+    }
+}
+
+// Apple's ASA extension for reverb and occlusion effects. The effects aren't
+// supported, so settings are ignored.
+fn alcASASetListener(
+    _env: &mut Environment,
+    property: ALuint,
+    _data: ConstVoidPtr,
+    _data_size: ALuint,
+) -> ALenum {
+    log_dbg!("TODO: alcASASetListener({:#x}, ...) (ignored)", property);
+    0 // AL_NO_ERROR
+}
+fn alcASASetSource(
+    _env: &mut Environment,
+    property: ALuint,
+    source: ALuint,
+    _data: ConstVoidPtr,
+    _data_size: ALuint,
+) -> ALenum {
+    log_dbg!(
+        "TODO: alcASASetSource({:#x}, {}, ...) (ignored)",
+        property,
+        source
+    );
+    0 // AL_NO_ERROR
 }
 
 fn alcGetProcAddress(
@@ -1049,6 +1190,10 @@ pub const FUNCTIONS: FunctionExports = &[
     export_c_func!(alBufferData(_, _, _, _, _)),
     export_c_func!(alBufferDataStatic(_, _, _, _, _)),
     export_c_func!(alcMacOSXMixerOutputRate(_)),
+    export_c_func!(alSourceAddNotification(_, _, _, _)),
+    export_c_func!(alcASASetListener(_, _, _)),
+    export_c_func!(alcASASetSource(_, _, _, _)),
+    export_c_func!(alSourceRemoveNotification(_, _, _, _)),
     export_c_func!(alcMacOSXGetMixerOutputRate()),
     export_c_func!(alcGetContextsDevice(_)),
     export_c_func!(alcGetCurrentContext()),

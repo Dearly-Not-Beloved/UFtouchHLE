@@ -109,7 +109,10 @@ public class MainActivity extends SDLActivity {
     }
 
     // How long to wait for touchHLE to quit before ending the process anyway.
-    private static final long QUIT_TIMEOUT_MS = 5000;
+    // Apps normally finish saving within a second, but some never finish
+    // quitting (e.g. Grand Theft Auto: Vice City), and waiting longer just
+    // keeps the game on screen.
+    private static final long QUIT_TIMEOUT_MS = 2000;
 
     @Override
     protected void onDestroy() {

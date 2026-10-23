@@ -6,7 +6,9 @@
 //! `stdlib.h`
 
 use crate::abi::{CallFromHost, GuestFunction};
-use crate::dyld::{export_c_func, export_c_func_aliased, FunctionExports};
+use crate::dyld::{
+    export_c_func, export_c_func_aliased, ConstantExports, FunctionExports, HostConstant,
+};
 use crate::fs::{resolve_path, GuestPath};
 use crate::libc::clocale::{setlocale, LC_CTYPE};
 use crate::libc::errno::{set_errno, EINVAL};
@@ -655,7 +657,72 @@ fn fcvt(
     fcvt_buf
 }
 
+fn posix_memalign(
+    env: &mut Environment,
+    memptr: MutPtr<MutVoidPtr>,
+    alignment: GuestUSize,
+    size: GuestUSize,
+) -> i32 {
+    if !alignment.is_power_of_two() || alignment < 4 {
+        return EINVAL;
+    }
+    // touchHLE's allocator always aligns to 16 bytes.
+    let ptr = env.mem.alloc(size);
+    assert!(
+        ptr.to_bits().is_multiple_of(alignment),
+        "TODO: posix_memalign() with alignment {alignment}"
+    );
+    env.mem.write(memptr, ptr);
+    0
+}
+
+/// Called when an `assert()` fails.
+fn __assert_rtn(
+    env: &mut Environment,
+    func: ConstPtr<u8>,
+    file: ConstPtr<u8>,
+    line: i32,
+    expression: ConstPtr<u8>,
+) {
+    let cstr = |env: &Environment, ptr: ConstPtr<u8>| {
+        if ptr.is_null() {
+            String::new()
+        } else {
+            String::from_utf8_lossy(env.mem.cstr_at(ptr)).to_string()
+        }
+    };
+    panic!(
+        "Assertion failed: ({}), function {}, file {}, line {}.",
+        cstr(env, expression),
+        cstr(env, func),
+        cstr(env, file),
+        line
+    );
+}
+
+/// Stack protector support (`-fstack-protector`).
+fn __stack_chk_fail(_env: &mut Environment) {
+    panic!("App detected a stack buffer overflow (__stack_chk_fail)");
+}
+
+pub const CONSTANTS: ConstantExports = &[
+    // The canary value checked by `-fstack-protector` code. The value doesn't
+    // matter, as long as it doesn't change.
+    (
+        "___stack_chk_guard",
+        HostConstant::Custom(|env| {
+            env.mem
+                .alloc_and_write(0x2d5a_7e31u32)
+                .cast_void()
+                .cast_const()
+        }),
+    ),
+];
+
 pub const FUNCTIONS: FunctionExports = &[
+    export_c_func!(__stack_chk_fail()),
+    export_c_func!(posix_memalign(_, _, _)),
+    export_c_func!(__assert_rtn(_, _, _, _)),
     export_c_func!(malloc(_)),
     export_c_func!(malloc_size(_)),
     export_c_func!(calloc(_, _)),

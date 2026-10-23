@@ -5,9 +5,9 @@
  */
 //! `ExtendedAudioFile.h` (Extended Audio File Services)
 //!
-//! Currently implemented as a dummy wrapper around Audio File Services.
-
-// TODO: Audio format conversion
+//! Currently implemented as a wrapper around Audio File Services. The only
+//! format conversion supported is from IMA4 to 16-bit PCM, which is done by
+//! decoding the whole file when the client format is set.
 
 use super::audio_file::{
     kAudioFileBadPropertySizeError, kAudioFilePropertyDataFormat, kAudioFileReadPermission,
@@ -16,10 +16,11 @@ use super::audio_file::{
 };
 use super::audio_queue::is_supported_audio_format;
 use super::audio_unit::AudioBufferList;
+use crate::audio::decode_ima4;
 use crate::dyld::{export_c_func, FunctionExports};
 use crate::frameworks::carbon_core::{eofErr, OSStatus};
 use crate::frameworks::core_audio_types::{
-    debug_fourcc, fourcc, kAudioFormatLinearPCM, AudioStreamBasicDescription,
+    debug_fourcc, fourcc, kAudioFormatAppleIMA4, kAudioFormatLinearPCM, AudioStreamBasicDescription,
 };
 use crate::frameworks::core_foundation::cf_url::CFURLRef;
 use crate::frameworks::foundation::ns_url::to_rust_path;
@@ -40,7 +41,10 @@ impl State {
 pub struct ExtAudioFileHostObject {
     guest_audio_file: AudioFileID,
     client_data_format: Option<AudioStreamBasicDescription>,
+    /// Position in the data in the client format.
     current_bytes_read: i64,
+    /// The whole file in the client format, if it needs converting.
+    decoded: Option<Vec<u8>>,
 }
 
 #[repr(C, packed)]
@@ -55,6 +59,51 @@ type ExtAudioFileRef = MutPtr<OpaqueExtAudioFile>;
 type ExtAudioFilePropertyID = u32;
 const kExtAudioFileProperty_FileDataFormat: ExtAudioFilePropertyID = fourcc(b"ffmt");
 const kExtAudioFileProperty_ClientDataFormat: ExtAudioFilePropertyID = fourcc(b"cfmt");
+const kExtAudioFileProperty_FileLengthFrames: ExtAudioFilePropertyID = fourcc(b"#frm");
+
+fn file_data_format(env: &mut Environment, file: ExtAudioFileRef) -> AudioStreamBasicDescription {
+    let guest_audio_file =
+        State::get(&mut env.framework_state).extended_audio_files[&file].guest_audio_file;
+    let audio_file =
+        &env.framework_state.audio_toolbox.audio_file.audio_files[&guest_audio_file].audio_file;
+    AudioStreamBasicDescription::from_audio_description(audio_file.audio_description())
+}
+
+/// Format the app reads data in.
+fn client_data_format(env: &mut Environment, file: ExtAudioFileRef) -> AudioStreamBasicDescription {
+    match State::get(&mut env.framework_state).extended_audio_files[&file].client_data_format {
+        Some(format) => format,
+        None => file_data_format(env, file),
+    }
+}
+
+/// Decode a whole IMA4 file to interleaved 16-bit PCM.
+fn decode_ima4_file(env: &mut Environment, file: ExtAudioFileRef, channels: u32) -> Vec<u8> {
+    let guest_audio_file =
+        State::get(&mut env.framework_state).extended_audio_files[&file].guest_audio_file;
+    let audio_file = &mut env
+        .framework_state
+        .audio_toolbox
+        .audio_file
+        .audio_files
+        .get_mut(&guest_audio_file)
+        .unwrap()
+        .audio_file;
+    let mut data = vec![0u8; audio_file.byte_count() as usize];
+    let read = audio_file.read_bytes(0, &mut data).unwrap();
+    data.truncate(read);
+    let packets: Vec<[i16; 64]> = data.as_chunks::<34>().0.iter().map(decode_ima4).collect();
+    let mut pcm = Vec::with_capacity(packets.len() * 64 * 2);
+    // Stereo IMA4 alternates between packets for the left and right channel.
+    for frame_packets in packets.chunks_exact(channels as usize) {
+        for i in 0..64 {
+            for channel_packet in frame_packets {
+                pcm.extend_from_slice(&channel_packet[i].to_le_bytes());
+            }
+        }
+    }
+    pcm
+}
 
 fn ExtAudioFileOpenURL(
     env: &mut Environment,
@@ -90,6 +139,7 @@ fn ExtAudioFileOpenURL(
         guest_audio_file,
         client_data_format: None,
         current_bytes_read: 0,
+        decoded: None,
     };
 
     let guest_extended_audio_file = env.mem.alloc_and_write(OpaqueExtAudioFile { _filler: 0 });
@@ -110,6 +160,26 @@ fn ExtAudioFileGetProperty(
     out_property_data: MutVoidPtr,
 ) -> OSStatus {
     return_if_null!(in_ext_audio_file);
+
+    if in_property_id == kExtAudioFileProperty_FileLengthFrames {
+        if env.mem.read(io_property_data_size) != guest_size_of::<i64>() {
+            return kAudioFileBadPropertySizeError;
+        }
+        let format = file_data_format(env, in_ext_audio_file);
+        let guest_audio_file = State::get(&mut env.framework_state).extended_audio_files
+            [&in_ext_audio_file]
+            .guest_audio_file;
+        let audio_file =
+            &env.framework_state.audio_toolbox.audio_file.audio_files[&guest_audio_file].audio_file;
+        let frames = if format.format_id == kAudioFormatAppleIMA4 {
+            // Both channels' packets count as one frame.
+            audio_file.packet_count() as i64 * 64 / format.channels_per_frame as i64
+        } else {
+            audio_file.byte_count() as i64 / format.bytes_per_frame as i64
+        };
+        env.mem.write(out_property_data.cast(), frames);
+        return 0;
+    }
 
     let audio_file_property_id = match in_property_id {
         kExtAudioFileProperty_FileDataFormat => kAudioFilePropertyDataFormat,
@@ -191,8 +261,23 @@ fn ExtAudioFileSetProperty(
     let audio_desc = AudioStreamBasicDescription::from_audio_description(
         other_host_object.audio_file.audio_description(),
     );
-    // TODO: support audio format conversions
-    assert_eq!(audio_desc, client_audio_desc);
+    if audio_desc == client_audio_desc {
+        return 0; // success
+    }
+    // TODO: support more audio format conversions
+    assert!(
+        audio_desc.format_id == kAudioFormatAppleIMA4
+            && client_audio_desc.bits_per_channel == 16
+            && client_audio_desc.channels_per_frame == audio_desc.channels_per_frame
+            && client_audio_desc.sample_rate == audio_desc.sample_rate,
+        "TODO: ExtAudioFile conversion from {audio_desc:?} to {client_audio_desc:?}"
+    );
+    let decoded = decode_ima4_file(env, in_ext_audio_file, audio_desc.channels_per_frame);
+    State::get(&mut env.framework_state)
+        .extended_audio_files
+        .get_mut(&in_ext_audio_file)
+        .unwrap()
+        .decoded = Some(decoded);
 
     0 // success
 }
@@ -223,6 +308,25 @@ fn ExtAudioFileRead(
     let number_frames = env.mem.read(io_number_frames);
     let bytes_per_frame = host_object.client_data_format.unwrap().bytes_per_frame;
     let number_of_bytes = number_frames.checked_mul(bytes_per_frame).unwrap();
+
+    if let Some(decoded) = &host_object.decoded {
+        let start = (host_object.current_bytes_read as usize).min(decoded.len());
+        let end = (start + number_of_bytes as usize).min(decoded.len());
+        let count = (end - start) as u32;
+        let dest = audio_buffer_list.buffers[0].data.cast::<u8>();
+        let chunk = decoded[start..end].to_vec();
+        env.mem.bytes_at_mut(dest, count).copy_from_slice(&chunk);
+        env.mem.write(io_number_frames, count / bytes_per_frame);
+        audio_buffer_list.buffers[0].data_byte_size = count;
+        env.mem.write(io_data, audio_buffer_list);
+        State::get(&mut env.framework_state)
+            .extended_audio_files
+            .get_mut(&in_ext_audio_file)
+            .unwrap()
+            .current_bytes_read += count as i64;
+        return 0;
+    }
+
     let number_of_bytes_ptr = env.mem.alloc_and_write(number_of_bytes);
     let res = AudioFileReadBytes(
         env,
@@ -268,6 +372,22 @@ fn ExtAudioFileRead(
     0 // success
 }
 
+fn ExtAudioFileSeek(
+    env: &mut Environment,
+    in_ext_audio_file: ExtAudioFileRef,
+    in_frame_offset: i64,
+) -> OSStatus {
+    return_if_null!(in_ext_audio_file);
+    let bytes_per_frame = client_data_format(env, in_ext_audio_file).bytes_per_frame;
+    assert!(bytes_per_frame != 0, "TODO: seeking in a compressed file");
+    State::get(&mut env.framework_state)
+        .extended_audio_files
+        .get_mut(&in_ext_audio_file)
+        .unwrap()
+        .current_bytes_read = in_frame_offset * bytes_per_frame as i64;
+    0 // success
+}
+
 fn ExtAudioFileDispose(env: &mut Environment, in_ext_audio_file: ExtAudioFileRef) -> OSStatus {
     return_if_null!(in_ext_audio_file);
 
@@ -298,6 +418,7 @@ pub const FUNCTIONS: FunctionExports = &[
     export_c_func!(ExtAudioFileOpenURL(_, _)),
     export_c_func!(ExtAudioFileGetProperty(_, _, _, _)),
     export_c_func!(ExtAudioFileSetProperty(_, _, _, _)),
+    export_c_func!(ExtAudioFileSeek(_, _)),
     export_c_func!(ExtAudioFileRead(_, _, _)),
     export_c_func!(ExtAudioFileDispose(_)),
 ];

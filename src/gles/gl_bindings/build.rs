@@ -23,6 +23,7 @@ fn main() {
             "GL_ARB_matrix_palette",
             "GL_ARB_vertex_blend",
             "GL_EXT_blend_subtract",
+            "GL_ARB_vertex_array_object",
         ],
     )
     .write_bindings(GlobalGenerator, &mut file)

@@ -88,6 +88,68 @@ pub trait Programmable {
         transpose: GLboolean,
         value: *const GLfloat,
     );
+    unsafe fn Uniform1iv(&mut self, location: GLint, count: GLsizei, value: *const GLint);
+    unsafe fn Uniform2iv(&mut self, location: GLint, count: GLsizei, value: *const GLint);
+    unsafe fn Uniform3iv(&mut self, location: GLint, count: GLsizei, value: *const GLint);
+    unsafe fn Uniform4iv(&mut self, location: GLint, count: GLsizei, value: *const GLint);
+    unsafe fn ValidateProgram(&mut self, program: GLuint);
+    unsafe fn BlendColor(&mut self, red: GLfloat, green: GLfloat, blue: GLfloat, alpha: GLfloat);
+    unsafe fn BlendEquationSeparate(&mut self, mode_rgb: GLenum, mode_alpha: GLenum);
+    unsafe fn BlendFuncSeparate(
+        &mut self,
+        src_rgb: GLenum,
+        dst_rgb: GLenum,
+        src_alpha: GLenum,
+        dst_alpha: GLenum,
+    );
+    // OES_vertex_array_object
+    unsafe fn GenVertexArrays(&mut self, n: GLsizei, arrays: *mut GLuint);
+    unsafe fn BindVertexArray(&mut self, array: GLuint);
+    unsafe fn DeleteVertexArrays(&mut self, n: GLsizei, arrays: *const GLuint);
+}
+
+/// GLSL ES 1.00 only allows ASCII characters, but iPhone OS's compiler accepts
+/// others in comments (e.g. Monster Hunter Portable 2nd G's shaders have
+/// Japanese comments), while stricter drivers (e.g. Qualcomm's) reject the
+/// shader. Outside comments they're invalid anyway, so replace them with
+/// spaces.
+pub fn ascii_shader_source(source: &[u8]) -> Vec<u8> {
+    source
+        .iter()
+        .map(|&byte| if byte.is_ascii() { byte } else { b' ' })
+        .collect()
+}
+
+/// Emulate EXT_shadow_samplers for drivers that don't support it in OpenGL ES
+/// 2.0 (e.g. Qualcomm's), by sampling the depth texture normally and doing
+/// the depth comparison (GL_LEQUAL) in the shader.
+pub fn emulate_shadow_samplers(source: &[u8]) -> Vec<u8> {
+    let source = String::from_utf8_lossy(source);
+    if !source.contains("sampler2DShadow") {
+        return source.into_owned().into_bytes();
+    }
+    let mut output = String::from(
+        "#define touchHLE_shadow2D(s, c) step((c).z, texture2D(s, (c).xy).r)\n\
+         #define touchHLE_shadow2DProj(s, c) step((c).z / (c).w, texture2DProj(s, c).r)\n",
+    );
+    // Preserve newlines for useful compiler line numbers.
+    for line in source.lines() {
+        if line
+            .trim_start()
+            .starts_with("#extension GL_EXT_shadow_samplers")
+        {
+            output.push('\n');
+            continue;
+        }
+        output.push_str(
+            &line
+                .replace("sampler2DShadow", "sampler2D")
+                .replace("shadow2DProjEXT", "touchHLE_shadow2DProj")
+                .replace("shadow2DEXT", "touchHLE_shadow2D"),
+        );
+        output.push('\n');
+    }
+    output.into_bytes()
 }
 
 /// GLSL ES 1.00 is close to desktop GLSL 1.20, except for precision
@@ -95,11 +157,16 @@ pub trait Programmable {
 pub fn desktop_shader_source(source: &[u8]) -> Vec<u8> {
     let source = String::from_utf8_lossy(source);
     let mut output = String::from("#version 120\n#define lowp\n#define mediump\n#define highp\n");
+    // EXT_shadow_samplers: desktop GLSL 1.20 has the same functions, without
+    // the suffix and returning a vec4.
+    output.push_str("#define shadow2DEXT(s, c) shadow2D(s, c).r\n");
+    output.push_str("#define shadow2DProjEXT(s, c) shadow2DProj(s, c).r\n");
     // Preserve newlines for useful compiler line numbers.
     for line in source.lines() {
         let trimmed = line.trim_start();
         if trimmed.starts_with("#version")
             || trimmed.starts_with("#extension GL_OES_standard_derivatives")
+            || trimmed.starts_with("#extension GL_EXT_shadow_samplers")
         {
             output.push('\n');
             continue;
@@ -141,5 +208,41 @@ mod tests {
         assert!(!result.contains("#extension GL_OES_standard_derivatives"));
         assert!(result.contains("#define highp\n"));
         assert!(result.contains("dFdx(uv)"));
+    }
+
+    #[test]
+    fn shadow_samplers_are_emulated() {
+        let result = String::from_utf8(super::emulate_shadow_samplers(
+            b" #extension GL_EXT_shadow_samplers : enable\nprecision mediump float;\nuniform sampler2DShadow s;\nvarying highp vec4 c;\nvoid main() { gl_FragColor = vec4(shadow2DProjEXT(s, c)); }\n",
+        ))
+        .unwrap();
+        assert!(!result.contains("GL_EXT_shadow_samplers"));
+        assert!(!result.contains("sampler2DShadow"));
+        assert!(result.contains("uniform sampler2D s;"));
+        assert!(result.contains("vec4(touchHLE_shadow2DProj(s, c))"));
+        // Shaders without shadow samplers are unchanged.
+        assert_eq!(
+            super::emulate_shadow_samplers(b"void main() {}"),
+            b"void main() {}"
+        );
+    }
+
+    #[test]
+    fn non_ascii_characters_are_replaced() {
+        let source = "// 通常モード\nvoid main() {}\n".as_bytes();
+        let result = super::ascii_shader_source(source);
+        assert!(result.is_ascii());
+        assert!(String::from_utf8(result)
+            .unwrap()
+            .ends_with("\nvoid main() {}\n"));
+    }
+
+    #[test]
+    fn shadow_samplers_map_to_desktop_functions() {
+        let result = String::from_utf8(desktop_shader_source(
+            b"#extension GL_EXT_shadow_samplers : require\nuniform sampler2DShadow s;\nvarying highp vec4 c;\nvoid main() { gl_FragColor = vec4(shadow2DProjEXT(s, c)); }",
+        )).unwrap();
+        assert!(!result.contains("#extension GL_EXT_shadow_samplers"));
+        assert!(result.contains("#define shadow2DProjEXT(s, c) shadow2DProj(s, c).r\n"));
     }
 }

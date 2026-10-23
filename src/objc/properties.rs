@@ -231,3 +231,41 @@ macro_rules! todo_objc_setter {
     };
 }
 pub use crate::todo_objc_setter;
+
+// Variants of objc_setProperty used by newer compilers.
+pub(super) fn objc_setProperty_atomic(
+    env: &mut Environment,
+    this: id,
+    cmd: SEL,
+    value: id,
+    offset: GuestISize,
+) {
+    objc_setProperty(env, this, cmd, offset, value, true, 0)
+}
+pub(super) fn objc_setProperty_nonatomic(
+    env: &mut Environment,
+    this: id,
+    cmd: SEL,
+    value: id,
+    offset: GuestISize,
+) {
+    objc_setProperty(env, this, cmd, offset, value, false, 0)
+}
+pub(super) fn objc_setProperty_atomic_copy(
+    env: &mut Environment,
+    this: id,
+    cmd: SEL,
+    value: id,
+    offset: GuestISize,
+) {
+    objc_setProperty(env, this, cmd, offset, value, true, 1)
+}
+pub(super) fn objc_setProperty_nonatomic_copy(
+    env: &mut Environment,
+    this: id,
+    cmd: SEL,
+    value: id,
+    offset: GuestISize,
+) {
+    objc_setProperty(env, this, cmd, offset, value, false, 1)
+}

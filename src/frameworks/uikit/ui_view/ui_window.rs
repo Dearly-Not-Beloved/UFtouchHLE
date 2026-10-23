@@ -13,7 +13,7 @@ use super::UIViewHostObject;
 use crate::dyld::{ConstantExports, HostConstant};
 use crate::frameworks::core_graphics::cg_affine_transform::CGAffineTransform;
 use crate::frameworks::core_graphics::{CGPoint, CGRect};
-use crate::frameworks::foundation::ns_string;
+use crate::frameworks::foundation::{ns_string, NSUInteger};
 use crate::frameworks::uikit::ui_application::{
     UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight,
     UIInterfaceOrientationPortraitUpsideDown,
@@ -226,7 +226,20 @@ pub const CLASSES: ClassExports = objc_classes! {
     } {
         // (UIInterfaceOrientation and UIDeviceOrientation are compatible enums,
         //  here we use whichever is clearer contextually.)
-        let should = msg![env; vc shouldAutorotateToInterfaceOrientation:orientation];
+        // iOS 6 replaced shouldAutorotateToInterfaceOrientation: with
+        // shouldAutorotate and supportedInterfaceOrientations, and no longer
+        // calls the old method. Use the new ones if the app implements them.
+        let should = if env.objc.object_has_method_named(&env.mem, vc, "supportedInterfaceOrientations") {
+            let should_autorotate: bool = if env.objc.object_has_method_named(&env.mem, vc, "shouldAutorotate") {
+                msg![env; vc shouldAutorotate]
+            } else {
+                true
+            };
+            let mask: NSUInteger = msg![env; vc supportedInterfaceOrientations];
+            should_autorotate && (mask & (1 << orientation)) != 0
+        } else {
+            msg![env; vc shouldAutorotateToInterfaceOrientation:orientation]
+        };
         log_dbg!("[{:?} shouldAutorotateToInterfaceOrientation:{:?}] => {:?}", vc, orientation, should);
         if should {
             log_dbg!("App requested autorotation; applying orientation transform to view {:?}.", view);
@@ -314,5 +327,21 @@ pub const CONSTANTS: ConstantExports = &[
     (
         "_UIKeyboardBoundsUserInfoKey",
         HostConstant::NSString(UIKeyboardBoundsUserInfoKey),
+    ),
+    (
+        "_UIKeyboardFrameBeginUserInfoKey",
+        HostConstant::NSString("UIKeyboardFrameBeginUserInfoKey"),
+    ),
+    (
+        "_UIKeyboardFrameEndUserInfoKey",
+        HostConstant::NSString("UIKeyboardFrameEndUserInfoKey"),
+    ),
+    (
+        "_UIKeyboardWillChangeFrameNotification",
+        HostConstant::NSString("UIKeyboardWillChangeFrameNotification"),
+    ),
+    (
+        "_UIKeyboardDidChangeFrameNotification",
+        HostConstant::NSString("UIKeyboardDidChangeFrameNotification"),
     ),
 ];

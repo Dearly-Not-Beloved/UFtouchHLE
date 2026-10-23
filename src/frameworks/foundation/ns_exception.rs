@@ -5,8 +5,144 @@
  */
 
 use crate::dyld::{ConstantExports, FunctionExports, HostConstant};
+use crate::frameworks::foundation::ns_string;
 use crate::mem::MutVoidPtr;
+use crate::objc::{
+    autorelease, id, msg, nil, objc_classes, release, retain, ClassExports, HostObject, NSZonePtr,
+    SEL,
+};
 use crate::{export_c_func, Environment};
+
+struct NSExceptionHostObject {
+    /// `NSString*`
+    name: id,
+    /// `NSString*`
+    reason: id,
+    /// `NSDictionary*`
+    user_info: id,
+}
+impl HostObject for NSExceptionHostObject {}
+
+fn string_or_nil(env: &mut Environment, string: id) -> String {
+    if string == nil {
+        "(nil)".to_string()
+    } else {
+        ns_string::to_rust_string(env, string).to_string()
+    }
+}
+
+// touchHLE can't unwind guest code to a @catch block, so raising an exception
+// ends the app with its details. (`@throw` is handled by objc_exception_throw.)
+pub const CLASSES: ClassExports = objc_classes! {
+
+(env, this, _cmd);
+
+@implementation NSException: NSObject
+
++ (id)allocWithZone:(NSZonePtr)_zone {
+    let host_object = Box::new(NSExceptionHostObject {
+        name: nil,
+        reason: nil,
+        user_info: nil,
+    });
+    env.objc.alloc_object(this, host_object, &mut env.mem)
+}
+
++ (id)exceptionWithName:(id)name // NSString*
+                 reason:(id)reason // NSString*
+               userInfo:(id)user_info { // NSDictionary*
+    let exception: id = msg![env; this alloc];
+    let exception: id = msg![env; exception initWithName:name reason:reason userInfo:user_info];
+    autorelease(env, exception)
+}
+
++ (())raise:(id)name // NSString*
+     format:(id)format, // NSString*
+     ..._args {
+    let name = string_or_nil(env, name);
+    let format = string_or_nil(env, format);
+    panic!("Objective-C exception raised: {name}: {format}");
+}
+
+- (id)initWithName:(id)name // NSString*
+            reason:(id)reason // NSString*
+          userInfo:(id)user_info { // NSDictionary*
+    retain(env, name);
+    retain(env, reason);
+    retain(env, user_info);
+    *env.objc.borrow_mut(this) = NSExceptionHostObject { name, reason, user_info };
+    this
+}
+
+- (())dealloc {
+    let &NSExceptionHostObject { name, reason, user_info } = env.objc.borrow(this);
+    release(env, name);
+    release(env, reason);
+    release(env, user_info);
+    env.objc.dealloc_object(this, &mut env.mem)
+}
+
+- (id)name {
+    env.objc.borrow::<NSExceptionHostObject>(this).name
+}
+- (id)reason {
+    env.objc.borrow::<NSExceptionHostObject>(this).reason
+}
+- (id)userInfo {
+    env.objc.borrow::<NSExceptionHostObject>(this).user_info
+}
+- (id)description {
+    env.objc.borrow::<NSExceptionHostObject>(this).reason
+}
+
+- (())raise {
+    let &NSExceptionHostObject { name, reason, .. } = env.objc.borrow(this);
+    let name = string_or_nil(env, name);
+    let reason = string_or_nil(env, reason);
+    panic!("Objective-C exception raised: {name}: {reason}");
+}
+
+@end
+
+// Used by NSAssert() and friends.
+@implementation NSAssertionHandler: NSObject
+
++ (id)currentHandler {
+    msg![env; this new]
+}
+
+- (())handleFailureInMethod:(SEL)selector
+                     object:(id)object
+                       file:(id)file // NSString*
+                 lineNumber:(i32)line
+                description:(id)format, // NSString*
+                ..._args {
+    let file = string_or_nil(env, file);
+    let format = string_or_nil(env, format);
+    panic!(
+        "Assertion failed in -[{:?} {}], {}:{}: {}",
+        object,
+        selector.as_str(&env.mem),
+        file,
+        line,
+        format
+    );
+}
+
+- (())handleFailureInFunction:(id)function // NSString*
+                         file:(id)file // NSString*
+                   lineNumber:(i32)line
+                  description:(id)format, // NSString*
+                  ..._args {
+    let function = string_or_nil(env, function);
+    let file = string_or_nil(env, file);
+    let format = string_or_nil(env, format);
+    panic!("Assertion failed in {function}, {file}:{line}: {format}");
+}
+
+@end
+
+};
 
 // All constants are NSExceptionName
 pub const CONSTANTS: ConstantExports = &[

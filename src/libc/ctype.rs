@@ -171,10 +171,17 @@ mod tests {
     }
 }
 
-pub const CONSTANTS: ConstantExports = &[(
-    "__DefaultRuneLocale",
-    HostConstant::Custom(get_default_rune_locale),
-)];
+pub const CONSTANTS: ConstantExports = &[
+    (
+        "__DefaultRuneLocale",
+        HostConstant::Custom(get_default_rune_locale),
+    ),
+    // Maximum bytes per multibyte character in the current locale ("C").
+    (
+        "___mb_cur_max",
+        HostConstant::Custom(|env| env.mem.alloc_and_write(1i32).cast_void().cast_const()),
+    ),
+];
 
 pub const FUNCTIONS: FunctionExports = &[
     export_c_func!(__tolower(_)),

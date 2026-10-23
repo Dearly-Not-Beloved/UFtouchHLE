@@ -524,6 +524,62 @@ pub const CLASSES: ClassExports = objc_classes! {
     release(env, old_contents);
 }
 
+- (id)sublayers {
+    let sublayers = env.objc.borrow::<CALayerHostObject>(this).sublayers.clone();
+    if sublayers.is_empty() {
+        return nil;
+    }
+    for &sublayer in &sublayers {
+        retain(env, sublayer);
+    }
+    let array = crate::frameworks::foundation::ns_array::from_vec(env, sublayers);
+    autorelease(env, array)
+}
+
+// Borders, shadows and masking aren't drawn yet.
+- (CGFloat)borderWidth {
+    0.0
+}
+- (())setBorderWidth:(CGFloat)width {
+    todo_objc_setter!(this, width);
+}
+- (CGColorRef)borderColor {
+    nil
+}
+- (())setBorderColor:(CGColorRef)color {
+    todo_objc_setter!(this, color);
+}
+- (bool)masksToBounds {
+    false
+}
+- (())setMasksToBounds:(bool)masks {
+    todo_objc_setter!(this, masks);
+}
+- (())setShadowColor:(CGColorRef)color {
+    todo_objc_setter!(this, color);
+}
+- (())setShadowOpacity:(f32)opacity {
+    todo_objc_setter!(this, opacity);
+}
+- (())setShadowOffset:(CGSize)offset {
+    todo_objc_setter!(this, offset);
+}
+- (())setShadowRadius:(CGFloat)radius {
+    todo_objc_setter!(this, radius);
+}
+- (())setShadowPath:(id)path {
+    todo_objc_setter!(this, path);
+}
+- (())setShouldRasterize:(bool)rasterize {
+    todo_objc_setter!(this, rasterize);
+}
+- (())setRasterizationScale:(CGFloat)scale {
+    todo_objc_setter!(this, scale);
+}
+- (())setZPosition:(CGFloat)z_position {
+    todo_objc_setter!(this, z_position);
+}
+
 - (())setEdgeAntialiasingMask:(u32)mask {
     todo_objc_setter!(this, mask);
 }

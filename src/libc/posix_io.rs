@@ -930,7 +930,27 @@ fn truncate(env: &mut Environment, path_ptr: ConstPtr<u8>, len: off_t) -> i32 {
     res
 }
 
+/// Extended attributes aren't supported, but pretend they were set (apps use
+/// this to exclude files from iCloud backups).
+fn setxattr(
+    env: &mut Environment,
+    path: ConstPtr<u8>,
+    name: ConstPtr<u8>,
+    _value: ConstVoidPtr,
+    _size: GuestUSize,
+    _position: u32,
+    _options: i32,
+) -> i32 {
+    log!(
+        "TODO: setxattr({:?}, {:?}, ...) (ignored)",
+        env.mem.cstr_at_utf8(path),
+        env.mem.cstr_at_utf8(name)
+    );
+    0
+}
+
 pub const FUNCTIONS: FunctionExports = &[
+    export_c_func!(setxattr(_, _, _, _, _, _)),
     export_c_func!(open(_, _, _)),
     export_c_func!(read(_, _, _)),
     export_c_func!(pread(_, _, _, _)),

@@ -461,12 +461,22 @@ impl GLESContext for GLES1OnGL2Context {
         }
         if !self.is_loaded || super::FUNCTION_POINTERS_ARE_PER_CONTEXT {
             gl21::load_with(|name| {
-                let native_name = if cfg!(target_os = "android") && self.state.programmable {
-                    name.strip_suffix("EXT").unwrap_or(name)
+                let vertex_array_function = matches!(
+                    name,
+                    "glGenVertexArrays" | "glBindVertexArray" | "glDeleteVertexArrays"
+                );
+                let native_name = if vertex_array_function {
+                    if cfg!(target_os = "android") {
+                        format!("{name}OES")
+                    } else {
+                        format!("{name}APPLE")
+                    }
+                } else if cfg!(target_os = "android") && self.state.programmable {
+                    name.strip_suffix("EXT").unwrap_or(name).to_string()
                 } else {
-                    name
+                    name.to_string()
                 };
-                window.gl_get_proc_address(native_name)
+                window.gl_get_proc_address(&native_name)
             });
             if cfg!(target_os = "android") && self.state.programmable {
                 touchHLE_gl_bindings::gles20::load_with(|name| window.gl_get_proc_address(name));
@@ -1659,8 +1669,14 @@ impl GLES for GLES1OnGL2<'_> {
     ) {
         assert!(target == gl21::TEXTURE_2D);
         assert!(level >= 0);
+        // OES_depth_texture, used by ES 2.0 apps for shadow maps.
+        let depth_texture = self.state.programmable
+            && internalformat as GLenum == gl21::DEPTH_COMPONENT
+            && format == gl21::DEPTH_COMPONENT
+            && (type_ == gl21::UNSIGNED_SHORT || type_ == gl21::UNSIGNED_INT);
         assert!(
-            internalformat as GLenum == gl21::ALPHA
+            depth_texture
+                || internalformat as GLenum == gl21::ALPHA
                 || internalformat as GLenum == gl21::RGB
                 || internalformat as GLenum == gl21::RGBA
                 || internalformat as GLenum == gl21::LUMINANCE
@@ -1668,7 +1684,8 @@ impl GLES for GLES1OnGL2<'_> {
         );
         assert!(border == 0);
         assert!(
-            format == gl21::ALPHA
+            depth_texture
+                || format == gl21::ALPHA
                 || format == gl21::RGB
                 || format == gl21::RGBA
                 || format == gl21::LUMINANCE
@@ -1676,7 +1693,8 @@ impl GLES for GLES1OnGL2<'_> {
                 || format == gl21::BGRA
         );
         assert!(
-            type_ == gl21::UNSIGNED_BYTE
+            depth_texture
+                || type_ == gl21::UNSIGNED_BYTE
                 || type_ == gl21::UNSIGNED_SHORT_5_6_5
                 || type_ == gl21::UNSIGNED_SHORT_4_4_4_4
                 || type_ == gl21::UNSIGNED_SHORT_5_5_5_1
@@ -2243,10 +2261,12 @@ impl GLES for GLES1OnGL2<'_> {
 
 impl super::programmable::Programmable for GLES1OnGL2<'_> {
     unsafe fn ShaderSource(&mut self, shader: GLuint, source: &[u8]) {
+        let source = super::programmable::ascii_shader_source(source);
         let source = if cfg!(target_os = "android") {
-            source.to_vec()
+            // TODO: use the extension when the driver supports it
+            super::programmable::emulate_shadow_samplers(&source)
         } else {
-            super::programmable::desktop_shader_source(source)
+            super::programmable::desktop_shader_source(&source)
         };
         let pointer = source.as_ptr().cast();
         let length = i32::try_from(source.len()).unwrap();
@@ -2383,5 +2403,46 @@ impl super::programmable::Programmable for GLES1OnGL2<'_> {
         value: *const GLfloat,
     ) {
         gl21::UniformMatrix4fv(location, count, transpose, value)
+    }
+    unsafe fn Uniform1iv(&mut self, location: GLint, count: GLsizei, value: *const GLint) {
+        gl21::Uniform1iv(location, count, value)
+    }
+    unsafe fn Uniform2iv(&mut self, location: GLint, count: GLsizei, value: *const GLint) {
+        gl21::Uniform2iv(location, count, value)
+    }
+    unsafe fn Uniform3iv(&mut self, location: GLint, count: GLsizei, value: *const GLint) {
+        gl21::Uniform3iv(location, count, value)
+    }
+    unsafe fn Uniform4iv(&mut self, location: GLint, count: GLsizei, value: *const GLint) {
+        gl21::Uniform4iv(location, count, value)
+    }
+    unsafe fn ValidateProgram(&mut self, program: GLuint) {
+        gl21::ValidateProgram(program)
+    }
+    unsafe fn BlendColor(&mut self, red: GLfloat, green: GLfloat, blue: GLfloat, alpha: GLfloat) {
+        gl21::BlendColor(red, green, blue, alpha)
+    }
+    unsafe fn BlendEquationSeparate(&mut self, mode_rgb: GLenum, mode_alpha: GLenum) {
+        gl21::BlendEquationSeparate(mode_rgb, mode_alpha)
+    }
+    unsafe fn BlendFuncSeparate(
+        &mut self,
+        src_rgb: GLenum,
+        dst_rgb: GLenum,
+        src_alpha: GLenum,
+        dst_alpha: GLenum,
+    ) {
+        gl21::BlendFuncSeparate(src_rgb, dst_rgb, src_alpha, dst_alpha)
+    }
+    // These are loaded from APPLE_vertex_array_object on macOS and
+    // OES_vertex_array_object on Android (see make_current).
+    unsafe fn GenVertexArrays(&mut self, n: GLsizei, arrays: *mut GLuint) {
+        gl21::GenVertexArrays(n, arrays)
+    }
+    unsafe fn BindVertexArray(&mut self, array: GLuint) {
+        gl21::BindVertexArray(array)
+    }
+    unsafe fn DeleteVertexArrays(&mut self, n: GLsizei, arrays: *const GLuint) {
+        gl21::DeleteVertexArrays(n, arrays)
     }
 }

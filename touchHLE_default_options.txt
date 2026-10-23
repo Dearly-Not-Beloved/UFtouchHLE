@@ -254,3 +254,9 @@ jp.co.capcom.deadrisingus: --device-model=iPhone3,1 --subpixel-offset=0.01
 # Requires a device with OpenGL ES 2.0 support. On an iPhone 4 (iPhone3,1) it
 # renders at 65% resolution, on an iPhone 4S at full Retina resolution.
 com.rockstargames.gta3vc: --device-model=iPhone4,1 --retina
+
+# Monster Hunter Portable 2nd G
+# Renders at Retina resolution when told it has a Retina display. The game
+# lists older models (e.g. iPhone1,1, the default) separately, so report an
+# iPhone 4S.
+jp.co.capcom.mhp2gjp: --device-model=iPhone4,1 --retina

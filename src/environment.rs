@@ -93,6 +93,10 @@ impl std::fmt::Debug for Thread {
     }
 }
 
+/// How many guest CPU ticks a call to a host function counts as, for thread
+/// scheduling purposes (see [Environment::run]).
+const HOST_CALL_TICKS: u64 = 1_000;
+
 /// The struct containing the entire emulator state. Methods are provided for
 /// execution and management of threads.
 pub struct Environment {
@@ -458,8 +462,30 @@ impl Environment {
         )
         .map_err(|e| format!("Could not load executable: {e}"))?;
 
-        let mut dylibs = Vec::new();
+        // Apps built with newer SDKs link to LLVM's libc++, which touchHLE
+        // doesn't bundle. The C++ ABI and unwinding functions they use from it
+        // (e.g. `__cxa_guard_acquire`, `_Unwind_SjLj_Register`) are also
+        // provided by GNU libstdc++ and libgcc, so those are loaded instead.
+        let mut dylib_paths: Vec<String> = Vec::new();
         for dylib in &executable.dynamic_libraries {
+            if dylib == "/usr/lib/libc++.1.dylib" {
+                for gnu_dylib in [
+                    "/usr/lib/libstdc++.6.0.9.dylib",
+                    "/usr/lib/libgcc_s.1.dylib",
+                ] {
+                    if !executable.dynamic_libraries.iter().any(|d| d == gnu_dylib)
+                        && !dylib_paths.iter().any(|d| d == gnu_dylib)
+                    {
+                        dylib_paths.push(gnu_dylib.to_string());
+                    }
+                }
+            } else {
+                dylib_paths.push(dylib.clone());
+            }
+        }
+
+        let mut dylibs = Vec::new();
+        for dylib in &dylib_paths {
             // There are some Free Software libraries bundled with touchHLE and
             // exposed via the guest file system (see Fs::new()).
             let dylib_path = fs::GuestPath::new(dylib);
@@ -1624,6 +1650,14 @@ impl Environment {
                             svc,
                         ) {
                             f.call_from_guest(self);
+                            // Host functions take much longer than a guest
+                            // instruction, but don't use up the thread's
+                            // ticks. Count them, so a thread busy-waiting on
+                            // e.g. pthread_mutex_lock() doesn't take up most
+                            // of the time other threads need to make progress.
+                            if let Some(ticks) = self.remaining_ticks.as_mut() {
+                                *ticks = ticks.saturating_sub(HOST_CALL_TICKS);
+                            }
                             if let Some(len) = self.options.zero_stack_after_guest_to_host_call {
                                 log_once!("Applying zeroing of stack after guest to host call.");
                                 let start = self.cpu.regs()[cpu::Cpu::SP] - len;

@@ -21,6 +21,7 @@ pub mod ui_window;
 use core::panic;
 
 use super::ui_graphics::{UIGraphicsPopContext, UIGraphicsPushContext};
+use crate::abi::CallFromHost;
 use crate::frameworks::core_animation::ca_animation::{
     kCAFillModeBackwards, CAMediaTimingFillMode,
 };
@@ -242,6 +243,38 @@ pub const CLASSES: ClassExports = objc_classes! {
     () = msg_class![env; UIView setAnimationCurve:UIViewAnimationCurveEaseInOut];
 
     env.framework_state.uikit.ui_view.animation_block_count += 1;
+}
+
+// Block-based animations (iOS 4), done with the older API.
++ (())animateWithDuration:(NSTimeInterval)duration
+               animations:(id)animations { // block
+    () = msg![env; this animateWithDuration:duration
+                                 animations:animations
+                                 completion:nil];
+}
++ (())animateWithDuration:(NSTimeInterval)duration
+               animations:(id)animations // block
+               completion:(id)completion { // block
+    () = msg![env; this beginAnimations:nil context:(ConstVoidPtr::null())];
+    () = msg![env; this setAnimationDuration:duration];
+    let invoke = crate::libc::dispatch::block_invoke_function(env, animations.cast_const().cast());
+    let () = invoke.call_from_host(env, (animations,));
+    () = msg![env; this commitAnimations];
+    // TODO: call this when the animation ends
+    if completion != nil {
+        let invoke = crate::libc::dispatch::block_invoke_function(env, completion.cast_const().cast());
+        let () = invoke.call_from_host(env, (completion, true));
+    }
+}
++ (())animateWithDuration:(NSTimeInterval)duration
+                    delay:(NSTimeInterval)_delay
+                  options:(NSUInteger)_options
+               animations:(id)animations // block
+               completion:(id)completion { // block
+    // TODO: delay and options
+    () = msg![env; this animateWithDuration:duration
+                                 animations:animations
+                                 completion:completion];
 }
 
 + (())commitAnimations {
@@ -894,6 +927,18 @@ pub const CLASSES: ClassExports = objc_classes! {
 
 - (())setAutoresizingMask:(NSUInteger)mask {
     todo_objc_setter!(this, mask);
+}
+- (NSUInteger)autoresizingMask {
+    0
+}
+- (())setNeedsLayout {
+    // Layout happens when needed anyway.
+}
+- (id)tintColor {
+    nil
+}
+- (())setTintColor:(id)color { // UIColor*
+    todo_objc_setter!(this, color);
 }
 - (())setAutoresizesSubviews:(bool)enabled {
     todo_objc_setter!(this, enabled);

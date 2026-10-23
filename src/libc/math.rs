@@ -530,7 +530,20 @@ fn __fpclassifyf(_env: &mut Environment, arg: f32) -> GuestFPCategory {
     }
 }
 
+// Integer division helpers from the compiler runtime (ARMv7 has no hardware
+// division instruction on most iPhone CPUs).
+fn __divmodsi4(env: &mut Environment, a: i32, b: i32, remainder: MutPtr<i32>) -> i32 {
+    env.mem.write(remainder, a.wrapping_rem(b));
+    a.wrapping_div(b)
+}
+fn __udivmodsi4(env: &mut Environment, a: u32, b: u32, remainder: MutPtr<u32>) -> u32 {
+    env.mem.write(remainder, a % b);
+    a / b
+}
+
 pub const FUNCTIONS: FunctionExports = &[
+    export_c_func!(__divmodsi4(_, _, _)),
+    export_c_func!(__udivmodsi4(_, _, _)),
     export_c_func!(abs(_)),
     export_c_func!(fabs(_)),
     // Trigonometric functions

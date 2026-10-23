@@ -971,6 +971,34 @@ impl ObjC {
             .expect("Could not get class name!")
     }
 
+    /// Guest implementations of `selector` that `class` and its superclasses
+    /// define themselves (not inherited), from the root class down. Used for
+    /// `.cxx_construct` and `.cxx_destruct`, which each class only runs for
+    /// its own ivars.
+    pub fn own_guest_implementations(
+        &self,
+        class: Class,
+        selector: SEL,
+    ) -> Vec<crate::abi::GuestFunction> {
+        let mut imps = Vec::new();
+        let mut class = class;
+        while class != nil {
+            let Some(host_object) = self.get_host_object(class) else {
+                break;
+            };
+            let Some(class_host_object) = host_object.as_any().downcast_ref::<ClassHostObject>()
+            else {
+                break;
+            };
+            if let Some(IMP::Guest(imp)) = class_host_object.methods.get(&selector) {
+                imps.push(*imp);
+            }
+            class = class_host_object.superclass;
+        }
+        imps.reverse();
+        imps
+    }
+
     pub fn get_superclass(&self, class: Class) -> Class {
         let &ClassHostObject { superclass, .. } = self.borrow(class);
         superclass

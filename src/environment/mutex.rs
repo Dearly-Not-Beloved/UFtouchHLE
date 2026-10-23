@@ -97,6 +97,13 @@ impl MutexState {
         Ok(())
     }
 
+    /// Whether any thread is blocked waiting to lock the mutex.
+    pub fn mutex_has_waiters(&self, mutex_id: MutexId) -> bool {
+        self.mutexes
+            .get(&mutex_id)
+            .is_some_and(|mutex| mutex.waiting_count > 0)
+    }
+
     pub fn mutex_is_locked(&self, mutex_id: MutexId) -> bool {
         self.mutexes
             .get(&mutex_id)
@@ -168,9 +175,14 @@ impl Environment {
         if locking_thread == current_thread {
             match mutex.type_ {
                 MutexType::PTHREAD_MUTEX_NORMAL => {
-                    // This case would be a deadlock, we may as well panic.
-                    panic!(
-                        "Attempted to lock non-error-checking mutex #{mutex_id} for thread {current_thread}, already locked by same thread!",
+                    // This is a deadlock unless another thread unlocks the
+                    // mutex, which is allowed on iPhone OS (see unlock_mutex)
+                    // and which some apps rely on, using the mutex like a
+                    // semaphore. So block like for any other locked mutex.
+                    log_dbg!(
+                        "Thread {} is locking non-error-checking mutex #{} it already locked, waiting for another thread to unlock it.",
+                        current_thread,
+                        mutex_id,
                     );
                 }
                 MutexType::PTHREAD_MUTEX_ERRORCHECK => {
@@ -228,8 +240,13 @@ impl Environment {
                 MutexType::PTHREAD_MUTEX_NORMAL => {
                     // This case is undefined,
                     // but tests on macOS/iOS shows it is allowed!
-                    log!(
-                        "Warning: Allowing to unlock non-error-checking mutex #{mutex_id} for thread {current_thread}, locked by different thread {locking_thread}!",
+                    // Some apps (e.g. Monster Hunter Portable 2nd G) do this
+                    // every frame, so only warn once.
+                    log_once!(
+                        "Warning: Allowing to unlock a non-error-checking mutex locked by a different thread!"
+                    );
+                    log_dbg!(
+                        "Unlocking non-error-checking mutex #{mutex_id} for thread {current_thread}, locked by different thread {locking_thread}.",
                     );
                 }
                 MutexType::PTHREAD_MUTEX_ERRORCHECK | MutexType::PTHREAD_MUTEX_RECURSIVE => {

@@ -82,6 +82,9 @@ libc = "0.2.180"
 corosensei = "0.3.2"
 uuid = { version = "1.2.2", default-features = false, features = ["v4"] }
 openh264 = "0.9.8"
+aes = "0.8"
+hmac = "0.12"
+sha2 = "0.10"
 
 [build-dependencies]
 cargo-license = "0.5.1"

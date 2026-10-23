@@ -17,6 +17,7 @@ use crate::Environment;
 
 pub mod _nib_archive_decoder;
 pub mod ns_array;
+pub mod ns_attributed_string;
 pub mod ns_autorelease_pool;
 pub mod ns_bundle;
 pub mod ns_calendar;
@@ -46,6 +47,7 @@ pub mod ns_null;
 pub mod ns_number_formatter;
 pub mod ns_objc_runtime;
 pub mod ns_object;
+pub mod ns_operation;
 pub mod ns_process_info;
 pub mod ns_property_list_serialization;
 pub mod ns_run_loop;
@@ -68,6 +70,7 @@ pub const DYLIB: crate::dyld::HostDylib = crate::dyld::HostDylib {
     class_exports: &[
         _nib_archive_decoder::CLASSES,
         ns_array::CLASSES,
+        ns_attributed_string::CLASSES,
         ns_autorelease_pool::CLASSES,
         ns_bundle::CLASSES,
         ns_calendar::CLASSES,
@@ -78,6 +81,7 @@ pub const DYLIB: crate::dyld::HostDylib = crate::dyld::HostDylib {
         ns_date_formatter::CLASSES,
         ns_dictionary::CLASSES,
         ns_enumerator::CLASSES,
+        ns_exception::CLASSES,
         ns_error::CLASSES,
         ns_file_handle::CLASSES,
         ns_file_manager::CLASSES,
@@ -91,6 +95,7 @@ pub const DYLIB: crate::dyld::HostDylib = crate::dyld::HostDylib {
         ns_notification::CLASSES,
         ns_notification_center::CLASSES,
         ns_null::CLASSES,
+        ns_operation::CLASSES,
         ns_number_formatter::CLASSES,
         ns_method_signature::CLASSES,
         ns_object::CLASSES,
@@ -121,6 +126,7 @@ pub const DYLIB: crate::dyld::HostDylib = crate::dyld::HostDylib {
     ],
     function_exports: &[
         FUNCTIONS,
+        ns_autorelease_pool::FUNCTIONS,
         ns_exception::FUNCTIONS,
         ns_file_manager::FUNCTIONS,
         ns_log::FUNCTIONS,

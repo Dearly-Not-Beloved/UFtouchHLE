@@ -508,6 +508,26 @@ fn show_glyphs_at_point(
     );
 }
 
+/// Draw glyphs at positions with a font and size other than the context's
+/// (used by Core Text's `CTFontDrawGlyphs`).
+pub(crate) fn show_glyphs_with_font(
+    env: &mut Environment,
+    context: CGContextRef,
+    font: CGFontRef,
+    font_size: CGFloat,
+    glyphs: ConstPtr<CGGlyph>,
+    positions: ConstPtr<CGPoint>,
+    count: GuestUSize,
+) {
+    let host_obj = env.objc.borrow_mut::<CGContextHostObject>(context);
+    let old_font = std::mem::replace(&mut host_obj.font, font);
+    let old_font_size = std::mem::replace(&mut host_obj.font_size, font_size);
+    CGContextShowGlyphsAtPositions(env, context, glyphs, positions, count);
+    let host_obj = env.objc.borrow_mut::<CGContextHostObject>(context);
+    host_obj.font = old_font;
+    host_obj.font_size = old_font_size;
+}
+
 fn CGContextShowGlyphsAtPositions(
     env: &mut Environment,
     context: CGContextRef,

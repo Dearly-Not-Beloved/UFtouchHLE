@@ -427,7 +427,17 @@ fn pthread_setschedparam(
     0
 }
 
+// The concurrency level is only a hint, and ignored on iPhone OS too.
+fn pthread_getconcurrency(_env: &mut Environment) -> i32 {
+    0
+}
+fn pthread_setconcurrency(_env: &mut Environment, _new_level: i32) -> i32 {
+    0
+}
+
 pub const FUNCTIONS: FunctionExports = &[
+    export_c_func!(pthread_getconcurrency()),
+    export_c_func!(pthread_setconcurrency(_)),
     export_c_func!(pthread_attr_init(_)),
     export_c_func!(pthread_attr_getdetachstate(_, _)),
     export_c_func!(pthread_attr_setdetachstate(_, _)),

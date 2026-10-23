@@ -112,6 +112,13 @@ impl Font {
         }
     }
 
+    /// Use font sizes as they are, without the adjustment for substituting
+    /// Helvetica (see [Self::from_resource_file]).
+    pub fn without_size_adjustment(mut self) -> Font {
+        self.scale_factor = 1.0;
+        self
+    }
+
     pub fn mono_regular() -> Font {
         Self::from_resource_file("LiberationMono-Regular.ttf")
     }

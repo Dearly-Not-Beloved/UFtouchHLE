@@ -471,7 +471,47 @@ fn AudioFileStreamOpen(
     kAudioFileUnspecifiedError
 }
 
+/// User data chunks (e.g. loop points in a `smpl` chunk) aren't supported, so
+/// files never have any.
+const kAudioFileInvalidChunkError: OSStatus = fourcc(b"chk?") as _;
+
+fn AudioFileGetUserDataSize(
+    env: &mut Environment,
+    _audio_file: AudioFileID,
+    user_data_id: u32,
+    index: u32,
+    out_size: MutPtr<u32>,
+) -> OSStatus {
+    log_dbg!(
+        "AudioFileGetUserDataSize(_, {}, {}): no user data",
+        debug_fourcc(user_data_id),
+        index
+    );
+    if !out_size.is_null() {
+        env.mem.write(out_size, 0);
+    }
+    kAudioFileInvalidChunkError
+}
+
+fn AudioFileGetUserData(
+    _env: &mut Environment,
+    _audio_file: AudioFileID,
+    user_data_id: u32,
+    index: u32,
+    _io_size: MutPtr<u32>,
+    _out_data: MutVoidPtr,
+) -> OSStatus {
+    log_dbg!(
+        "AudioFileGetUserData(_, {}, {}): no user data",
+        debug_fourcc(user_data_id),
+        index
+    );
+    kAudioFileInvalidChunkError
+}
+
 pub const FUNCTIONS: FunctionExports = &[
+    export_c_func!(AudioFileGetUserDataSize(_, _, _, _)),
+    export_c_func!(AudioFileGetUserData(_, _, _, _, _)),
     export_c_func!(AudioFileOpenURL(_, _, _, _)),
     export_c_func!(AudioFileGetPropertyInfo(_, _, _, _)),
     export_c_func!(AudioFileGetProperty(_, _, _, _)),

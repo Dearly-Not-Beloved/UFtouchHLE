@@ -3,14 +3,30 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
-//! Main dispatch queue and the Blocks runtime used to enqueue callbacks.
+//! Grand Central Dispatch (`dispatch/dispatch.h`) and the Blocks runtime used
+//! to enqueue callbacks.
 //! Block layout: <https://clang.llvm.org/docs/Block-ABI-Apple.html>
+//!
+//! This is a simplified implementation: all work runs on the main thread,
+//! either when the main run loop next runs (`dispatch_async`, `dispatch_after`,
+//! timer sources) or immediately (`dispatch_sync`, `dispatch_group_async`).
+//! Global queues are treated like the main queue. Semaphores do block other
+//! threads.
 
 use crate::abi::{CallFromHost, GuestFunction};
 use crate::dyld::{export_c_func, ConstantExports, FunctionExports, HostConstant};
+use crate::libc::semaphore::{host_create_semaphore, sem_t};
 use crate::mem::{ConstPtr, ConstVoidPtr, MutPtr, MutVoidPtr};
 use crate::Environment;
 use std::collections::{HashMap, VecDeque};
+use std::time::{Duration, Instant};
+
+#[allow(non_camel_case_types)]
+type dispatch_time_t = u64;
+const DISPATCH_TIME_NOW: dispatch_time_t = 0;
+const DISPATCH_TIME_FOREVER: dispatch_time_t = !0;
+/// `KERN_OPERATION_TIMED_OUT`, returned by waits that time out.
+const TIMED_OUT: i32 = 49;
 
 const HAS_COPY_DISPOSE: u32 = 1 << 25;
 const IS_GLOBAL: u32 = 1 << 28;
@@ -18,9 +34,81 @@ const IS_GLOBAL: u32 = 1 << 28;
 #[derive(Default)]
 pub struct State {
     main_queue: MutVoidPtr,
+    global_queue: MutVoidPtr,
+    source_type_timer: MutVoidPtr,
     pending: VecDeque<MutVoidPtr>,
+    /// Blocks from `dispatch_after`, and when to run them.
+    delayed: Vec<(Instant, MutVoidPtr)>,
+    /// Host state for dispatch objects other than queues.
+    objects: HashMap<MutVoidPtr, DispatchObject>,
+    /// Reference point for `dispatch_time_t` values.
+    epoch: Option<Instant>,
     copies: HashMap<MutVoidPtr, u32>,
     draining: bool,
+}
+
+enum DispatchObject {
+    Group,
+    Semaphore(MutPtr<sem_t>),
+    TimerSource(TimerSource),
+}
+
+struct TimerSource {
+    /// Copied blocks, or null.
+    event_handler: MutVoidPtr,
+    cancel_handler: MutVoidPtr,
+    next_fire: Option<Instant>,
+    interval: Option<Duration>,
+    /// Sources are created suspended.
+    suspend_count: i32,
+    cancelled: bool,
+}
+
+/// Turn a `dispatch_time_t` into an [Instant] ([None] if it's "forever").
+fn time_to_instant(env: &mut Environment, time: dispatch_time_t) -> Option<Instant> {
+    let epoch = *env
+        .libc_state
+        .dispatch
+        .epoch
+        .get_or_insert_with(Instant::now);
+    match time {
+        DISPATCH_TIME_FOREVER => None,
+        DISPATCH_TIME_NOW => Some(Instant::now()),
+        _ => Some(epoch + Duration::from_nanos(time)),
+    }
+}
+
+fn dispatch_time(env: &mut Environment, when: dispatch_time_t, delta: i64) -> dispatch_time_t {
+    let epoch = *env
+        .libc_state
+        .dispatch
+        .epoch
+        .get_or_insert_with(Instant::now);
+    let base = match when {
+        DISPATCH_TIME_FOREVER => return DISPATCH_TIME_FOREVER,
+        DISPATCH_TIME_NOW => epoch.elapsed().as_nanos() as i64,
+        _ => when as i64,
+    };
+    // Avoid returning DISPATCH_TIME_NOW for a time that isn't "now".
+    base.saturating_add(delta).max(1) as dispatch_time_t
+}
+
+fn new_object(env: &mut Environment, object: DispatchObject) -> MutVoidPtr {
+    let ptr = env.mem.calloc(64);
+    env.libc_state.dispatch.objects.insert(ptr, object);
+    ptr
+}
+
+/// The function that runs a block. It takes the block as its first argument,
+/// followed by the block's own arguments.
+pub fn block_invoke_function(env: &Environment, block: ConstVoidPtr) -> GuestFunction {
+    GuestFunction::from_addr_with_thumb_bit(block_word(env, block, 3))
+}
+
+/// Call a block that takes no arguments.
+fn invoke_block(env: &mut Environment, block: ConstVoidPtr) {
+    let invoke = GuestFunction::from_addr_with_thumb_bit(block_word(env, block, 3));
+    let _: () = invoke.call_from_host(env, (block,));
 }
 
 fn main_queue(env: &mut Environment) -> ConstVoidPtr {
@@ -28,6 +116,14 @@ fn main_queue(env: &mut Environment) -> ConstVoidPtr {
         env.libc_state.dispatch.main_queue = env.mem.calloc(64);
     }
     env.libc_state.dispatch.main_queue.cast_const()
+}
+
+/// `DISPATCH_SOURCE_TYPE_TIMER` is the address of this symbol.
+fn source_type_timer(env: &mut Environment) -> ConstVoidPtr {
+    if env.libc_state.dispatch.source_type_timer.is_null() {
+        env.libc_state.dispatch.source_type_timer = env.mem.calloc(16);
+    }
+    env.libc_state.dispatch.source_type_timer.cast_const()
 }
 
 fn block_class(env: &mut Environment) -> ConstVoidPtr {
@@ -115,14 +211,245 @@ fn _Block_object_dispose(env: &mut Environment, object: MutVoidPtr, flags: i32) 
     }
 }
 
-fn dispatch_async(env: &mut Environment, queue: ConstVoidPtr, block: ConstVoidPtr) {
-    assert_eq!(
-        queue,
-        main_queue(env),
-        "Only the main dispatch queue is implemented"
-    );
+fn dispatch_get_global_queue(env: &mut Environment, _identifier: i32, _flags: u32) -> ConstVoidPtr {
+    if env.libc_state.dispatch.global_queue.is_null() {
+        env.libc_state.dispatch.global_queue = env.mem.calloc(64);
+    }
+    env.libc_state.dispatch.global_queue.cast_const()
+}
+
+fn dispatch_async(env: &mut Environment, _queue: ConstVoidPtr, block: ConstVoidPtr) {
     let block = _Block_copy(env, block);
     env.libc_state.dispatch.pending.push_back(block);
+}
+
+fn dispatch_sync(env: &mut Environment, _queue: ConstVoidPtr, block: ConstVoidPtr) {
+    invoke_block(env, block);
+}
+
+fn dispatch_after(
+    env: &mut Environment,
+    when: dispatch_time_t,
+    _queue: ConstVoidPtr,
+    block: ConstVoidPtr,
+) {
+    let Some(when) = time_to_instant(env, when) else {
+        return;
+    };
+    let block = _Block_copy(env, block);
+    env.libc_state.dispatch.delayed.push((when, block));
+}
+
+/// `dispatch_once_t` is a `long`, which is ~0 once the block has run.
+fn dispatch_once(env: &mut Environment, predicate: MutPtr<i32>, block: ConstVoidPtr) {
+    if env.mem.read(predicate) == !0 {
+        return;
+    }
+    env.mem.write(predicate, !0);
+    invoke_block(env, block);
+}
+
+// Dispatch objects are never freed.
+fn dispatch_retain(_env: &mut Environment, _object: MutVoidPtr) {}
+fn dispatch_release(_env: &mut Environment, _object: MutVoidPtr) {}
+
+fn dispatch_group_create(env: &mut Environment) -> MutVoidPtr {
+    new_object(env, DispatchObject::Group)
+}
+fn dispatch_group_async(
+    env: &mut Environment,
+    _group: MutVoidPtr,
+    _queue: ConstVoidPtr,
+    block: ConstVoidPtr,
+) {
+    // Run immediately, so the group is never waiting for anything.
+    invoke_block(env, block);
+}
+fn dispatch_group_wait(
+    _env: &mut Environment,
+    _group: MutVoidPtr,
+    _timeout: dispatch_time_t,
+) -> i32 {
+    0
+}
+
+fn dispatch_semaphore_create(env: &mut Environment, value: i32) -> MutVoidPtr {
+    if value < 0 {
+        return MutVoidPtr::null();
+    }
+    let sem = host_create_semaphore(env, value as u32);
+    new_object(env, DispatchObject::Semaphore(sem))
+}
+fn semaphore_for(env: &Environment, object: MutVoidPtr) -> MutPtr<sem_t> {
+    match env.libc_state.dispatch.objects.get(&object) {
+        Some(&DispatchObject::Semaphore(sem)) => sem,
+        _ => panic!("{object:?} is not a dispatch semaphore"),
+    }
+}
+fn dispatch_semaphore_signal(env: &mut Environment, semaphore: MutVoidPtr) -> i32 {
+    let sem = semaphore_for(env, semaphore);
+    env.sem_increment(sem);
+    0
+}
+fn dispatch_semaphore_wait(
+    env: &mut Environment,
+    semaphore: MutVoidPtr,
+    timeout: dispatch_time_t,
+) -> i32 {
+    let sem = semaphore_for(env, semaphore);
+    if env.sem_decrement(sem, false) {
+        return 0;
+    }
+    // The work that signals the semaphore may be waiting to run on the main
+    // thread, which is where everything runs.
+    if env.current_thread == 0 {
+        drain_main_queue(env);
+        if env.sem_decrement(sem, false) {
+            return 0;
+        }
+    }
+    if timeout != DISPATCH_TIME_FOREVER {
+        // TODO: actually wait until the timeout
+        return TIMED_OUT;
+    }
+    env.sem_decrement(sem, true);
+    0
+}
+
+fn timer_source(env: &mut Environment, source: MutVoidPtr) -> &mut TimerSource {
+    match env.libc_state.dispatch.objects.get_mut(&source) {
+        Some(DispatchObject::TimerSource(timer)) => timer,
+        _ => panic!("{source:?} is not a dispatch timer source"),
+    }
+}
+
+fn dispatch_source_create(
+    env: &mut Environment,
+    type_: ConstVoidPtr,
+    _handle: u32,
+    _mask: u32,
+    _queue: ConstVoidPtr,
+) -> MutVoidPtr {
+    assert_eq!(
+        type_,
+        source_type_timer(env),
+        "Only timer dispatch sources are implemented"
+    );
+    new_object(
+        env,
+        DispatchObject::TimerSource(TimerSource {
+            event_handler: MutVoidPtr::null(),
+            cancel_handler: MutVoidPtr::null(),
+            next_fire: None,
+            interval: None,
+            suspend_count: 1,
+            cancelled: false,
+        }),
+    )
+}
+fn dispatch_source_set_timer(
+    env: &mut Environment,
+    source: MutVoidPtr,
+    start: dispatch_time_t,
+    interval: u64,
+    _leeway: u64,
+) {
+    let start = time_to_instant(env, start);
+    let timer = timer_source(env, source);
+    timer.next_fire = start;
+    timer.interval = (interval != 0 && interval != DISPATCH_TIME_FOREVER)
+        .then(|| Duration::from_nanos(interval));
+}
+fn dispatch_source_set_event_handler(
+    env: &mut Environment,
+    source: MutVoidPtr,
+    block: ConstVoidPtr,
+) {
+    let block = _Block_copy(env, block);
+    let old = std::mem::replace(&mut timer_source(env, source).event_handler, block);
+    _Block_release(env, old);
+}
+fn dispatch_source_set_cancel_handler(
+    env: &mut Environment,
+    source: MutVoidPtr,
+    block: ConstVoidPtr,
+) {
+    let block = _Block_copy(env, block);
+    let old = std::mem::replace(&mut timer_source(env, source).cancel_handler, block);
+    _Block_release(env, old);
+}
+fn dispatch_source_cancel(env: &mut Environment, source: MutVoidPtr) {
+    let timer = timer_source(env, source);
+    if timer.cancelled {
+        return;
+    }
+    timer.cancelled = true;
+    let cancel_handler = std::mem::take(&mut timer.cancel_handler);
+    if !cancel_handler.is_null() {
+        env.libc_state.dispatch.pending.push_back(cancel_handler);
+    }
+}
+
+fn dispatch_suspend(env: &mut Environment, object: MutVoidPtr) {
+    if let Some(DispatchObject::TimerSource(timer)) =
+        env.libc_state.dispatch.objects.get_mut(&object)
+    {
+        timer.suspend_count += 1;
+    } else {
+        log!("TODO: dispatch_suspend({:?}) (ignored)", object);
+    }
+}
+fn dispatch_resume(env: &mut Environment, object: MutVoidPtr) {
+    if let Some(DispatchObject::TimerSource(timer)) =
+        env.libc_state.dispatch.objects.get_mut(&object)
+    {
+        timer.suspend_count -= 1;
+    } else {
+        log!("TODO: dispatch_resume({:?}) (ignored)", object);
+    }
+}
+
+/// Move `dispatch_after` blocks and timer events that are due to the queue.
+fn queue_due_work(env: &mut Environment) {
+    let now = Instant::now();
+    let state = &mut env.libc_state.dispatch;
+    let mut i = 0;
+    while i < state.delayed.len() {
+        if state.delayed[i].0 <= now {
+            let (_, block) = state.delayed.remove(i);
+            state.pending.push_back(block);
+        } else {
+            i += 1;
+        }
+    }
+    let mut handlers = Vec::new();
+    for object in state.objects.values_mut() {
+        let DispatchObject::TimerSource(timer) = object else {
+            continue;
+        };
+        if timer.cancelled || timer.suspend_count > 0 || timer.event_handler.is_null() {
+            continue;
+        }
+        let Some(next_fire) = timer.next_fire else {
+            continue;
+        };
+        if next_fire > now {
+            continue;
+        }
+        // Coalesce missed events, like GCD does.
+        timer.next_fire = timer.interval.map(|interval| {
+            let mut next = next_fire + interval;
+            while next <= now {
+                next += interval;
+            }
+            next
+        });
+        handlers.push(timer.event_handler);
+    }
+    for handler in handlers {
+        let handler = _Block_copy(env, handler.cast_const());
+        env.libc_state.dispatch.pending.push_back(handler);
+    }
 }
 
 /// Run the work submitted before this main run-loop iteration. Work enqueued
@@ -133,6 +460,7 @@ pub fn drain_main_queue(env: &mut Environment) {
         return;
     }
     env.libc_state.dispatch.draining = true;
+    queue_due_work(env);
     let pending = std::mem::take(&mut env.libc_state.dispatch.pending);
     for block in pending {
         let invoke =
@@ -148,9 +476,33 @@ pub const CONSTANTS: ConstantExports = &[
     ("__NSConcreteStackBlock", HostConstant::Custom(block_class)),
     ("__NSConcreteGlobalBlock", HostConstant::Custom(block_class)),
     ("__NSConcreteMallocBlock", HostConstant::Custom(block_class)),
+    (
+        "__dispatch_source_type_timer",
+        HostConstant::Custom(source_type_timer),
+    ),
 ];
 pub const FUNCTIONS: FunctionExports = &[
+    export_c_func!(dispatch_get_global_queue(_, _)),
     export_c_func!(dispatch_async(_, _)),
+    export_c_func!(dispatch_sync(_, _)),
+    export_c_func!(dispatch_after(_, _, _)),
+    export_c_func!(dispatch_once(_, _)),
+    export_c_func!(dispatch_time(_, _)),
+    export_c_func!(dispatch_retain(_)),
+    export_c_func!(dispatch_release(_)),
+    export_c_func!(dispatch_group_create()),
+    export_c_func!(dispatch_group_async(_, _, _)),
+    export_c_func!(dispatch_group_wait(_, _)),
+    export_c_func!(dispatch_semaphore_create(_)),
+    export_c_func!(dispatch_semaphore_signal(_)),
+    export_c_func!(dispatch_semaphore_wait(_, _)),
+    export_c_func!(dispatch_source_create(_, _, _, _)),
+    export_c_func!(dispatch_source_set_timer(_, _, _, _)),
+    export_c_func!(dispatch_source_set_event_handler(_, _)),
+    export_c_func!(dispatch_source_set_cancel_handler(_, _)),
+    export_c_func!(dispatch_source_cancel(_)),
+    export_c_func!(dispatch_suspend(_)),
+    export_c_func!(dispatch_resume(_)),
     export_c_func!(_Block_copy(_)),
     export_c_func!(_Block_release(_)),
     export_c_func!(_Block_object_assign(_, _, _)),

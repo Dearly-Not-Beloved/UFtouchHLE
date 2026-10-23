@@ -85,8 +85,24 @@ const AVAudioSessionCategoryRecord: &str = "AVAudioSessionCategoryRecord";
 const AVAudioSessionCategorySoloAmbient: &str = "AVAudioSessionCategorySoloAmbient";
 const AVAudioSessionCategoryAudioProcessing: &str = "AVAudioSessionCategoryAudioProcessing";
 
-/// `AVAudioSessionCategory` constants
+/// `AVAudioSessionCategory` constants, and notifications
 pub const CONSTANTS: ConstantExports = &[
+    (
+        "_AVAudioSessionInterruptionNotification",
+        HostConstant::NSString("AVAudioSessionInterruptionNotification"),
+    ),
+    (
+        "_AVAudioSessionInterruptionTypeKey",
+        HostConstant::NSString("AVAudioSessionInterruptionTypeKey"),
+    ),
+    (
+        "_AVAudioSessionRouteChangeNotification",
+        HostConstant::NSString("AVAudioSessionRouteChangeNotification"),
+    ),
+    (
+        "_AVAudioSessionRouteChangeReasonKey",
+        HostConstant::NSString("AVAudioSessionRouteChangeReasonKey"),
+    ),
     (
         "_AVAudioSessionCategoryAmbient",
         HostConstant::NSString(AVAudioSessionCategoryAmbient),

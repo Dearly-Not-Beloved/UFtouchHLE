@@ -9,6 +9,7 @@ use crate::dyld::{ConstantExports, HostConstant};
 use crate::frameworks::core_animation::ca_media_timing_function::kCAMediaTimingFunctionDefault;
 use crate::frameworks::core_foundation::time::CFTimeInterval;
 use crate::frameworks::foundation::ns_string::{get_static_str, to_rust_string};
+use crate::frameworks::foundation::NSUInteger;
 use crate::objc::{
     autorelease, id, msg, nil, objc_classes, release, retain, todo_objc_setter, ClassExports,
     HostObject, NSZonePtr,
@@ -45,6 +46,17 @@ pub const CONSTANTS: ConstantExports = &[
     (
         "_kCATransitionReveal",
         HostConstant::NSString(kCATransitionReveal),
+    ),
+    // `CATransitionSubtype` values.
+    (
+        "_kCATransitionFromRight",
+        HostConstant::NSString("fromRight"),
+    ),
+    ("_kCATransitionFromLeft", HostConstant::NSString("fromLeft")),
+    ("_kCATransitionFromTop", HostConstant::NSString("fromTop")),
+    (
+        "_kCATransitionFromBottom",
+        HostConstant::NSString("fromBottom"),
     ),
     // `CAMediaTimingFillMode` values.
     (
@@ -314,6 +326,37 @@ pub const CLASSES: ClassExports = objc_classes! {
 
 - (())setType:(CATransitionType)transitionType {
     todo_objc_setter!(this, to_rust_string(env, transitionType));
+}
+- (())setSubtype:(id)subtype { // NSString*
+    todo_objc_setter!(this, to_rust_string(env, subtype));
+}
+
+@end
+
+// Keyframes aren't supported: the animation goes from the first value to the
+// last, like a CABasicAnimation.
+@implementation CAKeyframeAnimation: CABasicAnimation
+
+- (())setValues:(id)values { // NSArray*
+    let count: NSUInteger = if values == nil { 0 } else { msg![env; values count] };
+    if count > 0 {
+        let first: id = msg![env; values objectAtIndex:(0 as NSUInteger)];
+        let last: id = msg![env; values objectAtIndex:(count - 1)];
+        () = msg![env; this setFromValue:first];
+        () = msg![env; this setToValue:last];
+    }
+}
+- (())setKeyTimes:(id)key_times { // NSArray*
+    todo_objc_setter!(this, key_times);
+}
+- (())setTimingFunctions:(id)functions { // NSArray*
+    todo_objc_setter!(this, functions);
+}
+- (())setCalculationMode:(id)mode { // NSString*
+    todo_objc_setter!(this, mode);
+}
+- (())setPath:(id)path { // CGPathRef
+    todo_objc_setter!(this, path);
 }
 
 @end

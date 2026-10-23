@@ -19,4 +19,15 @@ fn if_nameindex(_env: &mut Environment) -> ConstPtr<if_nameindex> {
     Ptr::null()
 }
 
-pub const FUNCTIONS: FunctionExports = &[export_c_func!(if_nameindex())];
+fn if_nametoindex(env: &mut Environment, name: ConstPtr<u8>) -> u32 {
+    log!(
+        "if_nametoindex({:?}): no network interfaces, returning 0",
+        env.mem.cstr_at_utf8(name)
+    );
+    0
+}
+
+pub const FUNCTIONS: FunctionExports = &[
+    export_c_func!(if_nameindex()),
+    export_c_func!(if_nametoindex(_)),
+];

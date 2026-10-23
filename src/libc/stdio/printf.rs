@@ -559,6 +559,20 @@ fn snprintf(
     vsnprintf(env, dest, n, format, args.start())
 }
 
+/// `snprintf` with buffer overflow checking (`_FORTIFY_SOURCE`).
+fn __snprintf_chk(
+    env: &mut Environment,
+    dest: MutPtr<u8>,
+    n: GuestUSize,
+    _flag: i32,
+    dest_len: GuestUSize,
+    format: ConstPtr<u8>,
+    args: DotDotDot,
+) -> i32 {
+    assert!(n <= dest_len, "__snprintf_chk: buffer overflow");
+    vsnprintf(env, dest, n, format, args.start())
+}
+
 fn vasprintf(
     env: &mut Environment,
     ret: MutPtr<MutPtr<u8>>,
@@ -1343,6 +1357,7 @@ fn vfprintf(env: &mut Environment, stream: MutPtr<FILE>, format: ConstPtr<u8>, a
 }
 
 pub const FUNCTIONS: FunctionExports = &[
+    export_c_func!(__snprintf_chk(_, _, _, _, _, _)),
     export_c_func!(sscanf(_, _, _)),
     export_c_func!(swscanf(_, _, _)),
     export_c_func!(vsscanf(_, _, _)),

@@ -5,7 +5,8 @@
  */
 //! `NSAutoreleasePool`.
 
-use crate::objc::{id, msg, objc_classes, release, ClassExports, HostObject, NSZonePtr};
+use crate::dyld::{export_c_func, FunctionExports};
+use crate::objc::{id, msg, msg_class, objc_classes, release, ClassExports, HostObject, NSZonePtr};
 use crate::{Environment, ThreadId};
 use std::num::NonZeroU32;
 
@@ -131,3 +132,17 @@ pub const CLASSES: ClassExports = objc_classes! {
 @end
 
 };
+
+/// Used by `@autoreleasepool { }` blocks.
+fn objc_autoreleasePoolPush(env: &mut Environment) -> id {
+    let pool: id = msg_class![env; NSAutoreleasePool alloc];
+    msg![env; pool init]
+}
+fn objc_autoreleasePoolPop(env: &mut Environment, pool: id) {
+    msg![env; pool drain]
+}
+
+pub const FUNCTIONS: FunctionExports = &[
+    export_c_func!(objc_autoreleasePoolPush()),
+    export_c_func!(objc_autoreleasePoolPop(_)),
+];

@@ -30,14 +30,18 @@ pub mod core_audio_types;
 pub mod core_foundation;
 pub mod core_graphics;
 pub mod core_location;
+pub mod core_media;
 pub mod core_motion;
 pub mod core_telephony;
+pub mod core_text;
 pub mod foundation;
+pub mod game_controller;
 pub mod game_kit;
 pub mod media_player;
 pub mod message_ui;
 pub mod openal;
 pub mod opengles;
+pub mod security;
 pub mod store_kit;
 pub mod system_configuration;
 pub mod uikit;
@@ -50,6 +54,7 @@ pub struct State {
     core_animation: core_animation::State,
     core_graphics: core_graphics::State,
     foundation: foundation::State,
+    game_kit: game_kit::State,
     media_player: media_player::State,
     openal: openal::State,
     opengles: opengles::State,

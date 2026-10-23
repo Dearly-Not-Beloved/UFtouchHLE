@@ -56,6 +56,7 @@ pub const DYLIB: crate::dyld::HostDylib = crate::dyld::HostDylib {
         ctype::CONSTANTS,
         stdio::CONSTANTS,
         mach::init::CONSTANTS,
+        stdlib::CONSTANTS,
     ],
     function_exports: &[
         arpa::inet::FUNCTIONS,

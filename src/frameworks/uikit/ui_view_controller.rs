@@ -8,6 +8,7 @@
 //! Resources:
 //! - [View Controller Programming Guide for iOS (Legacy)](https://developer.apple.com/library/archive/documentation/WindowsViews/Conceptual/ViewControllerPGforiOSLegacy/BasicViewControllers/BasicViewControllers.html)
 
+use crate::abi::CallFromHost;
 use crate::frameworks::core_graphics::CGRect;
 use crate::frameworks::foundation::ns_objc_runtime::NSStringFromClass;
 use crate::frameworks::foundation::ns_string::{from_rust_string, get_static_str, to_rust_string};
@@ -215,6 +216,39 @@ pub const CLASSES: ClassExports = objc_classes! {
 }
 - (())setModalTransitionStyle:(UIModalTransitionStyle)style {
     todo_objc_setter!(this, style);
+}
+
+- (())presentModalViewController:(id)controller animated:(bool)animated {
+    log!("TODO: [(UIViewController*){:?} presentModalViewController:{:?} animated:{}]", this, controller, animated);
+}
+- (())presentViewController:(id)controller
+                   animated:(bool)animated
+                 completion:(id)completion { // block
+    () = msg![env; this presentModalViewController:controller animated:animated];
+    if completion != nil {
+        let invoke = crate::libc::dispatch::block_invoke_function(env, completion.cast_const().cast());
+        let () = invoke.call_from_host(env, (completion,));
+    }
+}
+- (())dismissViewControllerAnimated:(bool)animated
+                         completion:(id)completion { // block
+    () = msg![env; this dismissModalViewControllerAnimated:animated];
+    if completion != nil {
+        let invoke = crate::libc::dispatch::block_invoke_function(env, completion.cast_const().cast());
+        let () = invoke.call_from_host(env, (completion,));
+    }
+}
+- (id)presentedViewController {
+    nil
+}
+- (id)modalViewController {
+    nil
+}
+- (id)navigationController {
+    nil
+}
+- (bool)isMovingFromParentViewController {
+    false
 }
 
 - (())dismissModalViewControllerAnimated:(bool)animated {

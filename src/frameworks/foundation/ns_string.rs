@@ -1385,6 +1385,24 @@ pub const CLASSES: ClassExports = objc_classes! {
     () = msg![env; this setString:res];
 }
 
+- (())replaceCharactersInRange:(NSRange)range
+                    withString:(id)a_string { // NSString*
+    assert_ne!(a_string, nil);
+    let location = range.location;
+    () = msg![env; this deleteCharactersInRange:range];
+    () = msg![env; this insertString:a_string atIndex:location];
+}
+
+- (())insertString:(id)a_string // NSString*
+           atIndex:(NSUInteger)index {
+    assert_ne!(a_string, nil);
+    let left: id = msg![env; this substringToIndex:index];
+    let right: id = msg![env; this substringFromIndex:index];
+    let res: id = msg![env; left stringByAppendingString:a_string];
+    let res: id = msg![env; res stringByAppendingString:right];
+    () = msg![env; this setString:res];
+}
+
 @end
 
 // Our private subclass that is the single implementation of NSString for the

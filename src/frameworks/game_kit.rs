@@ -12,6 +12,7 @@
 
 mod gk_leaderboard;
 mod gk_local_player;
+mod gk_matchmaker;
 mod gk_score;
 mod gk_session;
 
@@ -21,9 +22,15 @@ pub const DYLIB: crate::dyld::HostDylib = crate::dyld::HostDylib {
     class_exports: &[
         gk_leaderboard::CLASSES,
         gk_local_player::CLASSES,
+        gk_matchmaker::CLASSES,
         gk_score::CLASSES,
         gk_session::CLASSES,
     ],
     constant_exports: &[gk_local_player::CONSTANTS],
     function_exports: &[],
 };
+
+#[derive(Default)]
+pub struct State {
+    gk_matchmaker: gk_matchmaker::State,
+}

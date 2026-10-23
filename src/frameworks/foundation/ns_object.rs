@@ -16,6 +16,7 @@
 
 use super::ns_string::{from_rust_string, to_rust_string};
 use super::{NSTimeInterval, NSUInteger};
+use crate::abi::CallFromHost;
 use crate::frameworks::foundation::ns_run_loop::{add_perform_request, cancel_perform_requests};
 use crate::frameworks::foundation::ns_thread::detach_new_thread_inner;
 use crate::libc::semaphore::{host_destroy_semaphore, sem_wait};
@@ -24,6 +25,44 @@ use crate::objc::{
     autorelease, id, msg, msg_class, msg_send, msg_send_no_type_checking, nil, objc_classes,
     retain, Class, ClassExports, NSZonePtr, ObjC, TrivialHostObject, SEL,
 };
+use crate::Environment;
+
+/// Run the constructors of an object's C++ ivars, like the iPhone OS runtime
+/// does when allocating an object (the compiler generates a `.cxx_construct`
+/// method for each class with such ivars). Returns nil if one fails.
+fn cxx_construct(env: &mut Environment, object: id) -> id {
+    if object == nil {
+        return nil;
+    }
+    let Some(sel) = env.objc.lookup_selector(".cxx_construct") else {
+        return object;
+    };
+    let class = ObjC::read_isa(object, &env.mem);
+    for imp in env.objc.own_guest_implementations(class, sel) {
+        let result: id = imp.call_from_host(env, (object, sel));
+        if result == nil {
+            return nil;
+        }
+    }
+    object
+}
+
+/// Run the destructors of an object's C++ ivars (see [cxx_construct]), from
+/// the subclass up.
+fn cxx_destruct(env: &mut Environment, object: id) {
+    let Some(sel) = env.objc.lookup_selector(".cxx_destruct") else {
+        return;
+    };
+    let class = ObjC::read_isa(object, &env.mem);
+    for imp in env
+        .objc
+        .own_guest_implementations(class, sel)
+        .into_iter()
+        .rev()
+    {
+        let () = imp.call_from_host(env, (object, sel));
+    }
+}
 
 pub const CLASSES: ClassExports = objc_classes! {
 
@@ -32,7 +71,8 @@ pub const CLASSES: ClassExports = objc_classes! {
 @implementation NSObject
 
 + (id)alloc {
-    msg![env; this allocWithZone:(MutVoidPtr::null())]
+    let object: id = msg![env; this allocWithZone:(MutVoidPtr::null())];
+    cxx_construct(env, object)
 }
 + (id)allocWithZone:(NSZonePtr)_zone { // struct _NSZone*
     log_dbg!("[{:?} allocWithZone:]", this);
@@ -122,6 +162,7 @@ pub const CLASSES: ClassExports = objc_classes! {
 
 - (())dealloc {
     log_dbg!("[{:?} dealloc]", this);
+    cxx_destruct(env, this);
     env.objc.dealloc_object(this, &mut env.mem)
 }
 
@@ -246,6 +287,21 @@ forUndefinedKey:(id)key { // NSString*
 }
 - (())didChangeValueForKey:(id)_key { // NSString *
     log_once!("TODO: NSObject didChangeValueForKey:");
+}
+
+// Key-value observing isn't implemented: observers are never notified.
+- (())addObserver:(id)observer
+       forKeyPath:(id)key_path // NSString*
+          options:(NSUInteger)_options
+          context:(MutVoidPtr)_context {
+    log_dbg!("TODO: [{:?} addObserver:{:?} forKeyPath:{:?} ...] (ignored)", this, observer, key_path);
+}
+- (())removeObserver:(id)_observer
+          forKeyPath:(id)_key_path { // NSString*
+}
+- (())removeObserver:(id)_observer
+          forKeyPath:(id)_key_path // NSString*
+             context:(MutVoidPtr)_context {
 }
 
 - (bool)respondsToSelector:(SEL)selector {

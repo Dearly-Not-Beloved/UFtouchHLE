@@ -20,7 +20,7 @@
 
 use crate::dyld::{export_c_func, ConstantExports, FunctionExports, HostConstant, HostDylib};
 use crate::objc::messages::ThreadInitializer;
-use crate::MutexId;
+use crate::{Environment, MutexId};
 
 mod classes;
 mod messages;
@@ -50,7 +50,10 @@ pub(crate) use messages::objc_msgSend;
 use messages::{objc_msgSendSuper2, objc_msgSend_stret, MsgSendSignature, MsgSendSuperSignature};
 use methods::method_list_t;
 use objects::{objc_object, object_getClass, HostObjectEntry};
-use properties::{ivar_list_t, objc_copyStruct, objc_getProperty, objc_setProperty};
+use properties::{
+    ivar_list_t, objc_copyStruct, objc_getProperty, objc_setProperty, objc_setProperty_atomic,
+    objc_setProperty_atomic_copy, objc_setProperty_nonatomic, objc_setProperty_nonatomic_copy,
+};
 use selectors::sel_registerName;
 use synchronization::{objc_sync_enter, objc_sync_exit};
 
@@ -114,7 +117,39 @@ const CONSTANTS: ConstantExports = &[
     // and avoids a linker error for the integration tests.
     ("__objc_empty_vtable", HostConstant::NullPtr),
     ("__objc_empty_cache", HostConstant::NullPtr),
+    // Used by the unwinding tables of code that catches Objective-C
+    // exceptions. touchHLE doesn't support unwinding through guest code, so
+    // these are only needed for linking.
+    ("___objc_personality_v0", HostConstant::NullPtr),
+    ("_OBJC_EHTYPE_$_NSException", HostConstant::NullPtr),
 ];
+
+/// Called by `for (x in y)` loops if the collection changes while looping.
+fn objc_enumerationMutation(env: &mut Environment, object: id) {
+    let class: Class = msg![env; object class];
+    panic!(
+        "Collection {:?} (class {:?}) was mutated while being enumerated",
+        object,
+        env.objc.get_class_name(class)
+    );
+}
+
+/// `@throw`. touchHLE can't unwind guest code to a `@catch` block, so throwing
+/// an exception ends the app, with the exception's details.
+fn objc_exception_throw(env: &mut Environment, exception: id) {
+    let class: Class = msg![env; exception class];
+    let class_name = env.objc.get_class_name(class).to_string();
+    let description: id = msg![env; exception description];
+    let description = if description == nil {
+        "(nil)".to_string()
+    } else {
+        crate::frameworks::foundation::ns_string::to_rust_string(env, description).to_string()
+    };
+    panic!("Objective-C exception thrown: {class_name} {exception:?}: {description}");
+}
+fn objc_exception_rethrow(_env: &mut Environment) {
+    panic!("Objective-C exception rethrown");
+}
 
 const FUNCTIONS: FunctionExports = &[
     export_c_func!(class_getInstanceSize(_)),
@@ -128,7 +163,14 @@ const FUNCTIONS: FunctionExports = &[
     export_c_func!(objc_getClass(_)),
     export_c_func!(objc_getProperty(_, _, _, _)),
     export_c_func!(objc_setProperty(_, _, _, _, _, _)),
+    export_c_func!(objc_setProperty_atomic(_, _, _, _)),
+    export_c_func!(objc_setProperty_nonatomic(_, _, _, _)),
+    export_c_func!(objc_setProperty_atomic_copy(_, _, _, _)),
+    export_c_func!(objc_setProperty_nonatomic_copy(_, _, _, _)),
     export_c_func!(objc_copyStruct(_, _, _, _, _)),
+    export_c_func!(objc_enumerationMutation(_)),
+    export_c_func!(objc_exception_throw(_)),
+    export_c_func!(objc_exception_rethrow()),
     export_c_func!(objc_sync_enter(_)),
     export_c_func!(objc_sync_exit(_)),
     export_c_func!(object_getClass(_)),

@@ -112,6 +112,19 @@ pub const CLASSES: ClassExports = objc_classes! {
     }
 }
 
+- (bool)checkResourceIsReachableAndReturnError:(MutPtr<id>)error { // NSError**
+    let is_file_url: bool = msg![env; this isFileURL];
+    let reachable = is_file_url && {
+        let path = to_rust_path(env, this);
+        env.fs.exists(&path)
+    };
+    if !reachable && !error.is_null() {
+        // TODO: return an actual NSError
+        env.mem.write(error, nil);
+    }
+    reachable
+}
+
 - (id)description {
     match env.objc.borrow(this) {
         NSURLHostObject::FileURL { ns_string, working_directory } => {

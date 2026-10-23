@@ -160,6 +160,17 @@ pub const CLASSES: ClassExports = objc_classes! {
     todo_objc_setter!(this, visible);
 }
 
+- (bool)canOpenURL:(id)url { // NSURL*
+    log!("[UIApplication canOpenURL:{:?}]: no other apps, returning false", url);
+    false
+}
+- (NSUInteger)beginBackgroundTaskWithExpirationHandler:(id)_handler { // block
+    // Apps aren't put in the background, so the task never expires.
+    1
+}
+- (())endBackgroundTask:(NSUInteger)_identifier {
+}
+
 - (bool)openURL:(id)url { // NSURL
     let ns_string = msg![env; url absoluteString];
     let url_string = ns_string::to_rust_string(env, ns_string);
@@ -499,6 +510,19 @@ pub(super) fn did_become_active(env: &mut Environment) {
 }
 
 pub(super) fn exit(env: &mut Environment) {
+    // On iPhone OS 4 and later, apps are normally suspended rather than told
+    // they will terminate, so some apps never finish quitting: e.g. Grand
+    // Theft Auto: Vice City's applicationWillTerminate: waits for its
+    // rendering thread, which waits for the main thread, and Monster Hunter
+    // Portable 2nd G already hangs in applicationWillResignActive:. Don't let
+    // that keep touchHLE open. (On Android, MainActivity does the same.)
+    #[cfg(not(target_os = "android"))]
+    std::thread::spawn(|| {
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        echo!("The app didn't finish quitting within 2 seconds, quitting anyway.");
+        std::process::exit(0);
+    });
+
     let ui_application: id = msg_class![env; UIApplication sharedApplication];
 
     let center: id = msg_class![env; NSNotificationCenter defaultCenter];
@@ -535,17 +559,6 @@ pub(super) fn exit(env: &mut Environment) {
     };
 
     crate::objc::TERMINATING.store(true, std::sync::atomic::Ordering::Relaxed);
-    // On iPhone OS 4 and later, apps are normally suspended rather than told
-    // they will terminate, so some apps' applicationWillTerminate: never
-    // finishes: e.g. Grand Theft Auto: Vice City waits for its rendering
-    // thread, which waits for the main thread. Don't let that keep touchHLE
-    // open. (On Android, MainActivity does the same.)
-    #[cfg(not(target_os = "android"))]
-    std::thread::spawn(|| {
-        std::thread::sleep(std::time::Duration::from_secs(5));
-        echo!("The app didn't finish quitting within 5 seconds, quitting anyway.");
-        std::process::exit(0);
-    });
     {
         let pool: id = msg_class![env; NSAutoreleasePool new];
         let delegate: id = msg![env; ui_application delegate];
