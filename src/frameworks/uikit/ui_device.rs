@@ -90,8 +90,11 @@ pub const CLASSES: ClassExports = objc_classes! {
 }
 
 - (id)model {
-    // TODO: Hardcoded to iPhone for now
-    ns_string::get_static_str(env, "iPhone")
+    let model = match env.options.device_family.unwrap_or(DeviceFamily::iPhone) {
+        DeviceFamily::iPhone => "iPhone",
+        DeviceFamily::iPad => "iPad",
+    };
+    ns_string::get_static_str(env, model)
 }
 - (id)localizedModel {
     // TODO: localization

@@ -120,6 +120,19 @@ public class LauncherActivity extends Activity {
     private static final String PREFS = "launcher";
     private static final String PREF_CHECK_UPDATES = "checkUpdates";
     private static final String PREF_IGNORED_VERSION = "ignoredUpdateVersion";
+    private static final String PREF_DEVICE_PROFILE = "deviceProfile";
+    private static final String PREF_APP_DEVICE_PROFILE = "appDeviceProfile:";
+    private static final String[] DEVICE_PROFILES = {
+        "auto", "iPhone2,1", "iPhone3,1", "iPhone4,1", "iPhone5,1", "iPhone6,1",
+        "iPad2,1", "iPad3,1",
+    };
+    private static final String[] DEVICE_PROFILE_LABELS = {
+        "自动", "iPhone 3GS（480×320）", "iPhone 4（960×640）", "iPhone 4S（960×640）",
+        "iPhone 5（1136×640）", "iPhone 5s（1136×640）", "iPad 2（1024×768）",
+        "iPad Retina（2048×1536）",
+    };
+    private static final String DEVICE_PROFILE_HINT =
+        "自动按屏幕比例选择；不支持该屏幕的游戏会使用兼容尺寸";
 
     private static final int TEXT = Color.WHITE;
     private static final int TEXT_DIM = 0xB3FFFFFF;
@@ -653,17 +666,21 @@ public class LauncherActivity extends Activity {
         List<String> args = new ArrayList<>();
         args.add(app.path);
         args.addAll(quickOptions.toArgs());
+        String profile = appDeviceProfile(app);
+        args.add("--device-profile=" + (profile != null ? profile : globalDeviceProfile()));
         Intent intent = new Intent(this, MainActivity.class);
         intent.putExtra(MainActivity.EXTRA_ARGS, args.toArray(new String[0]));
         startActivity(intent);
     }
 
     private void showAppMenu(final App app) {
-        String[] items = {"导入存档", "导出存档", "删除游戏"};
+        String[] items = {"导入存档", "导出存档", "删除游戏", "模拟机型：" + appDeviceProfileLabel(app)};
         new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
             .setTitle(app.name)
             .setItems(items, (dialog, which) -> {
-                if (which == 2) {
+                if (which == 3) {
+                    showDeviceProfiles(app, null);
+                } else if (which == 2) {
                     confirmDelete(app);
                 } else if (app.bundleId == null || app.bundleId.isEmpty()) {
                     Toast.makeText(this, "无法识别这个游戏，不能处理存档。", Toast.LENGTH_LONG).show();
@@ -760,11 +777,112 @@ public class LauncherActivity extends Activity {
 
     // ---- Quick options ----
 
+    private static int deviceProfileIndex(String value) {
+        for (int i = 0; i < DEVICE_PROFILES.length; i++) {
+            if (DEVICE_PROFILES[i].equals(value)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /// Unknown or wrongly typed old preferences behave like a missing choice.
+    private String readDeviceProfile(String key) {
+        try {
+            String value = getSharedPreferences(PREFS, MODE_PRIVATE).getString(key, null);
+            return deviceProfileIndex(value) >= 0 ? value : null;
+        } catch (ClassCastException e) {
+            return null;
+        }
+    }
+
+    private String globalDeviceProfile() {
+        String value = readDeviceProfile(PREF_DEVICE_PROFILE);
+        return value != null ? value : "auto";
+    }
+
+    private String appDeviceProfileKey(App app) {
+        // Bundle IDs survive reimporting or renaming the game's IPA. Namespace
+        // the path fallback so it cannot collide with a bundle identifier.
+        return PREF_APP_DEVICE_PROFILE + (app.bundleId != null && !app.bundleId.isEmpty()
+            ? "bundle:" + app.bundleId : "path:" + app.path);
+    }
+
+    private String appDeviceProfile(App app) {
+        return readDeviceProfile(appDeviceProfileKey(app));
+    }
+
+    private String deviceProfileLabel(String profile) {
+        int index = deviceProfileIndex(profile);
+        return DEVICE_PROFILE_LABELS[index >= 0 ? index : 0];
+    }
+
+    private String appDeviceProfileLabel(App app) {
+        String profile = appDeviceProfile(app);
+        return profile != null ? deviceProfileLabel(profile)
+            : "使用全局设置（" + deviceProfileLabel(globalDeviceProfile()) + "）";
+    }
+
+    /// Single-choice lists scroll on smaller phones; no cramped row of models.
+    private void showDeviceProfiles(final App app, final Runnable onChanged) {
+        String global = globalDeviceProfile();
+        String selected = app != null ? appDeviceProfile(app) : global;
+        int offset = app != null ? 1 : 0;
+        String[] choices = new String[DEVICE_PROFILES.length + offset];
+        if (app != null) {
+            choices[0] = "使用全局设置（" + deviceProfileLabel(global) + "）";
+        }
+        System.arraycopy(DEVICE_PROFILE_LABELS, 0, choices, offset, DEVICE_PROFILE_LABELS.length);
+
+        LinearLayout title = new LinearLayout(this);
+        title.setOrientation(LinearLayout.VERTICAL);
+        title.setPadding(dp(24), dp(20), dp(24), dp(8));
+        title.addView(makeText("模拟机型", 20, TEXT, true));
+        TextView current = makeText("全局：" + deviceProfileLabel(global)
+            + (app != null ? "\n此游戏：" + appDeviceProfileLabel(app) : ""),
+            14, TEXT_DIM, false);
+        current.setPadding(0, dp(10), 0, dp(6));
+        title.addView(current);
+        title.addView(makeText(DEVICE_PROFILE_HINT, 13, TEXT_DIM, false));
+
+        new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+            .setCustomTitle(title)
+            .setSingleChoiceItems(choices, selected == null ? 0 : deviceProfileIndex(selected) + offset,
+                (dialog, which) -> {
+                    SharedPreferences.Editor editor = getSharedPreferences(PREFS, MODE_PRIVATE).edit();
+                    String key = app != null ? appDeviceProfileKey(app) : PREF_DEVICE_PROFILE;
+                    if (app != null && which == 0) {
+                        editor.remove(key);
+                    } else {
+                        editor.putString(key, DEVICE_PROFILES[which - offset]);
+                    }
+                    editor.apply();
+                    if (onChanged != null) {
+                        onChanged.run();
+                    }
+                    dialog.dismiss();
+                })
+            .setNegativeButton("取消", null)
+            .show();
+    }
+
     private void showQuickOptions() {
         LinearLayout layout = new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
         int pad = dp(20);
         layout.setPadding(pad, dp(8), pad, dp(8));
+
+        final TextView deviceProfile = makeText(
+            "模拟机型：" + deviceProfileLabel(globalDeviceProfile()), 15, TEXT, true);
+        deviceProfile.setPadding(dp(14), dp(12), dp(14), dp(12));
+        deviceProfile.setMinHeight(dp(48));
+        deviceProfile.setBackground(buttonBackground(0x2EFFFFFF, dp(12)));
+        deviceProfile.setOnClickListener(v -> showDeviceProfiles(null,
+            () -> deviceProfile.setText("模拟机型：" + deviceProfileLabel(globalDeviceProfile()))));
+        layout.addView(deviceProfile, new LinearLayout.LayoutParams(-1, -2));
+        TextView deviceHint = makeText(DEVICE_PROFILE_HINT, 13, TEXT_DIM, false);
+        deviceHint.setPadding(0, dp(6), 0, 0);
+        layout.addView(deviceHint);
 
         addSegments(layout, "画面滤镜", new String[]{"平滑", "锐利", "像素", "高清"},
             quickOptions.filter, i -> quickOptions.filter = i);

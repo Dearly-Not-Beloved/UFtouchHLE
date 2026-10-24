@@ -52,7 +52,7 @@ pub const CLASSES: ClassExports = objc_classes! {
     // While Apple's documentation says this changes with the interface
     // orientation, https://useyourloaf.com/blog/uiscreen-bounds-in-ios-8/ says
     // ths wasn't the case prior to iOS 8.
-    let (width, height) = env.window().device_family().portrait_size();
+    let (width, height) = env.window().size_unrotated_unscaled();
     CGRect {
         origin: CGPoint { x: 0.0, y: 0.0 },
         size: CGSize { width: width as f32, height: height as f32 },
@@ -103,7 +103,7 @@ pub const CLASSES: ClassExports = objc_classes! {
 - (id)autorelease { this }
 
 - (CGSize)size {
-    let (width, height) = env.window().device_family().portrait_size();
+    let (width, height) = env.window().size_unrotated_unscaled();
     let scale: CGFloat = if env.options.retina { 2.0 } else { 1.0 };
     CGSize { width: width as f32 * scale, height: height as f32 * scale }
 }

@@ -83,10 +83,18 @@ Device options:
 
     --device-model=...
         Specifies which device model the app is told it runs on, e.g.
-        iPhone2,1 (iPhone 3GS). The default is iPhone1,1 (the original
-        iPhone). Some apps refuse to run on older models, but others use
+        iPhone2,1 (iPhone 3GS). Legacy phone geometry defaults to iPhone1,1;
+        automatic or manual device profiles can select a different model.
+        Some apps refuse to run on older models, but others use
         features touchHLE doesn't support (like OpenGL ES 2.0) on newer ones,
         so only change this for apps that need it.
+
+    --device-profile=auto|MACHINE
+        Selects a device profile by machine ID, or automatically selects one
+        using the app's supported device families, widescreen support and host
+        display. Defaults to auto. The app picker retains its legacy geometry.
+        The profile resolves the model, family, Retina scale and logical screen
+        size at runtime. Example: --device-profile=iPhone5,1.
 
     --retina
         Tells the app the screen is a Retina display (twice the resolution in

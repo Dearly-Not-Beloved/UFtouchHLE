@@ -175,6 +175,26 @@ impl Bundle {
         }
     }
 
+    /// Early iOS apps opt into the 568-point iPhone screen through their
+    /// launch-image resources or declarations. Older apps retain 320x480.
+    pub fn supports_widescreen(&self, fs: &Fs) -> bool {
+        let base = self
+            .plist
+            .get("UILaunchImageFile")
+            .and_then(Value::as_string)
+            .unwrap_or("Default");
+        let base = base.strip_suffix(".png").unwrap_or(base);
+        let candidates = [
+            format!("{base}-568h@2x.png"),
+            "Default-568h@2x.png".to_string(),
+            "LaunchImage-568h@2x.png".to_string(),
+        ];
+        candidates
+            .iter()
+            .any(|name| fs.is_file(&self.path.join(name)))
+            || declares_widescreen(&self.plist)
+    }
+
     pub fn status_bar_hidden(&self) -> bool {
         self.plist
             .get("UIStatusBarHidden")
@@ -387,4 +407,62 @@ fn test_parse_strings_value() {
         parse_strings_value(b"Other = \"x\";", "CFBundleDisplayName"),
         None
     );
+}
+
+/// Launch-image declarations may supply portrait or landscape point sizes.
+fn declares_widescreen(plist: &Dictionary) -> bool {
+    ["UILaunchImages", "UILaunchImages~iphone"]
+        .iter()
+        .any(|key| {
+            plist
+                .get(key)
+                .and_then(Value::as_array)
+                .is_some_and(|images| {
+                    images.iter().any(|image| {
+                        let Some(size) = image
+                            .as_dictionary()
+                            .and_then(|d| d.get("UILaunchImageSize"))
+                            .and_then(Value::as_string)
+                        else {
+                            return false;
+                        };
+                        let parts: Vec<_> = size
+                            .trim_matches(|c: char| c == '{' || c == '}' || c.is_whitespace())
+                            .split(',')
+                            .map(|part| part.trim().parse::<u32>())
+                            .collect();
+                        if let [Ok(width), Ok(height)] = parts.as_slice() {
+                            let short = (*width).min(*height);
+                            let long = (*width).max(*height);
+                            (320..=414).contains(&short) && long >= 568
+                        } else {
+                            false
+                        }
+                    })
+                })
+        })
+}
+
+#[cfg(test)]
+mod display_support_tests {
+    use super::*;
+    fn declaration(size: &str) -> Dictionary {
+        let mut image = Dictionary::new();
+        image.insert("UILaunchImageSize".into(), Value::String(size.into()));
+        let mut plist = Dictionary::new();
+        plist.insert(
+            "UILaunchImages".into(),
+            Value::Array(vec![Value::Dictionary(image)]),
+        );
+        plist
+    }
+    #[test]
+    fn explicit_tall_phone_declarations_are_orientation_independent() {
+        assert!(declares_widescreen(&declaration("{320, 568}")));
+        assert!(declares_widescreen(&declaration("{568, 320}")));
+        for size in ["{320, 480}", "{768, 1024}", "bad", "{0, 568}"] {
+            assert!(!declares_widescreen(&declaration(size)), "{size}");
+        }
+        assert!(!declares_widescreen(&Dictionary::new()));
+    }
 }

@@ -100,6 +100,9 @@ pub struct Options {
     /// Device model reported to the app (`hw.machine`), e.g. `iPhone2,1`.
     /// [None] means the original iPhone (`iPhone1,1`).
     pub device_model: Option<&'static str>,
+    pub device_profile: &'static str,
+    /// Resolved logical portrait dimensions; populated at runtime only.
+    pub device_screen_size: Option<(u32, u32)>,
     /// Report a Retina display (`[UIScreen scale]` of 2).
     pub retina: bool,
     /// Shift for everything the app draws, in pixels (see
@@ -142,6 +145,8 @@ impl Default for Options {
             keep_screen_on: KEEP_SCREEN_ON_DEFAULT,
             device_family: None,
             device_model: None,
+            device_profile: "auto",
+            device_screen_size: None,
             retina: false,
             subpixel_offset: None,
             initial_orientation: DeviceOrientation::Portrait,
@@ -217,6 +222,14 @@ impl Options {
             self.initial_orientation = DeviceOrientation::LandscapeLeft;
         } else if arg == "--landscape-right" {
             self.initial_orientation = DeviceOrientation::LandscapeRight;
+        } else if let Some(value) = arg.strip_prefix("--device-profile=") {
+            self.device_profile = if value == "auto" {
+                "auto"
+            } else {
+                crate::device_profiles::profile(value)
+                    .ok_or_else(|| format!("Unknown device profile {value:?}"))?
+                    .machine
+            };
         } else if let Some(value) = arg.strip_prefix("--device-family=") {
             let parsed =
                 DeviceFamily::try_from(value).map_err(|_| "Invalid device family".to_string())?;
@@ -444,4 +457,25 @@ fn parse_dump_options(options: &str) -> Result<DumpingOptions, String> {
         }
     }
     Ok(dumping_options)
+}
+
+#[cfg(test)]
+mod device_geometry_options_tests {
+    use super::Options;
+
+    #[test]
+    fn profile_selection_does_not_resolve_runtime_geometry() {
+        let mut options = Options::default();
+        assert_eq!(options.device_profile, "auto");
+        assert_eq!(options.device_screen_size, None);
+        options
+            .parse_argument("--device-profile=iPhone2,1")
+            .unwrap();
+        assert_eq!(options.device_profile, "iPhone2,1");
+        assert_eq!(options.device_screen_size, None);
+        assert!(options.parse_argument("--device-profile=unknown").is_err());
+        assert_eq!(options.device_profile, "iPhone2,1");
+        options.parse_argument("--device-profile=auto").unwrap();
+        assert_eq!(options.device_profile, "auto");
+    }
 }

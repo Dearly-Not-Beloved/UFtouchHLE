@@ -77,11 +77,11 @@ pub enum DeviceOrientation {
     LandscapeRight,
 }
 fn size_for_orientation(
-    family: DeviceFamily,
+    portrait_size: (u32, u32),
     orientation: DeviceOrientation,
     scale_hack: NonZeroU32,
 ) -> (u32, u32) {
-    let (width, height) = family.portrait_size();
+    let (width, height) = portrait_size;
     let scale_hack = scale_hack.get();
     match orientation {
         DeviceOrientation::Portrait => (width * scale_hack, height * scale_hack),
@@ -90,6 +90,20 @@ fn size_for_orientation(
         DeviceOrientation::LandscapeRight => (height * scale_hack, width * scale_hack),
     }
 }
+fn transform_screen_coords(
+    (in_x, in_y): Coords,
+    (vx, vy, vw, vh): (i32, i32, u32, u32),
+    output_size: (u32, u32),
+    rotation: Matrix<2>,
+) -> Coords {
+    let x = (in_x - vx as f32) / vw as f32 - 0.5;
+    let y = (in_y - vy as f32) / vh as f32 - 0.5;
+    let [x, y] = rotation.inverse().unwrap().transform([x, y]);
+    let (width, height) = output_size;
+    let coords = ((x + 0.5) * width as f32, (y + 0.5) * height as f32);
+    snap_to_screen_edge((coords.0.round(), coords.1.round()), output_size)
+}
+
 /// Touches just outside the app's screen, e.g. at the edge of the black bars
 /// around it on a phone with a wider aspect ratio, are moved onto the edge of
 /// the screen, so that buttons at the edge are easier to hit. Touches further
@@ -392,6 +406,7 @@ pub struct Window {
     internal_gl_ins: Option<Box<dyn GLESContext>>,
     splash_image: Option<Image>,
     device_family: DeviceFamily,
+    portrait_size: (u32, u32),
     device_orientation: DeviceOrientation,
     controller_ctx: sdl2::GameControllerSubsystem,
     controllers: Vec<sdl2::controller::GameController>,
@@ -423,7 +438,8 @@ impl Window {
         title: &str,
         icon: Option<Image>,
         launch_image: Option<Image>,
-        options: &Options,
+        options: &mut Options,
+        support: Option<&crate::device_profiles::DeviceSupport>,
     ) -> Window {
         if env::consts::OS == "android" {
             // Don't block the event loop while the app is paused (touchHLE
@@ -435,6 +451,18 @@ impl Window {
 
         let sdl_ctx = sdl2::init().unwrap();
         let video_ctx = sdl_ctx.video().unwrap();
+        if let Some(support) = support {
+            let host_size = video_ctx.display_bounds(0).ok().map(|bounds| bounds.size());
+            crate::device_profiles::apply(options, support, host_size);
+        } else {
+            // The app picker keeps its legacy geometry, without auto-selection.
+            options.device_screen_size = Some(
+                options
+                    .device_family
+                    .unwrap_or(DeviceFamily::iPhone)
+                    .portrait_size(),
+            );
+        }
 
         // The "hidapi" feature of rust-sdl2 is enabled so that sdl2::sensor
         // is available, but we don't want to enable SDL's HIDAPI controller
@@ -467,6 +495,9 @@ impl Window {
         // TODO: some apps specify their orientation in Info.plist, we could use
         // that here.
         let device_family = options.device_family.unwrap_or(DeviceFamily::iPhone);
+        let portrait_size = options
+            .device_screen_size
+            .unwrap_or(device_family.portrait_size());
         let device_orientation = options.initial_orientation;
         let fullscreen = options.fullscreen;
 
@@ -500,7 +531,7 @@ impl Window {
             window
         } else {
             let (width, height) =
-                size_for_orientation(device_family, device_orientation, scale_hack);
+                size_for_orientation(portrait_size, device_orientation, scale_hack);
             let window = video_ctx
                 .window(title, width, height)
                 .position_centered()
@@ -565,6 +596,7 @@ impl Window {
             internal_gl_ins: None,
             splash_image: launch_image,
             device_family,
+            portrait_size,
             device_orientation,
             controller_ctx,
             controllers: Vec::new(),
@@ -625,7 +657,7 @@ impl Window {
         ) -> (f32, f32) {
             let (vx, vy, vw, vh) = if independent_of_viewport {
                 let (width, height) = size_for_orientation(
-                    window.device_family,
+                    window.device_family.portrait_size(),
                     window.device_orientation,
                     NonZeroU32::new(1).unwrap(),
                 );
@@ -633,18 +665,12 @@ impl Window {
             } else {
                 window.viewport()
             };
-            // normalize to unit square centred on origin
-            let x = (in_x - vx as f32) / vw as f32 - 0.5;
-            let y = (in_y - vy as f32) / vh as f32 - 0.5;
-            // rotate
-            let matrix = window.rotation_matrix().inverse().unwrap();
-            let [x, y] = matrix.transform([x, y]);
-            // back to pixels
-            let (out_w, out_h) = window.size_unrotated_unscaled();
-            let out_x = (x + 0.5) * out_w as f32;
-            let out_y = (y + 0.5) * out_h as f32;
-            // Round to match touch precision of official devices.
-            snap_to_screen_edge((out_x.round(), out_y.round()), (out_w, out_h))
+            transform_screen_coords(
+                (in_x, in_y),
+                (vx, vy, vw, vh),
+                window.size_unrotated_unscaled(),
+                window.rotation_matrix(),
+            )
         }
         fn transform_virt_accel_coords(window: &Window, (in_x, in_y): (i32, i32)) -> (f32, f32) {
             let (_, _, vw, vh) = window.viewport();
@@ -1605,7 +1631,7 @@ impl Window {
                 set_sdl2_orientation(new_orientation);
                 rotate_fullscreen_size(new_orientation, self.window.size())
             } else {
-                size_for_orientation(self.device_family, new_orientation, self.scale_hack)
+                size_for_orientation(self.portrait_size, new_orientation, self.scale_hack)
             };
 
             // macOS quirk: when resizing the window, the new framebuffer's size
@@ -1661,7 +1687,7 @@ impl Window {
     /// the world.
     pub fn size_unrotated_unscaled(&self) -> (u32, u32) {
         size_for_orientation(
-            self.device_family,
+            self.portrait_size,
             DeviceOrientation::Portrait,
             NonZeroU32::new(1).unwrap(),
         )
@@ -1677,7 +1703,7 @@ impl Window {
     /// cropped ([crate::options::AspectMode::Fill]).
     pub fn viewport(&self) -> (i32, i32, u32, u32) {
         let (app_width, app_height) =
-            size_for_orientation(self.device_family, self.device_orientation, self.scale_hack);
+            size_for_orientation(self.portrait_size, self.device_orientation, self.scale_hack);
         if !self.fullscreen && !Self::rotatable_fullscreen() {
             return (0, 0, app_width, app_height);
         }
@@ -1686,7 +1712,7 @@ impl Window {
         // The scale hack only increases the internal resolution, so the
         // unscaled size is what matters for whole-number scaling.
         let (base_width, base_height) = size_for_orientation(
-            self.device_family,
+            self.portrait_size,
             self.device_orientation,
             NonZeroU32::new(1).unwrap(),
         );
@@ -1708,7 +1734,7 @@ impl Window {
             return 1;
         }
         let (app_width, app_height) =
-            size_for_orientation(self.device_family, self.device_orientation, self.scale_hack);
+            size_for_orientation(self.portrait_size, self.device_orientation, self.scale_hack);
         let (_, _, vw, vh) = self.viewport();
         let factor = (vw / app_width).min(vh / app_height).max(1);
         // With the hq filter, some layers' textures are twice the size, so the
@@ -1922,4 +1948,83 @@ pub fn get_preferred_country_codes(env: &mut Environment) -> Vec<String> {
             .filter_map(|loc| loc.country)
             .collect()
     })
+}
+
+#[cfg(test)]
+mod selected_screen_geometry_tests {
+    use super::*;
+
+    #[test]
+    fn selected_portrait_size_drives_rotation_and_scale() {
+        let scale = NonZeroU32::new(2).unwrap();
+        for portrait in [(320, 480), (320, 568), (768, 1024)] {
+            for orientation in [
+                DeviceOrientation::Portrait,
+                DeviceOrientation::PortraitUpsideDown,
+            ] {
+                assert_eq!(
+                    size_for_orientation(portrait, orientation, scale),
+                    (portrait.0 * 2, portrait.1 * 2)
+                );
+            }
+            for orientation in [
+                DeviceOrientation::LandscapeLeft,
+                DeviceOrientation::LandscapeRight,
+            ] {
+                assert_eq!(
+                    size_for_orientation(portrait, orientation, scale),
+                    (portrait.1 * 2, portrait.0 * 2)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn legacy_mapping_and_physical_input_reach_same_tall_screen_points() {
+        let selected = (320, 568);
+        for rotation in [
+            Matrix::identity(),
+            Matrix::z_rotation(PI),
+            Matrix::z_rotation(-FRAC_PI_2),
+            Matrix::z_rotation(FRAC_PI_2),
+        ] {
+            for (x, y) in [(0.25, 0.25), (0.5, 0.5), (0.75, 0.75)] {
+                let mapped = transform_screen_coords(
+                    (480.0 * x, 320.0 * y),
+                    (0, 0, 480, 320),
+                    selected,
+                    rotation,
+                );
+                let mouse = transform_screen_coords(
+                    (100.0 + 1136.0 * x, 50.0 + 640.0 * y),
+                    (100, 50, 1136, 640),
+                    selected,
+                    rotation,
+                );
+                assert_eq!(mapped, mouse);
+            }
+        }
+        let left = Matrix::z_rotation(-FRAC_PI_2);
+        assert_eq!(
+            transform_screen_coords((240.0, 160.0), (0, 0, 480, 320), selected, left),
+            (160.0, 284.0)
+        );
+        assert_eq!(
+            transform_screen_coords((120.0, 80.0), (0, 0, 480, 320), selected, left),
+            (240.0, 142.0)
+        );
+    }
+
+    #[test]
+    fn tall_viewport_uses_selected_aspect_instead_of_legacy_aspect() {
+        use crate::options::AspectMode;
+        assert_eq!(
+            compute_viewport(AspectMode::Fit, (568, 320), (568, 320), (1136, 640)),
+            (0, 0, 1136, 640)
+        );
+        assert_eq!(
+            compute_viewport(AspectMode::Fit, (480, 320), (480, 320), (1136, 640)),
+            (88, 0, 960, 640)
+        );
+    }
 }

@@ -376,8 +376,14 @@ impl Environment {
         };
         log!("{:?} device family is chosen.", device_family);
         options.device_family = Some(device_family);
+        let device_support = crate::device_profiles::DeviceSupport {
+            families: device_family_array,
+            widescreen: bundle.supports_widescreen(&fs),
+            family_override: device_family_override,
+        };
 
         let window = if options.headless {
+            crate::device_profiles::apply(&mut options, &device_support, None);
             None
         } else {
             let icon = bundle.load_icon(&fs);
@@ -422,7 +428,8 @@ impl Environment {
                 ),
                 icon.ok(),
                 launch_image,
-                &options,
+                &mut options,
+                Some(&device_support),
             )))
         };
 
@@ -779,7 +786,7 @@ impl Environment {
     /// do not need to be aware of the app picker's peculiarities, so it is
     /// cleaner than the alternative!
     pub fn new_without_app(
-        options: options::Options,
+        mut options: options::Options,
         icon: image::Image,
     ) -> Result<Environment, String> {
         // Enforces a one (real) Environment limit. See `with_yielder` for
@@ -809,7 +816,8 @@ impl Environment {
             ),
             Some(icon),
             launch_image,
-            &options,
+            &mut options,
+            None,
         )));
 
         let mut mem = mem::Mem::new();

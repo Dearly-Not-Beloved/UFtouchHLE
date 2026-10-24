@@ -34,6 +34,7 @@ mod audio;
 mod bundle;
 mod cpu;
 mod debug;
+mod device_profiles;
 mod dyld;
 mod environment;
 mod fast_hash;
