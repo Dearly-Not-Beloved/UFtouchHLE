@@ -1059,20 +1059,18 @@ unsafe fn composite_layer_recursive(
     if need_update {
         let original_host_obj = env.objc.borrow_mut::<CALayerHostObject>(layer);
         if let Some((ref mut pixels, width, height)) = original_host_obj.presented_pixels {
-            // The pixels are always RGBA, but if the layer is opaque then the
-            // alpha channel is meant to be ignored. glTexImage2D() has no
-            // option to ignore it, so let's manually set them to 255.
-            if original_host_obj.opaque {
-                let mut i = 3;
-                while i < pixels.len() {
-                    pixels[i] = 255;
-                    i += 4;
-                }
-            }
-
             let texture = original_host_obj.gles_texture.unwrap();
             let state = &mut env.framework_state.core_animation.composition;
-            upload_layer_pixels(gles.as_mut(), state, texture, pixels, (width, height));
+            // GPU-rendered frames already have their intended resolution.
+            // Scale2x is for CPU-drawn artwork, not a second pass over 3D.
+            upload_layer_pixels(
+                gles.as_mut(),
+                state,
+                texture,
+                pixels,
+                (width, height),
+                false,
+            );
         }
     }
 
@@ -1095,6 +1093,7 @@ unsafe fn composite_layer_recursive(
                 texture,
                 image.pixels(),
                 image.dimensions(),
+                true,
             );
         } else if let Some(cg_context) = host_obj.cg_context {
             // Make sure this is in sync with the code in ca_layer.rs that
@@ -1107,7 +1106,14 @@ unsafe fn composite_layer_recursive(
                 .gles_texture
                 .unwrap();
             let state = &mut env.framework_state.core_animation.composition;
-            upload_layer_pixels(gles.as_mut(), state, texture, &pixels, (width, height));
+            upload_layer_pixels(
+                gles.as_mut(),
+                state,
+                texture,
+                &pixels,
+                (width, height),
+                true,
+            );
         }
     }
 
@@ -1162,6 +1168,37 @@ unsafe fn composite_layer_recursive(
             },
         );
         gles.TexCoordPointer(2, gles11::FLOAT, 0, 0 as *const GLvoid);
+        // Opaque EAGL layers ignore framebuffer alpha. Do this during
+        // sampling instead of rewriting every pixel on the CPU each frame.
+        let ignore_texture_alpha = host_obj.opaque && host_obj.presented_pixels.is_some();
+        if ignore_texture_alpha {
+            gles.TexEnvi(
+                gles11::TEXTURE_ENV,
+                gles11::TEXTURE_ENV_MODE,
+                gles11::COMBINE as _,
+            );
+            gles.TexEnvi(
+                gles11::TEXTURE_ENV,
+                gles11::COMBINE_RGB,
+                gles11::MODULATE as _,
+            );
+            gles.TexEnvi(gles11::TEXTURE_ENV, gles11::SRC0_RGB, gles11::TEXTURE as _);
+            gles.TexEnvi(
+                gles11::TEXTURE_ENV,
+                gles11::SRC1_RGB,
+                gles11::PRIMARY_COLOR as _,
+            );
+            gles.TexEnvi(
+                gles11::TEXTURE_ENV,
+                gles11::COMBINE_ALPHA,
+                gles11::REPLACE as _,
+            );
+            gles.TexEnvi(
+                gles11::TEXTURE_ENV,
+                gles11::SRC0_ALPHA,
+                gles11::PRIMARY_COLOR as _,
+            );
+        }
         gles.Enable(gles11::TEXTURE_2D);
         gles.DrawElements(
             gles11::TRIANGLES,
@@ -1169,6 +1206,14 @@ unsafe fn composite_layer_recursive(
             gles11::UNSIGNED_BYTE,
             0 as *const GLvoid,
         );
+
+        if ignore_texture_alpha {
+            gles.TexEnvi(
+                gles11::TEXTURE_ENV,
+                gles11::TEXTURE_ENV_MODE,
+                gles11::MODULATE as _,
+            );
+        }
 
         // The alpha channel of an opaque layer's texture is meant to be
         // ignored. That doesn't matter when compositing onto black, but
@@ -1285,11 +1330,13 @@ unsafe fn upload_layer_pixels(
     texture: GLuint,
     pixels: &[u8],
     dimensions: (u32, u32),
+    allow_scale2x: bool,
 ) {
     // Images that are already large aren't pixel art that needs scaling, and
     // doubling them could exceed the GPU's maximum texture size.
     const SCALE2X_MAX_SIZE: u32 = 1024;
-    let (pixels, dimensions) = if state.layer_scale2x
+    let (pixels, dimensions) = if allow_scale2x
+        && state.layer_scale2x
         && dimensions.0 <= SCALE2X_MAX_SIZE
         && dimensions.1 <= SCALE2X_MAX_SIZE
     {
