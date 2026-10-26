@@ -407,6 +407,7 @@ pub struct Window {
     splash_image: Option<Image>,
     device_family: DeviceFamily,
     portrait_size: (u32, u32),
+    p2g_wide_width: Option<u32>,
     device_orientation: DeviceOrientation,
     controller_ctx: sdl2::GameControllerSubsystem,
     controllers: Vec<sdl2::controller::GameController>,
@@ -498,6 +499,25 @@ impl Window {
         let portrait_size = options
             .device_screen_size
             .unwrap_or(device_family.portrait_size());
+        let p2g_wide_width = if options.p2g_wide_screen {
+            let host = video_ctx.display_bounds(0).ok().map(|b| b.size());
+            let width = host
+                .map(|(w, h)| {
+                    (320.0 * w.max(h) as f64 / w.min(h).max(1) as f64 / 2.0).round() as u32 * 2
+                })
+                .filter(|&w| w > 568)
+                .unwrap_or(694)
+                .clamp(568, 800);
+            options.p2g_wide_width = Some(width);
+            log!(
+                "P2G expanded view: {}x320 points, centered 568x320 controls.",
+                width
+            );
+            Some(width)
+        } else {
+            None
+        };
+        let display_size = p2g_wide_width.map(|w| (320, w)).unwrap_or(portrait_size);
         let device_orientation = options.initial_orientation;
         let fullscreen = options.fullscreen;
 
@@ -531,7 +551,7 @@ impl Window {
             window
         } else {
             let (width, height) =
-                size_for_orientation(portrait_size, device_orientation, scale_hack);
+                size_for_orientation(display_size, device_orientation, scale_hack);
             let window = video_ctx
                 .window(title, width, height)
                 .position_centered()
@@ -597,6 +617,7 @@ impl Window {
             splash_image: launch_image,
             device_family,
             portrait_size,
+            p2g_wide_width,
             device_orientation,
             controller_ctx,
             controllers: Vec::new(),
@@ -663,7 +684,7 @@ impl Window {
                 );
                 (0, 0, width, height)
             } else {
-                window.viewport()
+                window.input_viewport()
             };
             transform_screen_coords(
                 (in_x, in_y),
@@ -1631,7 +1652,13 @@ impl Window {
                 set_sdl2_orientation(new_orientation);
                 rotate_fullscreen_size(new_orientation, self.window.size())
             } else {
-                size_for_orientation(self.portrait_size, new_orientation, self.scale_hack)
+                size_for_orientation(
+                    self.p2g_wide_width
+                        .map(|w| (320, w))
+                        .unwrap_or(self.portrait_size),
+                    new_orientation,
+                    self.scale_hack,
+                )
             };
 
             // macOS quirk: when resizing the window, the new framebuffer's size
@@ -1702,8 +1729,12 @@ impl Window {
     /// height)` in pixels. `x` and `y` can be negative when the screen is
     /// cropped ([crate::options::AspectMode::Fill]).
     pub fn viewport(&self) -> (i32, i32, u32, u32) {
+        let display_size = self
+            .p2g_wide_width
+            .map(|w| (320, w))
+            .unwrap_or(self.portrait_size);
         let (app_width, app_height) =
-            size_for_orientation(self.portrait_size, self.device_orientation, self.scale_hack);
+            size_for_orientation(display_size, self.device_orientation, self.scale_hack);
         if !self.fullscreen && !Self::rotatable_fullscreen() {
             return (0, 0, app_width, app_height);
         }
@@ -1712,17 +1743,30 @@ impl Window {
         // The scale hack only increases the internal resolution, so the
         // unscaled size is what matters for whole-number scaling.
         let (base_width, base_height) = size_for_orientation(
-            self.portrait_size,
+            display_size,
             self.device_orientation,
             NonZeroU32::new(1).unwrap(),
         );
 
         compute_viewport(
-            self.aspect_mode,
+            if self.p2g_wide_width.is_some() {
+                crate::options::AspectMode::Fit
+            } else {
+                self.aspect_mode
+            },
             (app_width, app_height),
             (base_width, base_height),
             (screen_width, screen_height),
         )
+    }
+
+    /// Original 16:9 input canvas centered inside the expanded scene.
+    fn input_viewport(&self) -> (i32, i32, u32, u32) {
+        let viewport = self.viewport();
+        if self.p2g_wide_width.is_none() {
+            return viewport;
+        }
+        p2g_input_viewport(viewport)
     }
 
     /// For [crate::options::FilterMode::Sharp]: the whole number the app's
@@ -1733,8 +1777,12 @@ impl Window {
         if !matches!(self.filter_mode, FilterMode::Sharp | FilterMode::Hq) {
             return 1;
         }
+        let display_size = self
+            .p2g_wide_width
+            .map(|w| (320, w))
+            .unwrap_or(self.portrait_size);
         let (app_width, app_height) =
-            size_for_orientation(self.portrait_size, self.device_orientation, self.scale_hack);
+            size_for_orientation(display_size, self.device_orientation, self.scale_hack);
         let (_, _, vw, vh) = self.viewport();
         let factor = (vw / app_width).min(vh / app_height).max(1);
         // With the hq filter, some layers' textures are twice the size, so the
@@ -1950,6 +1998,16 @@ pub fn get_preferred_country_codes(env: &mut Environment) -> Vec<String> {
     })
 }
 
+fn p2g_input_viewport((x, y, w, h): (i32, i32, u32, u32)) -> (i32, i32, u32, u32) {
+    if w >= h {
+        let safe_w = ((h as u64 * 568 / 320) as u32).min(w);
+        (x + ((w - safe_w) / 2) as i32, y, safe_w, h)
+    } else {
+        let safe_h = ((w as u64 * 568 / 320) as u32).min(h);
+        (x, y + ((h - safe_h) / 2) as i32, w, safe_h)
+    }
+}
+
 #[cfg(test)]
 mod selected_screen_geometry_tests {
     use super::*;
@@ -1957,7 +2015,7 @@ mod selected_screen_geometry_tests {
     #[test]
     fn selected_portrait_size_drives_rotation_and_scale() {
         let scale = NonZeroU32::new(2).unwrap();
-        for portrait in [(320, 480), (320, 568), (768, 1024)] {
+        for portrait in [(320, 480), (320, 568), (375, 667), (414, 736), (768, 1024)] {
             for orientation in [
                 DeviceOrientation::Portrait,
                 DeviceOrientation::PortraitUpsideDown,
@@ -2026,5 +2084,19 @@ mod selected_screen_geometry_tests {
             compute_viewport(AspectMode::Fit, (480, 320), (480, 320), (1136, 640)),
             (88, 0, 960, 640)
         );
+    }
+    #[test]
+    fn expanded_scene_preserves_original_button_touch_positions() {
+        use std::f32::consts::FRAC_PI_2;
+        let base = (0, 0, 1136, 640);
+        let safe = p2g_input_viewport((0, 0, 1388, 640));
+        assert_eq!(safe, (126, 0, 1136, 640));
+        let rotation = Matrix::z_rotation(-FRAC_PI_2);
+        for p in [(80.0, 540.0), (1060.0, 580.0), (568.0, 320.0)] {
+            let original = transform_screen_coords(p, base, (320, 568), rotation);
+            let expanded = transform_screen_coords((p.0 + 126.0, p.1), safe, (320, 568), rotation);
+            assert_eq!(original, expanded);
+        }
+        assert_eq!(p2g_input_viewport((0, 0, 640, 1388)), (0, 126, 640, 1136));
     }
 }

@@ -127,12 +127,19 @@ fn CGImageCreate(
     assert_eq!(bits_per_pixel, 32);
     assert_eq!(width as u64 * 4, bytes_per_row as u64);
 
-    let mut pixels = cg_data_provider::borrow_bytes(env, provider).to_vec();
-    assert_eq!(pixels.len() as u64, width as u64 * height as u64 * 4);
-
     let byte_order = bitmap_info & kCGBitmapByteOrderMask;
     let alpha_info = bitmap_info & kCGBitmapAlphaInfoMask;
     assert_eq!(alpha_info | byte_order, bitmap_info); // TODO
+    if alpha_info == kCGImageAlphaNone {
+        // This 32-bit RGB layout has no alpha or skip component. CoreGraphics
+        // rejects it. P2G attempts it for a snapshot after resuming and already
+        // handles a null result; do not abort before that failure path runs.
+        log_once!("CGImageCreate: unsupported RGB32 layout without alpha; returning null.");
+        return nil;
+    }
+
+    let mut pixels = cg_data_provider::borrow_bytes(env, provider).to_vec();
+    assert_eq!(pixels.len() as u64, width as u64 * height as u64 * 4);
     match byte_order {
         kCGImageByteOrderDefault | kCGImageByteOrder32Big => {
             assert_eq!(alpha_info, kCGImageAlphaPremultipliedLast); // TODO

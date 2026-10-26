@@ -100,9 +100,15 @@ pub struct Options {
     /// Device model reported to the app (`hw.machine`), e.g. `iPhone2,1`.
     /// [None] means the original iPhone (`iPhone1,1`).
     pub device_model: Option<&'static str>,
+    /// P2G expanded 3D view, retaining its original 16:9 controls.
+    pub p2g_wide_screen: bool,
+    /// Resolved landscape width in points; the guest remains 568x320.
+    pub p2g_wide_width: Option<u32>,
     pub device_profile: &'static str,
     /// Resolved logical portrait dimensions; populated at runtime only.
     pub device_screen_size: Option<(u32, u32)>,
+    /// Runtime device pixel multiplier (3 for iPhone 6 Plus).
+    pub device_screen_scale: Option<u32>,
     /// Report a Retina display (`[UIScreen scale]` of 2).
     pub retina: bool,
     /// Shift for everything the app draws, in pixels (see
@@ -126,6 +132,8 @@ pub struct Options {
     pub preferred_languages: Option<Vec<String>>,
     pub headless: bool,
     pub print_fps: bool,
+    pub performance_test: Option<crate::performance::Mode>,
+    pub audio_test: Option<crate::audio::sound_test::Mode>,
     pub fps_limit: Option<f64>,
     pub force_composition: bool,
     pub network_access: bool,
@@ -145,8 +153,11 @@ impl Default for Options {
             keep_screen_on: KEEP_SCREEN_ON_DEFAULT,
             device_family: None,
             device_model: None,
+            p2g_wide_screen: false,
+            p2g_wide_width: None,
             device_profile: "auto",
             device_screen_size: None,
+            device_screen_scale: None,
             retina: false,
             subpixel_offset: None,
             initial_orientation: DeviceOrientation::Portrait,
@@ -167,6 +178,8 @@ impl Default for Options {
             preferred_languages: None,
             headless: false,
             print_fps: false,
+            performance_test: None,
+            audio_test: None,
             fps_limit: Some(60.0), // Original iPhone is 60Hz and uses v-sync,
             force_composition: false,
             network_access: false,
@@ -180,6 +193,11 @@ impl Default for Options {
 }
 
 impl Options {
+    pub fn screen_scale(&self) -> u32 {
+        self.device_screen_scale
+            .unwrap_or(if self.retina { 2 } else { 1 })
+    }
+
     /// Parse the command-line argument syntax for an option. Returns `Ok(true)`
     /// if the option was valid and has been applied, or `Ok(false)` if the
     /// option was not recognized.
@@ -222,6 +240,8 @@ impl Options {
             self.initial_orientation = DeviceOrientation::LandscapeLeft;
         } else if arg == "--landscape-right" {
             self.initial_orientation = DeviceOrientation::LandscapeRight;
+        } else if arg == "--p2g-wide-screen" {
+            self.p2g_wide_screen = true;
         } else if let Some(value) = arg.strip_prefix("--device-profile=") {
             self.device_profile = if value == "auto" {
                 "auto"
@@ -351,6 +371,10 @@ impl Options {
             self.headless = true;
             // Can't show the dialog box when headless!
             self.popup_errors = false;
+        } else if let Some(mode) = arg.strip_prefix("--audio-test=") {
+            self.audio_test = Some(crate::audio::sound_test::Mode::parse(mode)?);
+        } else if let Some(mode) = arg.strip_prefix("--performance-test=") {
+            self.performance_test = Some(crate::performance::Mode::parse(mode)?);
         } else if arg == "--print-fps" {
             self.print_fps = true;
         } else if let Some(value) = arg.strip_prefix("--fps-limit=") {

@@ -413,6 +413,27 @@ int test_vsnprintf() {
     return -34;
   }
   free(str);
+  // P2G's armor shop displays signed resistances with %+3d.
+  str = str_format("[%+3d][%+3d][%+3d][%+3d][%+d]", 3, 0, -2, 123, 0);
+  if (strcmp(str, "[ +3][ +0][ -2][+123][+0]") != 0) {
+    free(str);
+    return -1001;
+  }
+  free(str);
+  // Zero padding follows the sign, including zero and negative values.
+  str = str_format("[%+08d][%05d]", 0, -12);
+  if (strcmp(str, "[+0000000][-0012]") != 0) {
+    free(str);
+    return -1002;
+  }
+  free(str);
+  // Explicit precision overrides zero padding; the sign counts in width.
+  str = str_format("[%+6.3d][%+06.3d][%+3.0d]", -5, 5, 0);
+  if (strcmp(str, "[  -005][  +005][  +]") != 0) {
+    free(str);
+    return -1003;
+  }
+  free(str);
   // Test h length modifier (%hd, %hu, %hx, %ho)
   str = str_format("%hd", 42);
   if (strcmp(str, "42") != 0) {
@@ -3055,6 +3076,46 @@ int test_fscanf_new() {
 
   fclose(file);
   return 0;
+}
+
+// P2G attempts this image layout when making a resume snapshot. Returning
+// NULL must let its existing failure handling run, rather than aborting.
+int test_CGImage_invalid_rgb32() {
+  const unsigned char pixels[] = {32, 16, 8, 64, 5, 10, 15, 255};
+  CFDataRef data = CFDataCreate(NULL, pixels, sizeof(pixels));
+  CGDataProviderRef provider = CGDataProviderCreateWithCFData(data);
+  CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
+  CGImageRef invalid =
+      CGImageCreate(2, 1, 8, 32, 8, space, 0 /* kCGImageAlphaNone */, provider,
+                    NULL, false, 0);
+  if (invalid != NULL) {
+    CGImageRelease(invalid);
+    CFRelease(provider);
+    CFRelease(data);
+    CGColorSpaceRelease(space);
+    return -1;
+  }
+  // The rejected call must not consume the provider or affect valid images.
+  CGImageRef valid = CGImageCreate(2, 1, 8, 32, 8, space,
+                                   1 /* kCGImageAlphaPremultipliedLast */,
+                                   provider, NULL, false, 0);
+  int result = 0;
+  if (valid == NULL) {
+    result = -2;
+  } else {
+    CFDataRef raw = CGDataProviderCopyData(CGImageGetDataProvider(valid));
+    if (CGImageGetWidth(valid) != 2 || CGImageGetHeight(valid) != 1 ||
+        CFDataGetLength(raw) != sizeof(pixels) ||
+        memcmp(CFDataGetBytePtr(raw), pixels, sizeof(pixels)) != 0) {
+      result = -3;
+    }
+    CFRelease(raw);
+    CGImageRelease(valid);
+  }
+  CFRelease(provider);
+  CFRelease(data);
+  CGColorSpaceRelease(space);
+  return result;
 }
 
 int test_CGImage_JPEG() {
@@ -6916,6 +6977,7 @@ struct {
     FUNC_DEF(test_memset_pattern),
     FUNC_DEF(test_CGGeometry),
     FUNC_DEF(test_CFURLHasDirectoryPath),
+    FUNC_DEF(test_CGImage_invalid_rgb32),
     FUNC_DEF(test_CGImage_JPEG),
     FUNC_DEF(test_NSMutableString_deleteCharactersInRange),
     FUNC_DEF(test_NSString_stringByReplacingOccurrencesOfString),

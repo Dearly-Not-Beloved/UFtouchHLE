@@ -268,3 +268,7 @@ impl AudioFile {
             / (bytes_per_packet as f64 * sample_rate)
     }
 }
+
+pub mod sound_test;
+
+pub mod sound_trace;

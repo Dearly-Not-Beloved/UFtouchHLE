@@ -207,3 +207,13 @@ pub unsafe extern "system" fn Java_org_touchhle_android_LauncherActivity_nativeV
 ) -> jbyteArray {
     new_byte_array(env, crate::VERSION.as_bytes())
 }
+
+/// Request an audio snapshot from the game's UI thread without accessing
+/// emulated state or OpenAL from JNI.
+#[no_mangle]
+pub extern "system" fn Java_org_touchhle_android_MainActivity_nativeMarkAudioNoise(
+    _env: *mut JNIEnv,
+    _this: jobject,
+) {
+    crate::audio::sound_trace::request_capture();
+}

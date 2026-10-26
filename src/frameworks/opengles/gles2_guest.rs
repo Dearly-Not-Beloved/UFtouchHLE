@@ -92,7 +92,8 @@ fn glLinkProgram(env: &mut Environment, program: GLuint) {
 }
 
 fn glUseProgram(env: &mut Environment, program: GLuint) {
-    with_program(env, |gl, _| unsafe { gl.UseProgram(program) })
+    with_program(env, |gl, _| unsafe { gl.UseProgram(program) });
+    super::p2g_wide::use_program(env, program);
 }
 
 fn glDeleteShader(env: &mut Environment, shader: GLuint) {
@@ -100,7 +101,8 @@ fn glDeleteShader(env: &mut Environment, shader: GLuint) {
 }
 
 fn glDeleteProgram(env: &mut Environment, program: GLuint) {
-    with_program(env, |gl, _| unsafe { gl.DeleteProgram(program) })
+    with_program(env, |gl, _| unsafe { gl.DeleteProgram(program) });
+    super::p2g_wide::delete_program(env, program);
 }
 
 fn glEnableVertexAttribArray(env: &mut Environment, index: GLuint) {
@@ -119,9 +121,11 @@ fn glGetUniformLocation(env: &mut Environment, program: GLuint, name: ConstPtr<u
     let name = env.mem.cstr_at(name).to_vec();
     let mut name = name;
     name.push(0);
-    with_program(env, |gl, _| unsafe {
+    let location = with_program(env, |gl, _| unsafe {
         gl.GetUniformLocation(program, name.as_ptr().cast())
-    })
+    });
+    super::p2g_wide::uniform(env, program, &name[..name.len() - 1], location);
+    location
 }
 
 fn glGetAttribLocation(env: &mut Environment, program: GLuint, name: ConstPtr<u8>) -> GLint {
@@ -315,6 +319,15 @@ fn glUniformMatrix4fv(
     transpose: GLboolean,
     value: ConstPtr<GLfloat>,
 ) {
+    if env.options.p2g_wide_screen && count == 1 && transpose == 0 {
+        let mut matrix = std::array::from_fn(|i| env.mem.read(value + i as u32));
+        if super::p2g_wide::projection(env, location, &mut matrix) {
+            with_program(env, |gl, _| unsafe {
+                gl.UniformMatrix4fv(location, count, transpose, matrix.as_ptr());
+            });
+            return;
+        }
+    }
     with_program(env, |gl, mem| unsafe {
         let size = GuestUSize::try_from(count)
             .unwrap()

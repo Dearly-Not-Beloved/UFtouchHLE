@@ -195,6 +195,31 @@ impl Bundle {
             || declares_widescreen(&self.plist)
     }
 
+    /// Larger iPhone canvases require their own launch-image opt-in.
+    pub fn large_phone_sizes(&self, fs: &Fs) -> Vec<(u32, u32)> {
+        let declared = launch_image_sizes(&self.plist);
+        let mut sizes = Vec::new();
+        for (size, resources) in [
+            ((375, 667), &["LaunchImage-800-667h@2x.png"][..]),
+            (
+                (414, 736),
+                &[
+                    "LaunchImage-800-Portrait-736h@3x.png",
+                    "LaunchImage-800-Landscape-736h@3x.png",
+                ][..],
+            ),
+        ] {
+            if declared.contains(&size)
+                || resources
+                    .iter()
+                    .any(|name| fs.is_file(&self.path.join(*name)))
+            {
+                sizes.push(size);
+            }
+        }
+        sizes
+    }
+
     pub fn status_bar_hidden(&self) -> bool {
         self.plist
             .get("UIStatusBarHidden")
@@ -411,36 +436,38 @@ fn test_parse_strings_value() {
 
 /// Launch-image declarations may supply portrait or landscape point sizes.
 fn declares_widescreen(plist: &Dictionary) -> bool {
-    ["UILaunchImages", "UILaunchImages~iphone"]
-        .iter()
-        .any(|key| {
-            plist
-                .get(key)
-                .and_then(Value::as_array)
-                .is_some_and(|images| {
-                    images.iter().any(|image| {
-                        let Some(size) = image
-                            .as_dictionary()
-                            .and_then(|d| d.get("UILaunchImageSize"))
-                            .and_then(Value::as_string)
-                        else {
-                            return false;
-                        };
-                        let parts: Vec<_> = size
-                            .trim_matches(|c: char| c == '{' || c == '}' || c.is_whitespace())
-                            .split(',')
-                            .map(|part| part.trim().parse::<u32>())
-                            .collect();
-                        if let [Ok(width), Ok(height)] = parts.as_slice() {
-                            let short = (*width).min(*height);
-                            let long = (*width).max(*height);
-                            (320..=414).contains(&short) && long >= 568
-                        } else {
-                            false
-                        }
-                    })
-                })
-        })
+    launch_image_sizes(plist)
+        .into_iter()
+        .any(|(short, long)| (320..=414).contains(&short) && long >= 568)
+}
+
+fn launch_image_sizes(plist: &Dictionary) -> Vec<(u32, u32)> {
+    let mut sizes = Vec::new();
+    for key in ["UILaunchImages", "UILaunchImages~iphone"] {
+        let Some(images) = plist.get(key).and_then(Value::as_array) else {
+            continue;
+        };
+        for image in images {
+            let Some(size) = image
+                .as_dictionary()
+                .and_then(|d| d.get("UILaunchImageSize"))
+                .and_then(Value::as_string)
+            else {
+                continue;
+            };
+            let parts = size
+                .trim_matches(|c: char| c == '{' || c == '}' || c.is_whitespace())
+                .split(',')
+                .map(|part| part.trim().parse::<u32>())
+                .collect::<Vec<_>>();
+            if let [Ok(width), Ok(height)] = parts.as_slice() {
+                if *width > 0 && *height > 0 {
+                    sizes.push(((*width).min(*height), (*width).max(*height)));
+                }
+            }
+        }
+    }
+    sizes
 }
 
 #[cfg(test)]
@@ -456,6 +483,17 @@ mod display_support_tests {
         );
         plist
     }
+    #[test]
+    fn large_phone_sizes_are_parsed_without_confusing_tablets() {
+        assert_eq!(launch_image_sizes(&declaration("{375, 667}")), [(375, 667)]);
+        assert_eq!(launch_image_sizes(&declaration("{736, 414}")), [(414, 736)]);
+        assert_eq!(
+            launch_image_sizes(&declaration("{768, 1024}")),
+            [(768, 1024)]
+        );
+        assert!(launch_image_sizes(&declaration("{0, 667}")).is_empty());
+    }
+
     #[test]
     fn explicit_tall_phone_declarations_are_orientation_independent() {
         assert!(declares_widescreen(&declaration("{320, 568}")));

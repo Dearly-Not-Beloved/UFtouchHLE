@@ -71,7 +71,7 @@ pub const CLASSES: ClassExports = objc_classes! {
 }
 
 - (CGFloat)scale {
-    if env.options.retina { 2.0 } else { 1.0 }
+    env.options.screen_scale() as CGFloat
 }
 
 - (id)currentMode {
@@ -104,7 +104,7 @@ pub const CLASSES: ClassExports = objc_classes! {
 
 - (CGSize)size {
     let (width, height) = env.window().size_unrotated_unscaled();
-    let scale: CGFloat = if env.options.retina { 2.0 } else { 1.0 };
+    let scale: CGFloat = env.options.screen_scale() as CGFloat;
     CGSize { width: width as f32 * scale, height: height as f32 * scale }
 }
 

@@ -281,7 +281,12 @@ pub fn read(
                 // need to set EOF
                 file.reached_eof = true;
             }
-            if bytes_read < buffer_slice.len() {
+            let short_read = bytes_read < buffer_slice.len();
+            let diagnostic = env.options.performance_test;
+            if short_read && diagnostic.is_some() {
+                env.framework_state.performance.short_reads += 1;
+            }
+            if short_read && !diagnostic.is_some_and(|mode| mode.quiet()) {
                 log!(
                     "Warning: read({:?}, {:?}, {:#x}) read only {:#x} bytes",
                     fd,

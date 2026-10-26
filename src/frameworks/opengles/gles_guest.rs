@@ -78,6 +78,10 @@ where
         return U::default();
     }
 
+    let started = env
+        .options
+        .performance_test
+        .map(|_| std::time::Instant::now());
     let mut gles = super::sync_context(
         &mut env.framework_state.opengles,
         &mut env.objc,
@@ -90,7 +94,11 @@ where
     //panic_on_gl_errors(&mut *gles);
     let res = f(gles.as_mut(), &mut env.mem);
     //panic_on_gl_errors(&mut *gles);
-    #[allow(clippy::let_and_return)]
+    drop(gles);
+    if let Some(started) = started {
+        env.framework_state.performance.gl += started.elapsed();
+        env.framework_state.performance.gl_calls += 1;
+    }
     res
 }
 
@@ -103,6 +111,10 @@ fn with_ctx_and_mem_no_skip<T, U>(env: &mut Environment, f: T) -> U
 where
     T: FnOnce(&mut dyn GLES, &mut Mem) -> U,
 {
+    let started = env
+        .options
+        .performance_test
+        .map(|_| std::time::Instant::now());
     let mut gles = super::sync_context(
         &mut env.framework_state.opengles,
         &mut env.objc,
@@ -115,7 +127,11 @@ where
     //panic_on_gl_errors(&mut **gles);
     let res = f(gles.as_mut(), &mut env.mem);
     //panic_on_gl_errors(&mut **gles);
-    #[allow(clippy::let_and_return)]
+    drop(gles);
+    if let Some(started) = started {
+        env.framework_state.performance.gl += started.elapsed();
+        env.framework_state.performance.gl_calls += 1;
+    }
     res
 }
 
@@ -302,6 +318,12 @@ fn glGetFixedv(env: &mut Environment, pname: GLenum, params: MutPtr<GLfixed>) {
     }
 }
 fn glGetIntegerv(env: &mut Environment, pname: GLenum, params: MutPtr<GLint>) {
+    if let Some(rect) = super::p2g_wide::integer(env, pname) {
+        for (i, v) in rect.into_iter().enumerate() {
+            env.mem.write(params + i as u32, v);
+        }
+        return;
+    }
     let palette_value = match pname {
         gles11::MAX_PALETTE_MATRICES_OES => Some(matrix_palette::MAX_PALETTE_MATRICES as GLint),
         gles11::MAX_VERTEX_UNITS_OES => Some(matrix_palette::MAX_VERTEX_UNITS as GLint),
@@ -539,7 +561,8 @@ fn glScissor(env: &mut Environment, x: GLint, y: GLint, width: GLsizei, height: 
     let (width, height) = (width * factor, height * factor);
     with_ctx_and_mem(env, |gles, _mem| unsafe {
         gles.Scissor(x, y, width, height)
-    })
+    });
+    super::p2g_wide::viewport(env, [x, y, width, height], true);
 }
 fn glViewport(env: &mut Environment, x: GLint, y: GLint, width: GLsizei, height: GLsizei) {
     // apply scale hack: assume framebuffer's size is larger than the app thinks
@@ -549,7 +572,8 @@ fn glViewport(env: &mut Environment, x: GLint, y: GLint, width: GLsizei, height:
     let (width, height) = (width * factor, height * factor);
     with_ctx_and_mem(env, |gles, _mem| unsafe {
         gles.Viewport(x, y, width, height)
-    })
+    });
+    super::p2g_wide::viewport(env, [x, y, width, height], false);
 }
 fn glLineWidth(env: &mut Environment, val: GLfloat) {
     with_ctx_and_mem(env, |gles, _mem| unsafe { gles.LineWidth(val) })
@@ -946,6 +970,7 @@ fn is_programmable(env: &mut Environment) -> bool {
 }
 
 fn glDrawArrays(env: &mut Environment, mode: GLenum, first: GLint, count: GLsizei) {
+    super::p2g_wide::apply(env, false);
     if is_programmable(env) {
         return with_ctx_and_mem(env, |gles, _| unsafe {
             gles.DrawArrays(mode, first, count)
@@ -982,6 +1007,7 @@ fn glDrawElements(
     type_: GLenum,
     indices: ConstVoidPtr,
 ) {
+    super::p2g_wide::apply(env, false);
     if is_programmable(env) {
         return with_ctx_and_mem(env, |gles, mem| unsafe {
             let indices = translate_pointer_or_offset_to_host(
@@ -1046,6 +1072,7 @@ fn glDrawElements(
 
 // Clearing
 fn glClear(env: &mut Environment, mask: GLbitfield) {
+    super::p2g_wide::apply(env, true);
     with_ctx_and_mem(env, |gles, _mem| unsafe { gles.Clear(mask) });
 }
 fn glClearColor(
@@ -1484,6 +1511,12 @@ fn glTexImage2D(
     type_: GLenum,
     pixels: ConstVoidPtr,
 ) {
+    let (width, height) =
+        if pixels.is_null() && target == gles11::TEXTURE_2D && level == 0 && border == 0 {
+            super::p2g_wide::depth_texture_size(&env.options, format, width, height)
+        } else {
+            (width, height)
+        };
     if env.options.scale_hack.get() > 1 && target == gles11::TEXTURE_2D && level == 0 {
         let texture = with_ctx_and_mem(env, |gles, _mem| unsafe {
             let mut texture = 0;
@@ -1707,12 +1740,14 @@ fn glIsRenderbufferOES(env: &mut Environment, renderbuffer: GLuint) -> GLboolean
 fn glBindFramebufferOES(env: &mut Environment, target: GLenum, framebuffer: GLuint) {
     with_ctx_and_mem(env, |gles, _mem| unsafe {
         gles.BindFramebufferOES(target, framebuffer)
-    })
+    });
+    super::p2g_wide::bind_frame(env, framebuffer);
 }
 fn glBindRenderbufferOES(env: &mut Environment, target: GLenum, renderbuffer: GLuint) {
     with_ctx_and_mem(env, |gles, _mem| unsafe {
         gles.BindRenderbufferOES(target, renderbuffer)
-    })
+    });
+    super::p2g_wide::bind_buffer(env, renderbuffer);
 }
 fn glRenderbufferStorageOES(
     env: &mut Environment,
@@ -1724,6 +1759,7 @@ fn glRenderbufferStorageOES(
     // apply scale hack: give the app a larger framebuffer than it asked for
     let factor = env.options.scale_hack.get() as GLsizei;
     let (width, height) = (width * factor, height * factor);
+    let (width, height) = super::p2g_wide::storage(env, internalformat, width, height);
     with_ctx_and_mem(env, |gles, _mem| unsafe {
         gles.RenderbufferStorageOES(target, internalformat, width, height)
     })
@@ -1737,7 +1773,8 @@ fn glFramebufferRenderbufferOES(
 ) {
     with_ctx_and_mem(env, |gles, _mem| unsafe {
         gles.FramebufferRenderbufferOES(target, attachment, renderbuffertarget, renderbuffer)
-    })
+    });
+    super::p2g_wide::attach(env, attachment, renderbuffer);
 }
 fn glFramebufferTexture2DOES(
     env: &mut Environment,
@@ -1752,7 +1789,8 @@ fn glFramebufferTexture2DOES(
     }
     with_ctx_and_mem(env, |gles, _mem| unsafe {
         gles.FramebufferTexture2DOES(target, attachment, textarget, texture, level)
-    })
+    });
+    super::p2g_wide::attach(env, attachment, 0);
 }
 fn glGetFramebufferAttachmentParameterivOES(
     env: &mut Environment,
@@ -1773,6 +1811,10 @@ fn glGetRenderbufferParameterivOES(
     params: MutPtr<GLint>,
 ) {
     let factor = env.options.scale_hack.get() as GLint;
+    if let Some(value) = super::p2g_wide::buffer_parameter(env, pname) {
+        env.mem.write(params, value / factor);
+        return;
+    }
     with_ctx_and_mem(env, |gles, mem| {
         let params = mem.ptr_at_mut(params, 1);
         unsafe { gles.GetRenderbufferParameterivOES(target, pname, params) };
@@ -1789,6 +1831,12 @@ fn glCheckFramebufferStatusOES(env: &mut Environment, target: GLenum) -> GLenum 
     })
 }
 fn glDeleteFramebuffersOES(env: &mut Environment, n: GLsizei, framebuffers: ConstPtr<GLuint>) {
+    if env.options.p2g_wide_screen && n > 0 {
+        let objects: Vec<u32> = (0..n as u32)
+            .map(|i| env.mem.read(framebuffers + i))
+            .collect();
+        super::p2g_wide::delete_objects(env, &objects, false);
+    }
     with_ctx_and_mem(env, |gles, mem| {
         let n_usize: GuestUSize = n.try_into().unwrap();
         let framebuffers = mem.ptr_at(framebuffers, n_usize);
@@ -1796,6 +1844,12 @@ fn glDeleteFramebuffersOES(env: &mut Environment, n: GLsizei, framebuffers: Cons
     })
 }
 fn glDeleteRenderbuffersOES(env: &mut Environment, n: GLsizei, renderbuffers: ConstPtr<GLuint>) {
+    if env.options.p2g_wide_screen && n > 0 {
+        let objects: Vec<u32> = (0..n as u32)
+            .map(|i| env.mem.read(renderbuffers + i))
+            .collect();
+        super::p2g_wide::delete_objects(env, &objects, true);
+    }
     with_ctx_and_mem(env, |gles, mem| {
         let n_usize: GuestUSize = n.try_into().unwrap();
         let renderbuffers = mem.ptr_at(renderbuffers, n_usize);

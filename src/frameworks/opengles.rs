@@ -13,6 +13,8 @@ mod eagl;
 mod gles2_guest;
 mod gles_guest;
 mod matrix_palette;
+pub(crate) mod p2g_wide;
+pub(crate) use p2g_wide::validate as validate_p2g_wide;
 
 pub use eagl::redraw_last_frame;
 
@@ -30,6 +32,7 @@ pub const DYLIB: crate::dyld::HostDylib = crate::dyld::HostDylib {
 
 #[derive(Default)]
 pub struct State {
+    pub(crate) p2g_wide: p2g_wide::State,
     /// ES 2 contexts currently use the readback compositor, which keeps the
     /// app's shaders and vertex attributes separate from presentation.
     pub(crate) programmable_contexts: std::collections::HashSet<crate::objc::id>,

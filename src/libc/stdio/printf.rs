@@ -31,6 +31,48 @@ const ALL_SPECIFIERS: [u8; 25] = [
 const INTEGER_SPECIFIERS: [u8; 6] = *b"diouxX";
 const FLOAT_SPECIFIERS: [u8; 3] = *b"feg";
 
+/// Integer precision counts magnitude digits, while field width includes the
+/// sign. Zero padding belongs after the sign and is disabled by precision or
+/// left justification. In particular, P2G's shop uses `%+3d` for resistances.
+fn format_decimal(
+    value: i64,
+    prepend_sign: bool,
+    pad_char: char,
+    pad_width: usize,
+    precision: Option<usize>,
+    left_justified: bool,
+) -> String {
+    let digits = if value == 0 && precision == Some(0) {
+        String::new()
+    } else {
+        value.unsigned_abs().to_string()
+    };
+    let sign = if value < 0 {
+        "-"
+    } else if prepend_sign {
+        "+"
+    } else {
+        ""
+    };
+    let precision_zeros = precision.unwrap_or(0).saturating_sub(digits.len());
+    let padding = pad_width.saturating_sub(sign.len() + precision_zeros + digits.len());
+    let zero_padding = pad_char == '0' && precision.is_none() && !left_justified;
+    let mut text = String::new();
+    if !left_justified && !zero_padding {
+        text.extend(std::iter::repeat_n(' ', padding));
+    }
+    text.push_str(sign);
+    text.extend(std::iter::repeat_n(
+        '0',
+        precision_zeros + if zero_padding { padding } else { 0 },
+    ));
+    text.push_str(&digits);
+    if left_justified {
+        text.extend(std::iter::repeat_n(' ', padding));
+    }
+    text
+}
+
 /// String formatting implementation for `printf` and `NSLog` function families.
 ///
 /// `NS_LOG` is [true] for the `NSLog` format string type, or [false] for the
@@ -254,7 +296,6 @@ pub fn printf_inner<const NS_LOG: bool, F: Fn(&Mem, GuestUSize) -> u8>(
                 }
             }
             b'd' | b'i' | b'u' => {
-                assert!(!left_justified);
                 // Note: on 32-bit system int and long are i32,
                 // so single length_modifier is ignored (but not double one!)
                 let int: i64 = if specifier == b'u' {
@@ -286,34 +327,15 @@ pub fn printf_inner<const NS_LOG: bool, F: Fn(&Mem, GuestUSize) -> u8>(
                     int.into()
                 };
 
-                let int_with_precision = if precision.is_some_and(|value| value > 0) {
-                    format!("{:01$}", int, precision.unwrap())
-                } else {
-                    format!("{int}")
-                };
-
-                if pad_width > 0 {
-                    let pad_width = pad_width as usize;
-                    if pad_char == '0' && precision.is_none() {
-                        if prepend_sign {
-                            assert!(int != 0); // TODO
-                            assert!(pad_width > 0);
-                            if int > 0 {
-                                write!(&mut res, "+{:0>1$}", int, pad_width - 1).unwrap();
-                            } else {
-                                write!(&mut res, "-{:0>1$}", int.abs(), pad_width - 1).unwrap();
-                            }
-                        } else {
-                            write!(&mut res, "{int:0>pad_width$}").unwrap();
-                        }
-                    } else {
-                        assert!(!prepend_sign);
-                        write!(&mut res, "{int_with_precision:>pad_width$}").unwrap();
-                    }
-                } else {
-                    assert!(!prepend_sign);
-                    res.extend_from_slice(int_with_precision.as_bytes());
-                }
+                let text = format_decimal(
+                    int,
+                    prepend_sign && specifier != b'u',
+                    pad_char,
+                    pad_width as usize,
+                    precision,
+                    left_justified,
+                );
+                res.extend_from_slice(text.as_bytes());
             }
             b'@' if NS_LOG => {
                 assert!(!prepend_sign);
@@ -1386,4 +1408,42 @@ pub fn isspace(env: &mut Environment, src: ConstPtr<u8>) -> bool {
 pub fn isspace_inner(c: u8) -> bool {
     // Rust's definition of whitespace excludes vertical tab, unlike C's
     c.is_ascii_whitespace() || c == b'\x0b'
+}
+
+#[cfg(test)]
+mod decimal_sign_tests {
+    use super::format_decimal;
+
+    #[test]
+    fn shop_resistances_include_sign_with_space_width_and_zero() {
+        for (value, expected) in [
+            (3, " +3"),
+            (0, " +0"),
+            (-2, " -2"),
+            (123, "+123"),
+            (-123, "-123"),
+        ] {
+            assert_eq!(format_decimal(value, true, ' ', 3, None, false), expected);
+        }
+        assert_eq!(format_decimal(0, true, ' ', 0, None, false), "+0");
+    }
+
+    #[test]
+    fn sign_precedes_zero_padding_and_precision_counts_digits() {
+        assert_eq!(format_decimal(0, true, '0', 8, None, false), "+0000000");
+        assert_eq!(format_decimal(-12, false, '0', 5, None, false), "-0012");
+        assert_eq!(format_decimal(5, true, '0', 6, Some(3), false), "  +005");
+        assert_eq!(format_decimal(-5, true, ' ', 6, Some(3), false), "  -005");
+        assert_eq!(format_decimal(0, true, ' ', 3, Some(0), false), "  +");
+        assert_eq!(format_decimal(0, false, ' ', 0, Some(0), false), "");
+    }
+
+    #[test]
+    fn minimum_integer_and_left_justification_preserve_sign() {
+        assert_eq!(
+            format_decimal(i64::MIN, true, ' ', 0, None, false),
+            "-9223372036854775808"
+        );
+        assert_eq!(format_decimal(3, true, '0', 5, None, true), "+3   ");
+    }
 }

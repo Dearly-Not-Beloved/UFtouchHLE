@@ -383,7 +383,13 @@ fn prepare_render_params(env: &mut Environment) -> (RenderParams, crate::options
     env.framework_state.core_animation.composition.layer_scale2x =
         filter_mode == crate::options::FilterMode::Hq;
     let fb_width = screen_bounds.size.width as u32 * scale_hack * upscale;
-    let fb_height = screen_bounds.size.height as u32 * scale_hack * upscale;
+    let fb_height = env
+        .options
+        .p2g_wide_width
+        .filter(|_| env.options.p2g_wide_screen)
+        .unwrap_or(screen_bounds.size.height as u32)
+        * scale_hack
+        * upscale;
     let present_frame_args = (
         env.window().viewport(),
         env.window().rotation_matrix(),
@@ -937,6 +943,33 @@ unsafe fn composite_layer_recursive(
     let window = env.window.as_mut().unwrap();
     let mut gles = window.make_internal_gl_ctx_current();
 
+    // Compose the expanded game render target across the whole output. Native
+    // UIKit layers (including movies) retain the centered 16:9 viewport too.
+    if env.options.p2g_wide_screen {
+        if let Some((_, _, (width, height))) = env
+            .framework_state
+            .core_animation
+            .composition
+            .texture_framebuffer
+        {
+            let long = env.options.p2g_wide_width.unwrap();
+            let expanded = host_obj
+                .presented_pixels
+                .as_ref()
+                .is_some_and(|(_, w, h)| *w as u64 * 320 == *h as u64 * long as u64 && w > h);
+            let safe_height = width * 568 / 320;
+            if expanded {
+                gles.Viewport(0, 0, width as _, height as _);
+            } else {
+                gles.Viewport(
+                    0,
+                    ((height - safe_height) / 2) as _,
+                    width as _,
+                    safe_height as _,
+                );
+            }
+        }
+    }
     let opacity = opacity * host_obj.opacity;
     let cumulative_transform = {
         let CALayerHostObject { bounds, .. } = host_obj;

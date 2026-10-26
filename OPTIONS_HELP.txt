@@ -94,7 +94,11 @@ Device options:
         using the app's supported device families, widescreen support and host
         display. Defaults to auto. The app picker retains its legacy geometry.
         The profile resolves the model, family, Retina scale and logical screen
-        size at runtime. Example: --device-profile=iPhone5,1.
+        size at runtime. Examples: iPhone5,1 (iPhone 5), iPhone7,2 (iPhone 6,
+        750x1334), iPhone7,1 (iPhone 6 Plus, 1242x2208 at 3x). Large phone
+        canvases require the app's launch-image opt-in; otherwise a compatible
+        2x canvas is used. Auto prefers the existing lower-resolution profile
+        when aspect ratios differ by less than 0.5%.
 
     --retina
         Tells the app the screen is a Retina display (twice the resolution in
@@ -312,6 +316,32 @@ Other options:
         argc/argv) rather than processed by touchHLE. This option can't be used
         via touchHLE_options.txt or touchHLE_default_options.txt.
 
+    --audio-test=original|smooth-edges|lower-volume
+        GTA Vice City sound comparisons, also in its Android long-press menu.
+        Processes only mono 16-bit effects lasting 10ms to 2s. Stereo music and
+        streaming queues retain the original samples. Smooth edges applies a
+        2ms ramp at each end; lower volume halves the samples. Both are
+        experimental comparisons, disabled on ordinary launches. A few audio
+        events append to touchHLE_performance_tests.txt without enabling frame
+        timing. The Android game screen has a noise marker button in these
+        modes. Tap immediately after hearing noise: a bounded history of up to
+        192 recent source events (within 15s), current source state and the next
+        3s of events append to the report. Recent uploaded PCM (at most 6s /
+        4 MiB, up to 8 captures per run) is saved under touchHLE_audio_captures.
+        This does not record microphone input. Capturing may briefly stall
+        playback. Ordinary launches do not keep this history. Original game files and
+        saved settings are never modified.
+
+    --performance-test=reference|low-resolution|quiet-log|low-resolution-quiet-log
+        Opt-in comparison diagnostics, available from GTA Vice City's Android
+        long-press menu. Tests use 1x scaling, sharp filtering and a 60fps cap.
+        Low-resolution modes disable Retina without changing device identity.
+        Quiet modes suppress only short-read warnings, not actual I/O errors.
+        Reports append every 5 seconds to touchHLE_performance_tests.txt.
+        CPU and GL submission timings add diagnostic overhead and measure host
+        wall time, not asynchronous GPU execution. Readback is part of present
+        time. Use the same gameplay scene for each mode; no settings are saved.
+
     --print-fps
         Logs the current framerate (FPS) to the console once per second.
         For apps that draw with UIKit or Core Graphics, this counts the frames
@@ -358,3 +388,10 @@ Other options:
         stack and branch based on the stack's content. There is normally
         no reason to enable this option. The number of bytes must be
         chosen carefully on a per-app basis.
+
+--p2g-wide-screen
+    Experimental expanded 3D view for P2G (jp.co.capcom.mhp2gjp 1.00.02).
+    Retains the original centered 568x320-point UI and touch coordinates.
+    Extends the scene to the host phone aspect (up to 2.5:1); on a narrower
+    desktop display, uses approximately 19.5:9. Uses the iPhone 5 Retina canvas.
+    Unsupported executables are rejected; other games are not affected.

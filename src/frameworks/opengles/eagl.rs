@@ -300,6 +300,8 @@ pub const CLASSES: ClassExports = objc_classes! {
         (width.round() as u32 * scale_hack, height.round() as u32 * scale_hack)
     };
 
+    let guest_size = (width,height);
+    let (width,height) = super::p2g_wide::drawable_size(env,width,height);
     let window = env.window.as_mut().expect("OpenGL ES is not supported in headless mode");
 
     let renderbuffer = {
@@ -315,6 +317,7 @@ pub const CLASSES: ClassExports = objc_classes! {
         }
     };
 
+    super::p2g_wide::drawable(env,renderbuffer,guest_size,(width,height));
     retain(env, drawable);
     let host_obj = env.objc.borrow_mut::<EAGLContextHostObject>(this);
     let maybe_old_drawable = host_obj.renderbuffer_drawable_bindings.borrow_mut().insert(
@@ -330,6 +333,10 @@ pub const CLASSES: ClassExports = objc_classes! {
 
 - (bool)presentRenderbuffer:(NSUInteger)target {
     assert!(target == gles11::RENDERBUFFER_OES);
+
+    let diagnostic_started = env.options.performance_test.map(|_| Instant::now());
+    let mut diagnostic_slow = false;
+    let mut diagnostic_readback = Duration::ZERO;
 
     // The presented frame should be displayed ASAP, but the next one must be
     // delayed, so this needs to be checked before returning.
@@ -444,6 +451,8 @@ pub const CLASSES: ClassExports = objc_classes! {
         let sharegroup = sharegroup_key(env.objc.borrow::<EAGLContextHostObject>(this));
         let mut sizes = env.framework_state.opengles.present_texture_sizes.get(&sharegroup).copied().unwrap_or_default();
         // re-borrow
+        diagnostic_slow = true;
+        let readback_started = diagnostic_started.map(|_| Instant::now());
         let (pixels_vec, width, height) = super::without_leaving_errors(env, |env| {
             let mut gles = super::sync_context(&mut env.framework_state.opengles, &mut env.objc, env.window.as_mut().unwrap(), env.current_thread);
             unsafe {
@@ -452,9 +461,15 @@ pub const CLASSES: ClassExports = objc_classes! {
             }
         });
         env.framework_state.opengles.present_texture_sizes.insert(sharegroup, sizes);
+        if let Some(started) = readback_started {
+            diagnostic_readback = started.elapsed();
+        }
         present_pixels(env, drawable, pixels_vec, width, height);
     }
 
+    if let Some(started) = diagnostic_started {
+        crate::performance::frame(env, started, diagnostic_slow, diagnostic_readback, sleep_for);
+    }
     if let Some(sleep_for) = sleep_for {
         env.sleep(sleep_for);
     }
@@ -636,7 +651,6 @@ unsafe fn read_renderbuffer(
         Instant::now().saturating_duration_since(before)
     );
     pixel_buffer.set_len(size);
-
     // Restore the framebuffer binding
     gles.BindFramebufferOES(gles11::FRAMEBUFFER_OES, old_framebuffer);
 

@@ -85,6 +85,8 @@ const DEVICE_MODELS: &[(&str, &str)] = &[
     ("iPhone4,1", "N94AP"),
     ("iPhone5,1", "N41AP"),
     ("iPhone6,1", "N51AP"),
+    ("iPhone7,2", "N61AP"),
+    ("iPhone7,1", "N56AP"),
     ("iPod1,1", "N45AP"),
     ("iPod2,1", "N72AP"),
     ("iPod3,1", "N18AP"),

@@ -267,6 +267,10 @@ impl IpaFileRef {
             );
             let mut buf = Vec::new();
             file.read_to_end(&mut buf).unwrap();
+            if repair_known_gta_sfx(file.name(), file.crc32(), &mut buf) {
+                metadata_map.get_mut(&self.index).unwrap().size = buf.len() as u64;
+                log!("Corrected a known one-byte shift in GTA Vice City's sfx.RAW in memory; the IPA is unchanged.");
+            }
             Rc::from(buf)
         });
         let cached_file = Rc::clone(archive_cache.get(&self.index).unwrap());
@@ -296,6 +300,76 @@ impl IpaFileRef {
             _ = self.open();
         }
         self.metadata_map.borrow().get(&self.index).unwrap().size
+    }
+}
+
+/// One known GTA archive contains an extra byte in effect 7438, shifting all
+/// subsequent 16-bit effects. Match the complete ZIP CRC, length, path and
+/// surrounding bytes before correcting the decompressed cache. Other archives
+/// and correctly aligned sound libraries must not be altered.
+fn repair_known_gta_sfx(name: &str, crc: u32, data: &mut Vec<u8>) -> bool {
+    if name != "Payload/gta3vc.app/sfx.RAW" || crc != 0xd314375c || data.len() != 340_245_503 {
+        return false;
+    }
+    remove_checked_byte(
+        data,
+        243_258_231,
+        &[
+            0xe1, 0x0b, 0x01, 0xb9, 0xfd, 0xeb, 0xff, 0x0d, 0x61, 0x24, 0xfe, 0xe4, 0x0c, 0x08,
+            0xec, 0xe2, 0x72,
+        ],
+    )
+}
+
+fn remove_checked_byte(data: &mut Vec<u8>, offset: usize, guard: &[u8]) -> bool {
+    let Some(start) = offset.checked_sub(guard.len() / 2) else {
+        return false;
+    };
+    let Some(end) = start.checked_add(guard.len()) else {
+        return false;
+    };
+    if data.get(start..end) != Some(guard) || offset >= data.len() {
+        return false;
+    }
+    data.remove(offset);
+    true
+}
+
+#[cfg(test)]
+mod sound_library_repair_tests {
+    use super::*;
+
+    #[test]
+    fn repair_preserves_prefix_and_suffix_and_requires_expected_bytes() {
+        let original = vec![1, 2, 3, 99, 4, 5, 6];
+        let mut data = original.clone();
+        assert!(!remove_checked_byte(&mut data, 3, &[3, 98, 4]));
+        assert_eq!(data, original);
+        assert!(remove_checked_byte(&mut data, 3, &[3, 99, 4]));
+        assert_eq!(data, [1, 2, 3, 4, 5, 6]);
+        assert!(!remove_checked_byte(&mut data, 3, &[3, 99, 4]));
+        assert!(!remove_checked_byte(&mut data, usize::MAX, &[1]));
+    }
+
+    #[test]
+    fn unrelated_or_differently_sized_libraries_are_unchanged() {
+        let mut data = vec![1, 2, 3];
+        assert!(!repair_known_gta_sfx(
+            "Payload/Other.app/sfx.RAW",
+            0xd314375c,
+            &mut data
+        ));
+        assert!(!repair_known_gta_sfx(
+            "Payload/gta3vc.app/sfx.RAW",
+            0,
+            &mut data
+        ));
+        assert!(!repair_known_gta_sfx(
+            "Payload/gta3vc.app/sfx.RAW",
+            0xd314375c,
+            &mut data
+        ));
+        assert_eq!(data, [1, 2, 3]);
     }
 }
 

@@ -49,8 +49,118 @@ pub struct State {
     warned_invalid_host_devices: HashSet<*mut ALCdevice>,
     /// Registered with `alSourceAddNotification` (see [handle_notifications]).
     notifications: Vec<SourceNotification>,
+    audio_test_uploads: u32,
+    audio_test_plays: u32,
+    /// Buffers used in a streaming queue must never be edge-ramped.
+    audio_test_stream_buffers: HashSet<(usize, ALuint)>,
+    audio_test_original: HashMap<(usize, ALuint), AudioTestBuffer>,
+    audio_test_meta: HashMap<(usize, ALuint), String>,
+    audio_trace: crate::audio::sound_trace::Trace,
+    audio_test_sources: HashSet<(usize, ALuint)>,
 }
+struct AudioTestBuffer {
+    format: ALenum,
+    rate: ALsizei,
+    data: Vec<u8>,
+}
+
+/// Save one event in memory; write only around a user-marked noise.
+fn audio_trace_event(env: &mut Environment, event: String) {
+    if audio_test_mode(env).is_none() {
+        return;
+    }
+    let at = crate::audio::sound_trace::timestamp_ms();
+    let follow = State::get(env)
+        .audio_trace
+        .record(at, std::time::Instant::now(), event.clone());
+    if follow {
+        crate::performance::audio_event(&format!("AUDIO EVENT ms={at} {event}"));
+    }
+}
+
+/// Snapshot the source before changing it. Queries do not consume AL
+/// errors; invalid sources are checked without adding query errors.
+fn audio_trace_source(env: &mut Environment, source: ALuint, action: &str) {
+    let Some(mode) = audio_test_mode(env) else {
+        return;
+    };
+    let Some(context) = State::try_make_current(env) else {
+        return;
+    };
+    let mut values = [0; 6];
+    let mut gain = 0.0;
+    let mut pitch = 0.0;
+    if unsafe { context.IsSource(source) } == 0 {
+        return;
+    }
+    unsafe {
+        for (param, value) in [0x1009, 0x1010, 0x1007, 0x1015, 0x1016, 0x1025]
+            .into_iter()
+            .zip(&mut values)
+        {
+            context.GetSourcei(source, param, value);
+        }
+        context.GetSourcef(source, 0x100A, &mut gain);
+        context.GetSourcef(source, 0x1003, &mut pitch);
+    }
+    let state = State::get(env);
+    let key = state.audio_test_key(values[0] as u32);
+    let meta = state
+        .audio_test_meta
+        .get(&key)
+        .map(String::as_str)
+        .unwrap_or("queued_or_unknown_buffer");
+    let event = format!("mode={mode:?} {action} source={source} buffer={} state={:#x} loop={} queued={} processed={} sample_offset={} gain={gain} pitch={pitch} {meta}", values[0], values[1], values[2], values[3], values[4], values[5]);
+    audio_trace_event(env, event);
+}
+
+/// Poll on the emulation thread, never the Java UI or native mixer thread.
+pub fn capture_audio_marker(env: &mut Environment) {
+    if audio_test_mode(env).is_none() {
+        return;
+    }
+    let marker = crate::audio::sound_trace::take_request();
+    if marker == 0 {
+        return;
+    }
+    let report = State::get(env)
+        .audio_trace
+        .capture(marker, std::time::Instant::now());
+    crate::performance::audio_event(&report);
+    let pcm_report = State::get(env).audio_trace.save_pcm(marker);
+    match pcm_report {
+        Ok(report) => crate::performance::audio_event(&report),
+        Err(error) => crate::performance::audio_event(&format!("PCM capture failed: {error}")),
+    }
+    let state = State::get(env);
+    let device = state.audio_test_key(0).0;
+    let sources: Vec<_> = state
+        .audio_test_sources
+        .iter()
+        .filter(|(d, _)| *d == device)
+        .map(|&(_, source)| source)
+        .take(64)
+        .collect();
+    for source in sources {
+        audio_trace_source(env, source, "at_noise_mark");
+    }
+}
+
+fn audio_test_mode(env: &Environment) -> Option<crate::audio::sound_test::Mode> {
+    (env.bundle.bundle_identifier() == "com.rockstargames.gta3vc")
+        .then_some(env.options.audio_test)
+        .flatten()
+}
+
 impl State {
+    fn audio_test_key(&self, buffer: ALuint) -> (usize, ALuint) {
+        let device = self
+            .contexts
+            .get(&self.current_ctx)
+            .map_or(0, |context| context.GetContextsDevice() as usize);
+        (device, buffer)
+    }
+
     fn get(env: &mut Environment) -> &mut Self {
         &mut env.framework_state.openal
     }
@@ -178,6 +288,19 @@ fn alcCloseDevice(env: &mut Environment, device: MutPtr<GuestALCdevice>) -> bool
         }
         return false;
     };
+    let state = State::get(env);
+    state
+        .audio_test_original
+        .retain(|&(device, _), _| device != host_device as usize);
+    state
+        .audio_test_stream_buffers
+        .retain(|&(device, _)| device != host_device as usize);
+    state
+        .audio_test_meta
+        .retain(|&(device, _), _| device != host_device as usize);
+    State::get(env)
+        .audio_test_sources
+        .retain(|&(device, _)| device != host_device as usize);
     env.mem.free(device.cast());
     al::unregister_device(host_device);
     let res = unsafe { al::alcCloseDevice(host_device) };
@@ -777,12 +900,42 @@ fn alGetListeneriv(env: &mut Environment, param: ALenum, values: MutPtr<ALint>) 
 
 fn alGenSources(env: &mut Environment, n: ALsizei, sources: MutPtr<ALuint>) {
     let n_usize: GuestUSize = n.try_into().unwrap();
+    let guest_sources = sources;
+    let trace = audio_test_mode(env).is_some();
     let sources = env.mem.ptr_at_mut(sources, n_usize);
     try_get_context!(env, context);
     unsafe { context.GenSources(n, sources) };
+    if trace {
+        let names = env
+            .mem
+            .bytes_at(guest_sources.cast(), n_usize * 4)
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|s| u32::from_le_bytes(*s))
+            .collect::<Vec<_>>();
+        let state = State::get(env);
+        for name in names {
+            state.audio_test_sources.insert(state.audio_test_key(name));
+        }
+    }
 }
 fn alDeleteSources(env: &mut Environment, n: ALsizei, sources: ConstPtr<ALuint>) {
     let n_usize: GuestUSize = n.try_into().unwrap();
+    if audio_test_mode(env).is_some() {
+        let names = env
+            .mem
+            .bytes_at(sources.cast(), n_usize * 4)
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|s| u32::from_le_bytes(*s))
+            .collect::<Vec<_>>();
+        let state = State::get(env);
+        for name in names {
+            state.audio_test_sources.remove(&state.audio_test_key(name));
+        }
+    }
     let sources = env.mem.ptr_at(sources, n_usize);
     try_get_context!(env, context);
     unsafe { context.DeleteSources(n, sources) };
@@ -810,6 +963,13 @@ fn alSource3f(
     unsafe { context.Source3f(source, param, value1, value2, value3) };
 }
 fn alSourcei(env: &mut Environment, source: ALuint, param: ALenum, value: ALint) {
+    if audio_test_mode(env).is_some() && matches!(param, 0x1009 | 0x1007 | 0x1024..=0x1026) {
+        audio_trace_source(
+            env,
+            source,
+            &format!("set_i param={param:#x} value={value}"),
+        );
+    }
     try_get_context!(env, context);
     unsafe { context.Sourcei(source, param, value) };
 }
@@ -898,24 +1058,57 @@ fn alGetSourceiv(env: &mut Environment, source: ALuint, param: ALenum, values: M
 }
 
 fn alSourcePlay(env: &mut Environment, source: ALuint) {
+    if let Some(mode) = audio_test_mode(env) {
+        let state = State::get(env);
+        if state.audio_test_plays < 64 {
+            state.audio_test_plays += 1;
+            crate::performance::audio_event(&format!("AUDIO mode={mode:?} play_source={source}"));
+        }
+    }
+    audio_trace_source(env, source, "play");
     try_get_context!(env, context);
     unsafe { context.SourcePlay(source) };
 }
 fn alSourcePause(env: &mut Environment, source: ALuint) {
+    audio_trace_source(env, source, "pause");
     try_get_context!(env, context);
     unsafe { context.SourcePause(source) };
 }
 fn alSourceStop(env: &mut Environment, source: ALuint) {
+    audio_trace_source(env, source, "stop");
     try_get_context!(env, context);
     unsafe { context.SourceStop(source) };
 }
 fn alSourceRewind(env: &mut Environment, source: ALuint) {
+    audio_trace_source(env, source, "rewind");
     try_get_context!(env, context);
     unsafe { context.SourceRewind(source) };
 }
 
 fn alSourcePlayv(env: &mut Environment, nsources: ALsizei, sources: ConstPtr<ALuint>) {
+    if let Some(mode) = audio_test_mode(env) {
+        let state = State::get(env);
+        if state.audio_test_plays < 64 {
+            state.audio_test_plays += 1;
+            crate::performance::audio_event(&format!(
+                "AUDIO mode={mode:?} play_batch_sources={nsources}"
+            ));
+        }
+    }
     let nsources_usize: GuestUSize = nsources.try_into().unwrap();
+    if audio_test_mode(env).is_some() {
+        let names = env
+            .mem
+            .bytes_at(sources.cast(), nsources_usize * 4)
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|s| u32::from_le_bytes(*s))
+            .collect::<Vec<_>>();
+        for source in names {
+            audio_trace_source(env, source, "play_batch");
+        }
+    }
     let sources = env.mem.ptr_at(sources, nsources_usize);
     try_get_context!(env, context);
     unsafe { context.SourcePlayv(nsources, sources) };
@@ -945,7 +1138,42 @@ fn alSourceQueueBuffers(
     nb: ALsizei,
     buffers: ConstPtr<ALuint>,
 ) {
+    audio_trace_source(env, source, "queue_requested");
     let nb_usize: GuestUSize = nb.try_into().unwrap();
+    if audio_test_mode(env).is_some() {
+        let names = env
+            .mem
+            .bytes_at(buffers.cast(), nb_usize * 4)
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|s| u32::from_le_bytes(*s))
+            .collect::<Vec<_>>();
+        let mut originals = Vec::new();
+        let state = State::get(env);
+        for name in names {
+            let key = state.audio_test_key(name);
+            state.audio_test_stream_buffers.insert(key);
+            if let Some(original) = state.audio_test_original.remove(&key) {
+                originals.push((name, original));
+            }
+        }
+        if let Some(context) = State::try_make_current(env) {
+            for (name, original) in originals {
+                // Streaming buffers must remain continuous: restore the raw
+                // data before the first queue, and skip later transformations.
+                unsafe {
+                    context.BufferData(
+                        name,
+                        original.format,
+                        original.data.as_ptr().cast(),
+                        original.data.len() as i32,
+                        original.rate,
+                    );
+                }
+            }
+        }
+    }
     let buffers = env.mem.ptr_at(buffers, nb_usize);
     try_get_context!(env, context);
     unsafe { context.SourceQueueBuffers(source, nb, buffers) }
@@ -956,6 +1184,7 @@ fn alSourceUnqueueBuffers(
     nb: ALsizei,
     buffers: MutPtr<ALuint>,
 ) {
+    audio_trace_source(env, source, "unqueue_requested");
     // Apple's sample code for a looping sound effect contains a function called
     // SoundEngineEffect::ClearSourceBuffers() that has the following pattern:
     //
@@ -997,6 +1226,23 @@ fn alGenBuffers(env: &mut Environment, n: ALsizei, buffers: MutPtr<ALuint>) {
 }
 fn alDeleteBuffers(env: &mut Environment, n: ALsizei, buffers: ConstPtr<ALuint>) {
     let n_usize: GuestUSize = n.try_into().unwrap();
+    if audio_test_mode(env).is_some() {
+        let names = env
+            .mem
+            .bytes_at(buffers.cast(), n_usize * 4)
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|s| u32::from_le_bytes(*s))
+            .collect::<Vec<_>>();
+        let state = State::get(env);
+        for name in names {
+            let key = state.audio_test_key(name);
+            state.audio_test_original.remove(&key);
+            state.audio_test_stream_buffers.remove(&key);
+            state.audio_test_meta.remove(&key);
+        }
+    }
     let buffers = env.mem.ptr_at(buffers, n_usize);
     let ctx_ptr = State::get(env).current_ctx;
     let Some(context) = State::try_make_current(env) else {
@@ -1023,12 +1269,81 @@ fn alBufferData(
     samplerate: ALsizei,
 ) {
     let size_usize: GuestUSize = size.try_into().unwrap();
-    let data_ptr: *const ALvoid = if data.is_null() {
+    let mode = audio_test_mode(env);
+    let key = if mode.is_some() {
+        State::get(env).audio_test_key(buffer)
+    } else {
+        (0, buffer)
+    };
+    let streaming = mode.is_some() && State::get(env).audio_test_stream_buffers.contains(&key);
+    if mode.is_some() && !data.is_null() {
+        let meta = format!(
+            "format={format:#x} rate={samplerate} {}",
+            crate::audio::sound_trace::describe_pcm(env.mem.bytes_at(data.cast(), size_usize))
+        );
+        State::get(env).audio_test_meta.insert(key, meta);
+    }
+    let processed = if let Some(mode) = mode.filter(|_| !streaming && !data.is_null()) {
+        crate::audio::sound_test::transform(
+            mode,
+            format,
+            samplerate,
+            env.mem.bytes_at(data.cast(), size_usize),
+        )
+    } else {
+        None
+    };
+    if let Some(mode) = mode {
+        let original = processed.as_ref().map(|_| AudioTestBuffer {
+            format,
+            rate: samplerate,
+            data: env.mem.bytes_at(data.cast(), size_usize).to_vec(),
+        });
+        let state = State::get(env);
+        state.audio_test_original.remove(&key);
+        if let Some(original) = original {
+            state.audio_test_original.insert(key, original);
+        }
+        if state.audio_test_uploads == 0 {
+            let session = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis();
+            crate::performance::audio_event(&format!("\nAUDIO SESSION {session} mode={:?} version={} performance_timing=off_unless_separately_enabled; experimental_short_mono_effects_only", mode, crate::VERSION));
+        }
+        if state.audio_test_uploads < 24 {
+            state.audio_test_uploads += 1;
+            crate::performance::audio_event(&format!(
+                "AUDIO mode={:?} buffer={} format={:#x} rate={} bytes={} transformed={} stream={}",
+                mode,
+                buffer,
+                format,
+                samplerate,
+                size,
+                processed.is_some(),
+                streaming,
+            ));
+        }
+    }
+    let data_ptr: *const ALvoid = if let Some(processed) = &processed {
+        processed.as_ptr().cast()
+    } else if data.is_null() {
         std::ptr::null()
     } else {
-        let data_slice = env.mem.bytes_at(data.cast(), size_usize);
-        data_slice.as_ptr() as *const _
+        env.mem.bytes_at(data.cast(), size_usize).as_ptr().cast()
     };
+    if mode.is_some() && !data_ptr.is_null() {
+        let pcm = if let Some(processed) = &processed {
+            processed.as_slice()
+        } else {
+            env.mem.bytes_at(data.cast(), size_usize)
+        };
+        let now = crate::audio::sound_trace::timestamp_ms();
+        env.framework_state
+            .openal
+            .audio_trace
+            .record_pcm(now, format, samplerate, pcm);
+    }
     try_get_context!(env, context);
     unsafe { context.BufferData(buffer, format, data_ptr, size, samplerate) };
 }

@@ -329,6 +329,11 @@ typedef struct _CGColorSpace *CGColorSpaceRef;
 
 CGColorSpaceRef CGColorSpaceCreateDeviceRGB(void);
 void CGColorSpaceRelease(CGColorSpaceRef cs);
+CGImageRef CGImageCreate(size_t width, size_t height, size_t bitsPerComponent,
+                         size_t bitsPerPixel, size_t bytesPerRow,
+                         CGColorSpaceRef space, unsigned int bitmapInfo,
+                         CGDataProviderRef provider, const CGFloat *decode,
+                         bool shouldInterpolate, int intent);
 
 // `CGContext.h`
 

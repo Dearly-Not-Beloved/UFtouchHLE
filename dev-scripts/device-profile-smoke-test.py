@@ -33,6 +33,10 @@ CASES = [
     ("legacy-phone-compat", "iPhone6,1", [1], False, (320, 480), (640, 960)),
     ("tall-phone-opt-in", "iPhone6,1", [1], True, (320, 568), (640, 1136)),
     ("compact-manual", "iPhone4,1", [1], True, (320, 480), (640, 960)),
+    ("iphone-six", "iPhone7,2", [1], (375, 667), (375, 667), (750, 1334)),
+    ("iphone-six-plus", "iPhone7,1", [1], (414, 736), (414, 736), (1242, 2208)),
+    ("plus-tall-compat", "iPhone7,1", [1], True, (320, 568), (640, 1136)),
+    ("plus-legacy-compat", "iPhone7,1", [1], False, (320, 480), (640, 960)),
     ("retina-ipad-universal", "iPad3,1", [1, 2], False, (768, 1024), (1536, 2048)),
     ("ipad-unsupported-phone-fallback", "iPad3,1", [1], False, (320, 480), (320, 480)),
 ]
@@ -45,6 +49,7 @@ GUEST = r'''
 - (CGSize)size;
 @end
 @interface UIScreen (SmokeGeometry)
+- (CGFloat)scale;
 - (CGRect)bounds;
 - (UIScreenMode *)currentMode;
 @end
@@ -61,6 +66,7 @@ int main(int argc, char **argv) {
     UIScreenMode *mode = [screen currentMode];
     CGRect bounds = [screen bounds];
     CGSize pixels = [mode size];
+    float scale = [screen scale];
     UIWindow *window = [[UIWindow alloc] initWithFrame:bounds];
     CGRect frame = [window frame], local = [window bounds];
     printf("GUEST geometry screen=(%f,%f %fx%f) pixels=%fx%f window=(%f,%f %fx%f) local=(%f,%f %fx%f)\n",
@@ -70,6 +76,7 @@ int main(int argc, char **argv) {
            local.size.width, local.size.height);
     if (!screen || !mode || !window || !rectangle(bounds, width, height) ||
         pixels.width != pixelWidth || pixels.height != pixelHeight ||
+        scale != (float)pixelWidth / width ||
         !rectangle(frame, width, height) || !rectangle(local, width, height)) {
         printf("GUEST FAIL: expected points=%dx%d pixels=%dx%d\n",
                width, height, pixelWidth, pixelHeight);
@@ -126,7 +133,7 @@ def main():
     output.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="device-profile-smoke-") as temporary:
         directory = Path(temporary)
-        # Keep all five cases on the same executable despite concurrent builds.
+        # Keep all cases on the same executable despite concurrent builds.
         snapshot = directory / "touchHLE"
         shutil.copy2(binary, snapshot)
         digest = hashlib.sha256(snapshot.read_bytes()).hexdigest()
@@ -147,7 +154,8 @@ def main():
                 "CFBundlePackageType": "APPL", "UIDeviceFamily": families,
             }
             if tall:
-                metadata["UILaunchImages"] = [{"UILaunchImageSize": "{320,568}"}]
+                declared = tall if isinstance(tall, tuple) else (320, 568)
+                metadata["UILaunchImages"] = [{"UILaunchImageSize": "{%d,%d}" % declared}]
             (app / "Info.plist").write_bytes(plistlib.dumps(metadata))
             log = output / (name + ".log")
             with log.open("w") as stream:

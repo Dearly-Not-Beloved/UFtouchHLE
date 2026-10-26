@@ -381,6 +381,8 @@ pub fn run_run_loop(
             release(env, timer);
         }
 
+        crate::frameworks::openal::capture_audio_marker(env);
+
         // TODO: We currently don't properly handle if an audio queue or audio
         // unit gets deleted while inside another queue's handler. Fixing this
         // would be best done by implementing a more general run loop source

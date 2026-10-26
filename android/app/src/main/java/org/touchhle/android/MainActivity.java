@@ -18,6 +18,11 @@ import android.view.KeyEvent;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.Toast;
+import android.widget.TextView;
+import android.widget.RelativeLayout;
+import android.graphics.Color;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 
 import org.libsdl.app.SDLActivity;
 
@@ -63,6 +68,43 @@ public class MainActivity extends SDLActivity {
             return;
         }
         hideSystemBars();
+        installNoiseMarker();
+    }
+
+    private native void nativeMarkAudioNoise();
+
+    private void installNoiseMarker() {
+        boolean enabled = false;
+        for (String arg : getArguments()) {
+            enabled |= arg.startsWith("--audio-test=");
+        }
+        if (!enabled || mLayout == null) {
+            return;
+        }
+        final float density = getResources().getDisplayMetrics().density;
+        TextView marker = new TextView(this);
+        marker.setText("记录噪音");
+        marker.setTextColor(Color.WHITE);
+        marker.setTextSize(12);
+        marker.setTypeface(Typeface.DEFAULT_BOLD);
+        marker.setPadding((int) (12 * density), (int) (7 * density),
+            (int) (12 * density), (int) (7 * density));
+        marker.setFocusable(false);
+        marker.setSoundEffectsEnabled(false);
+        marker.setHapticFeedbackEnabled(false);
+        GradientDrawable background = new GradientDrawable();
+        background.setColor(0xAA20252B);
+        background.setCornerRadius(16 * density);
+        marker.setBackground(background);
+        marker.setOnClickListener(v -> {
+            nativeMarkAudioNoise();
+            Toast.makeText(this, "已标记，请继续游戏几秒后再退出分享报告。", Toast.LENGTH_LONG).show();
+        });
+        RelativeLayout.LayoutParams params = new RelativeLayout.LayoutParams(-2, -2);
+        params.addRule(RelativeLayout.ALIGN_PARENT_TOP);
+        params.addRule(RelativeLayout.CENTER_HORIZONTAL);
+        params.topMargin = (int) (8 * density);
+        mLayout.addView(marker, params);
     }
 
     @Override

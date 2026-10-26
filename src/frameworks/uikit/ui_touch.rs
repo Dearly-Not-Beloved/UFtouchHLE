@@ -315,6 +315,20 @@ fn handle_touches_down(env: &mut Environment, map: HashMap<FingerId, Coords>) {
     release(env, pool);
 }
 
+/// Keep an already captured P2G touch inside its original input canvas.
+/// Letterbox bars and the expanded scene both allow a finger to move past
+/// the original screen edge. New touches retain their normal hit testing.
+fn active_touch_coords(options: &crate::options::Options, app_id: &str, (x, y): Coords) -> Coords {
+    if app_id != "jp.co.capcom.mhp2gjp" {
+        return (x, y);
+    }
+    let (width, height) = options.device_screen_size.unwrap_or((320, 480));
+    (
+        x.clamp(0.0, width.saturating_sub(1) as f32),
+        y.clamp(0.0, height.saturating_sub(1) as f32),
+    )
+}
+
 fn handle_touches_move(env: &mut Environment, map: HashMap<FingerId, Coords>) {
     let pool: id = msg_class![env; NSAutoreleasePool new];
 
@@ -343,6 +357,7 @@ fn handle_touches_move(env: &mut Environment, map: HashMap<FingerId, Coords>) {
             continue;
         };
 
+        let coords = active_touch_coords(&env.options, env.bundle.bundle_identifier(), coords);
         let location = CGPoint {
             x: coords.0,
             y: coords.1,
@@ -445,6 +460,7 @@ fn handle_touches_up(env: &mut Environment, map: HashMap<FingerId, Coords>) {
 
         log_dbg!("Finger {:?} touch up: {:?}", finger_id, coords);
 
+        let coords = active_touch_coords(&env.options, env.bundle.bundle_identifier(), coords);
         let location = CGPoint {
             x: coords.0,
             y: coords.1,
@@ -490,4 +506,63 @@ fn handle_touches_up(env: &mut Environment, map: HashMap<FingerId, Coords>) {
     }
 
     release(env, pool);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::active_touch_coords;
+    use crate::options::Options;
+
+    #[test]
+    fn p2g_drag_stays_captured_in_letterbox_and_expanded_margins() {
+        for wide in [false, true] {
+            let options = Options {
+                p2g_wide_screen: wide,
+                device_screen_size: Some((320, 568)),
+                ..Default::default()
+            };
+            for (input, expected) in [
+                ((150.0, -80.0), (150.0, 0.0)),
+                ((150.0, 700.0), (150.0, 567.0)),
+                ((-50.0, 200.0), (0.0, 200.0)),
+                ((400.0, 200.0), (319.0, 200.0)),
+                ((-80.0, -80.0), (0.0, 0.0)),
+                ((150.0, 100.0), (150.0, 100.0)),
+            ] {
+                assert_eq!(
+                    active_touch_coords(&options, "jp.co.capcom.mhp2gjp", input),
+                    expected
+                );
+            }
+        }
+    }
+    #[test]
+    fn other_apps_keep_normal_outside_touch_coordinates() {
+        let options = Options::default();
+        assert_eq!(
+            active_touch_coords(&options, "com.example.game", (150.0, -80.0)),
+            (150.0, -80.0)
+        );
+        assert_eq!(
+            active_touch_coords(&options, "com.example.game", (400.0, 700.0)),
+            (400.0, 700.0)
+        );
+    }
+    #[test]
+    fn p2g_drag_uses_selected_screen_bounds() {
+        for size in [(320, 480), (320, 568), (768, 1024)] {
+            let options = Options {
+                device_screen_size: Some(size),
+                ..Default::default()
+            };
+            assert_eq!(
+                active_touch_coords(&options, "jp.co.capcom.mhp2gjp", (-50.0, 200.0)),
+                (0.0, 200.0)
+            );
+            assert_eq!(
+                active_touch_coords(&options, "jp.co.capcom.mhp2gjp", (2000.0, 2000.0)),
+                ((size.0 - 1) as f32, (size.1 - 1) as f32)
+            );
+        }
+    }
 }

@@ -376,9 +376,17 @@ impl Environment {
         };
         log!("{:?} device family is chosen.", device_family);
         options.device_family = Some(device_family);
+        if options.p2g_wide_screen {
+            if bundle.bundle_identifier() != "jp.co.capcom.mhp2gjp" {
+                return Err("Expanded P2G view is only supported for jp.co.capcom.mhp2gjp.".into());
+            }
+            options.device_profile = "iPhone5,1";
+            options.p2g_wide_width = Some(694);
+        }
         let device_support = crate::device_profiles::DeviceSupport {
             families: device_family_array,
             widescreen: bundle.supports_widescreen(&fs),
+            large_phone_sizes: bundle.large_phone_sizes(&fs),
             family_override: device_family_override,
         };
 
@@ -469,6 +477,10 @@ impl Environment {
         )
         .map_err(|e| format!("Could not load executable: {e}"))?;
 
+        if options.p2g_wide_screen {
+            crate::frameworks::opengles::validate_p2g_wide(&mem)?;
+        }
+
         // Apps built with newer SDKs link to LLVM's libc++, which touchHLE
         // doesn't bundle. The C++ ABI and unwinding functions they use from it
         // (e.g. `__cxa_guard_acquire`, `_Unwind_SjLj_Register`) are also
@@ -489,6 +501,21 @@ impl Environment {
             } else {
                 dylib_paths.push(dylib.clone());
             }
+        }
+
+        // The bundled GNU C++ runtime itself depends on libgcc. Some apps
+        // (including Vice City 1.4) link only libstdc++ directly, but call
+        // libgcc's exception registration functions during startup.
+        if dylib_paths.iter().any(|path| {
+            matches!(
+                path.as_str(),
+                "/usr/lib/libstdc++.6.dylib" | "/usr/lib/libstdc++.6.0.9.dylib"
+            )
+        }) && !dylib_paths
+            .iter()
+            .any(|path| path == "/usr/lib/libgcc_s.1.dylib")
+        {
+            dylib_paths.push("/usr/lib/libgcc_s.1.dylib".to_string());
         }
 
         let mut dylibs = Vec::new();
@@ -1704,9 +1731,13 @@ impl Environment {
                 .remaining_ticks
                 .is_none_or(|remaining_ticks| remaining_ticks > 0)
             {
+                let started = self.options.performance_test.map(|_| Instant::now());
                 let state = self
                     .cpu
                     .run_or_step(&mut self.mem, self.remaining_ticks.as_mut());
+                if let Some(started) = started {
+                    self.framework_state.performance.cpu += started.elapsed();
+                }
 
                 match self.handle_cpu_state(state) {
                     ThreadNextAction::Continue => {

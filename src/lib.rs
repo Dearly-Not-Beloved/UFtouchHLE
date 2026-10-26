@@ -52,6 +52,7 @@ mod mem;
 mod objc;
 mod options;
 mod paths;
+mod performance;
 mod stack;
 mod window;
 

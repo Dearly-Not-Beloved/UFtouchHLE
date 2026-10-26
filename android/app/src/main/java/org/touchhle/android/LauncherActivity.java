@@ -120,15 +120,17 @@ public class LauncherActivity extends Activity {
     private static final String PREFS = "launcher";
     private static final String PREF_CHECK_UPDATES = "checkUpdates";
     private static final String PREF_IGNORED_VERSION = "ignoredUpdateVersion";
+    private static final String PREF_P2G_WIDE = "p2gExpandedView";
     private static final String PREF_DEVICE_PROFILE = "deviceProfile";
     private static final String PREF_APP_DEVICE_PROFILE = "appDeviceProfile:";
     private static final String[] DEVICE_PROFILES = {
         "auto", "iPhone2,1", "iPhone3,1", "iPhone4,1", "iPhone5,1", "iPhone6,1",
-        "iPad2,1", "iPad3,1",
+        "iPhone7,2", "iPhone7,1", "iPad2,1", "iPad3,1",
     };
     private static final String[] DEVICE_PROFILE_LABELS = {
         "自动", "iPhone 3GS（480×320）", "iPhone 4（960×640）", "iPhone 4S（960×640）",
-        "iPhone 5（1136×640）", "iPhone 5s（1136×640）", "iPad 2（1024×768）",
+        "iPhone 5（1136×640）", "iPhone 5s（1136×640）", "iPhone 6（1334×750）",
+        "iPhone 6 Plus（2208×1242）", "iPad 2（1024×768）",
         "iPad Retina（2048×1536）",
     };
     private static final String DEVICE_PROFILE_HINT =
@@ -663,22 +665,53 @@ public class LauncherActivity extends Activity {
     // ---- Actions ----
 
     private void launch(App app) {
+        launch(app, null);
+    }
+
+    private void launch(App app, String performanceMode) {
+        launch(app, performanceMode, null);
+    }
+
+    private void launch(App app, String performanceMode, String audioMode) {
         List<String> args = new ArrayList<>();
         args.add(app.path);
         args.addAll(quickOptions.toArgs());
+        if ("jp.co.capcom.mhp2gjp".equals(app.bundleId)
+                && getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(PREF_P2G_WIDE, false)) {
+            args.add("--p2g-wide-screen");
+        }
         String profile = appDeviceProfile(app);
         args.add("--device-profile=" + (profile != null ? profile : globalDeviceProfile()));
+        if (performanceMode != null) {
+            args.add("--device-profile=iPhone4,1");
+            args.add("--performance-test=" + performanceMode);
+        }
+        if (audioMode != null) {
+            args.add("--audio-test=" + audioMode);
+        }
         Intent intent = new Intent(this, MainActivity.class);
         intent.putExtra(MainActivity.EXTRA_ARGS, args.toArray(new String[0]));
         startActivity(intent);
     }
 
     private void showAppMenu(final App app) {
-        String[] items = {"导入存档", "导出存档", "删除游戏", "模拟机型：" + appDeviceProfileLabel(app)};
+        String[] items = "com.rockstargames.gta3vc".equals(app.bundleId)
+            ? new String[]{"导入存档", "导出存档", "删除游戏", "模拟机型：" + appDeviceProfileLabel(app), "性能对比测试", "声音对比测试"}
+            : "jp.co.capcom.mhp2gjp".equals(app.bundleId)
+                ? new String[]{"导入存档", "导出存档", "删除游戏", "模拟机型：" + appDeviceProfileLabel(app), "画面与按键布局"}
+                : new String[]{"导入存档", "导出存档", "删除游戏", "模拟机型：" + appDeviceProfileLabel(app)};
         new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
             .setTitle(app.name)
             .setItems(items, (dialog, which) -> {
-                if (which == 3) {
+                if (which == 5) {
+                    showAudioTests(app);
+                } else if (which == 4) {
+                    if ("jp.co.capcom.mhp2gjp".equals(app.bundleId)) {
+                        showP2GViewOptions();
+                    } else {
+                        showPerformanceTests(app);
+                    }
+                } else if (which == 3) {
                     showDeviceProfiles(app, null);
                 } else if (which == 2) {
                     confirmDelete(app);
@@ -691,6 +724,102 @@ public class LauncherActivity extends Activity {
                 }
             })
             .show();
+    }
+
+    private void showP2GViewOptions() {
+        SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+            .setTitle("P2G 画面与按键布局")
+            .setSingleChoiceItems(new String[]{"标准画面", "扩展视野 · 按键保留中央 16:9 布局"},
+                prefs.getBoolean(PREF_P2G_WIDE, false) ? 1 : 0,
+                (dialog, which) -> {
+                    prefs.edit().putBoolean(PREF_P2G_WIDE, which == 1).apply();
+                    dialog.dismiss();
+                })
+            .setNegativeButton("取消", null)
+            .show();
+    }
+
+    private static final String PERFORMANCE_REPORT = "touchHLE_performance_tests.txt";
+
+    private void showPerformanceTests(final App app) {
+        final String[] modes = {"reference", "low-resolution", "quiet-log", "low-resolution-quiet-log"};
+        String[] choices = {"A · 高清（960×640）", "B · 低分辨率（480×320）",
+            "C · 高清＋减少日志", "D · 低分辨率＋减少日志", "查看／分享全部测试报告", "清空测试报告"};
+        LinearLayout title = new LinearLayout(this);
+        title.setOrientation(LinearLayout.VERTICAL);
+        title.setPadding(dp(24), dp(20), dp(24), dp(10));
+        title.addView(makeText("罪恶都市性能对比", 20, TEXT, true));
+        title.addView(makeText("每组选项都会启动游戏。请在同一存档、同一地点游玩至少 30 秒，再退出游戏切换下一组。"
+            + "\n结果每 5 秒累计保存，重启游戏不会覆盖。测试统一使用 iPhone 4S、1×渲染和平滑度相同的滤镜。"
+            + "\n普通方式启动游戏不启用测试。", 13, TEXT_DIM, false));
+        new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+            .setCustomTitle(title)
+            .setItems(choices, (dialog, which) -> {
+                if (which < modes.length) {
+                    launch(app, modes[which]);
+                } else if (which == modes.length) {
+                    showPerformanceReport();
+                } else {
+                    new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+                        .setTitle("清空性能测试报告？")
+                        .setMessage("只清除测试结果，游戏和存档保留。")
+                        .setPositiveButton("清空", (d, w) -> {
+                            File report = new File(getBaseDir(), PERFORMANCE_REPORT);
+                            boolean cleared = !report.exists() || report.delete();
+                            Toast.makeText(this, cleared ? "测试报告已清空。" : "清空失败。", Toast.LENGTH_SHORT).show();
+                        })
+                        .setNegativeButton("取消", null).show();
+                }
+            })
+            .setNegativeButton("关闭", null).show();
+    }
+
+    private void showAudioTests(final App app) {
+        final String[] modes = {"original", "smooth-edges", "lower-volume"};
+        String[] choices = {"原始声音（作对照）", "短音效起止平滑", "短音效音量减半", "查看／分享测试报告"};
+        LinearLayout title = new LinearLayout(this);
+        title.setOrientation(LinearLayout.VERTICAL);
+        title.setPadding(dp(24), dp(20), dp(24), dp(10));
+        title.addView(makeText("罪恶都市声音对比", 20, TEXT, true));
+        title.addView(makeText("每次选择都会启动游戏。请在同一位置捡取同一种物品，比较那一下爆音。"
+            + "\n起止平滑是实验性处理，可能减弱短音效的起音；音乐流保持原样。"
+            + "\n听到噪音后，马上点屏幕上方的「记录噪音」，继续玩几秒再退出并分享报告。"
+            + "\n标记会保存附近音源状态和最近少量声音数据，不录麦克风，不开启性能计时。普通启动恢复原声音。",
+            13, TEXT_DIM, false));
+        new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+            .setCustomTitle(title)
+            .setItems(choices, (dialog, which) -> {
+                if (which < modes.length) {
+                    launch(app, null, modes[which]);
+                } else {
+                    showPerformanceReport();
+                }
+            })
+            .setNegativeButton("关闭", null).show();
+    }
+
+    private void showPerformanceReport() {
+        byte[] bytes = readFile(new File(getBaseDir(), PERFORMANCE_REPORT), 64 * 1024);
+        if (bytes == null || bytes.length == 0) {
+            Toast.makeText(this, "还没有测试结果。请先选择一组设置进入游戏测试。", Toast.LENGTH_LONG).show();
+            return;
+        }
+        final String report = "Device: " + android.os.Build.MANUFACTURER + " " + android.os.Build.MODEL
+            + "\nAndroid: " + android.os.Build.VERSION.RELEASE
+            + "\nCPU/GL/present values are host wall time, not GPU execution time. "
+            + "Readback is part of present time. Instrumentation adds overhead.\n\n"
+            + new String(bytes, StandardCharsets.UTF_8);
+        showTextDialog("测试报告（最近 64 KB）", report, "分享", () -> {
+            Intent intent = new Intent(Intent.ACTION_SEND);
+            intent.setType("text/plain");
+            intent.putExtra(Intent.EXTRA_TEXT, report);
+            try {
+                startActivity(Intent.createChooser(intent, "分享测试报告"));
+            } catch (ActivityNotFoundException e) {
+                Toast.makeText(this, "没有可以分享的应用。", Toast.LENGTH_LONG).show();
+            }
+        });
     }
 
     private void confirmDelete(final App app) {
