@@ -284,6 +284,7 @@ pub enum FingerId {
     VirtualCursor,
     ButtonToTouch(crate::options::Button),
     StickToTouch,
+    RightStickToTouch,
     DpadToTouch,
 }
 pub type Coords = (f32, f32);
@@ -378,6 +379,107 @@ fn surface_from_image(image: &Image) -> Surface<'_> {
     surface
 }
 
+/// Drop stale paused input, but retain controller releases for guest-held
+/// touches.
+fn discard_paused_input(queue: &mut VecDeque<Event>, count: usize) {
+    let mut releases = HashMap::new();
+    for event in queue.drain(..count) {
+        if let Event::TouchesUp(points) = event {
+            releases.extend(points.into_iter().filter(|(id, _)| {
+                matches!(
+                    id,
+                    FingerId::VirtualCursor
+                        | FingerId::ButtonToTouch(_)
+                        | FingerId::StickToTouch
+                        | FingerId::RightStickToTouch
+                        | FingerId::DpadToTouch
+                )
+            }));
+        }
+    }
+    if !releases.is_empty() {
+        queue.push_front(Event::TouchesUp(releases));
+    }
+}
+
+/// Current host controller state. Axes use SDL order and SDL Y direction
+/// (down positive).
+#[derive(Clone, Debug)]
+pub struct ControllerSnapshot {
+    pub instance_id: u32,
+    pub name: String,
+    /// LeftX, LeftY, RightX, RightY range from -1 to 1; triggers from 0 to 1.
+    pub axes: [f32; 6],
+    pub buttons: Vec<sdl2::controller::Button>,
+}
+
+impl ControllerSnapshot {
+    fn with_focus(mut self, focused: bool) -> Self {
+        if !focused {
+            self.axes = [0.0; 6];
+            self.buttons.clear();
+        }
+        self
+    }
+}
+
+fn normalize_controller_axis(value: i16, deadzone: f32) -> f32 {
+    let deadzone = if deadzone.is_finite() {
+        deadzone.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    if deadzone == 1.0 {
+        return 0.0;
+    }
+    let value = (value as f32 / i16::MAX as f32).clamp(-1.0, 1.0);
+    ((value.abs() - deadzone).max(0.0) / (1.0 - deadzone)).copysign(value)
+}
+
+/// Hysteresis prevents noisy triggers from chattering at the press threshold.
+fn trigger_pressed(value: i16, held: bool) -> bool {
+    value as f32 / i16::MAX as f32 >= if held { 0.4 } else { 0.5 }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum ControllerTouchPhase {
+    Down,
+    Move,
+    Up,
+}
+
+/// Integrate a swipe in logical screen pixels, ending before reseeding so a
+/// boundary never causes a backwards drag. State is independent of SDL.
+fn step_controller_swipe(
+    position: Option<Coords>,
+    stick: Coords,
+    region: (f32, f32, f32, f32),
+    elapsed: Duration,
+) -> (Option<Coords>, Vec<(ControllerTouchPhase, Coords)>) {
+    use ControllerTouchPhase::{Down, Move, Up};
+    if stick == (0.0, 0.0) {
+        return (None, position.map(|p| vec![(Up, p)]).unwrap_or_default());
+    }
+    let (x, y, w, h) = region;
+    let center = (x + w * 0.5, y + h * 0.5);
+    let mut events = Vec::new();
+    let start = position.unwrap_or_else(|| {
+        events.push((Down, center));
+        center
+    });
+    let distance = 160.0 * elapsed.min(Duration::from_millis(50)).as_secs_f32();
+    let target = (start.0 + stick.0 * distance, start.1 + stick.1 * distance);
+    let next = (target.0.clamp(x, x + w), target.1.clamp(y, y + h));
+    events.push((Move, next));
+    if target.0 <= x || target.0 >= x + w || target.1 <= y || target.1 >= y + h {
+        events.push((Up, next));
+        events.push((Down, center));
+        (Some(center), events)
+    } else {
+        (Some(next), events)
+    }
+}
+
 pub struct Window {
     _sdl_ctx: sdl2::Sdl,
     video_ctx: sdl2::VideoSubsystem,
@@ -408,11 +510,18 @@ pub struct Window {
     device_family: DeviceFamily,
     portrait_size: (u32, u32),
     p2g_wide_width: Option<u32>,
+    touch_map_size: Option<(u32, u32)>,
     device_orientation: DeviceOrientation,
     controller_ctx: sdl2::GameControllerSubsystem,
     controllers: Vec<sdl2::controller::GameController>,
     dpad_state: DpadState,
     stick_active: bool,
+    right_stick_active: bool,
+    right_swipe_position: Option<Coords>,
+    native_controller_input: bool,
+    controller_input_focused: bool,
+    controller_touches: HashMap<FingerId, Coords>,
+    held_buttons: std::collections::HashSet<(u32, crate::options::Button)>,
     _sensor_ctx: sdl2::SensorSubsystem,
     accelerometer: Option<sdl2::sensor::Sensor>,
     virtual_cursor_last: Option<(f32, f32, bool, bool)>,
@@ -429,6 +538,107 @@ pub struct Window {
 }
 
 impl Window {
+    /// Disable synthetic controller input while preserving SDL polling and
+    /// lifecycle events.
+    pub fn set_native_controller_input(&mut self, enabled: bool) {
+        if self.native_controller_input != enabled {
+            self.release_controller_touches();
+            self.native_controller_input = enabled;
+        }
+    }
+
+    fn release_controller_touches(&mut self) {
+        if !self.controller_touches.is_empty() {
+            self.event_queue.push_back(Event::TouchesUp(std::mem::take(
+                &mut self.controller_touches,
+            )));
+        }
+        self.held_buttons.clear();
+        self.stick_active = false;
+        self.right_stick_active = false;
+        self.right_swipe_position = None;
+        self.dpad_state = DpadState {
+            left: false,
+            right: false,
+            up: false,
+            down: false,
+            active: false,
+        };
+        self.virtual_cursor_last = None;
+        self.virtual_cursor_last_unsticky = None;
+    }
+
+    fn track_controller_touch(&mut self) {
+        match self.event_queue.back() {
+            Some(Event::TouchesDown(points) | Event::TouchesMove(points)) => self
+                .controller_touches
+                .extend(points.iter().map(|(&id, &coords)| (id, coords))),
+            Some(Event::TouchesUp(points)) => {
+                for id in points.keys() {
+                    self.controller_touches.remove(id);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Report connected host controllers, with neutral input while unfocused.
+    /// Stick axes use the supplied deadzone; triggers retain their full range.
+    pub fn controller_snapshots(&self, deadzone: f32) -> Vec<ControllerSnapshot> {
+        use sdl2::controller::{Axis, Button};
+        self.controllers
+            .iter()
+            .filter(|c| c.attached())
+            .map(|c| ControllerSnapshot {
+                instance_id: c.instance_id(),
+                name: c.name(),
+                axes: [
+                    Axis::LeftX,
+                    Axis::LeftY,
+                    Axis::RightX,
+                    Axis::RightY,
+                    Axis::TriggerLeft,
+                    Axis::TriggerRight,
+                ]
+                .map(|axis| {
+                    let value = c.axis(axis);
+                    if matches!(axis, Axis::TriggerLeft | Axis::TriggerRight) {
+                        normalize_controller_axis(value.max(0), 0.0)
+                    } else {
+                        normalize_controller_axis(value, deadzone)
+                    }
+                }),
+                buttons: [
+                    Button::A,
+                    Button::B,
+                    Button::X,
+                    Button::Y,
+                    Button::Back,
+                    Button::Guide,
+                    Button::Start,
+                    Button::LeftStick,
+                    Button::RightStick,
+                    Button::LeftShoulder,
+                    Button::RightShoulder,
+                    Button::DPadUp,
+                    Button::DPadDown,
+                    Button::DPadLeft,
+                    Button::DPadRight,
+                    Button::Misc1,
+                    Button::Paddle1,
+                    Button::Paddle2,
+                    Button::Paddle3,
+                    Button::Paddle4,
+                    Button::Touchpad,
+                ]
+                .into_iter()
+                .filter(|&b| c.button(b))
+                .collect(),
+            })
+            .map(|snapshot| snapshot.with_focus(self.controller_input_focused))
+            .collect()
+    }
+
     /// Returns [true] if touchHLE is running on a device where we should always
     /// display fullscreen, but SDL2 will let us control the orientation, i.e.
     /// Android devices.
@@ -618,6 +828,7 @@ impl Window {
             device_family,
             portrait_size,
             p2g_wide_width,
+            touch_map_size: options.touch_map_size,
             device_orientation,
             controller_ctx,
             controllers: Vec::new(),
@@ -629,6 +840,12 @@ impl Window {
                 active: false,
             },
             stick_active: false,
+            right_stick_active: false,
+            right_swipe_position: None,
+            native_controller_input: false,
+            controller_input_focused: true,
+            controller_touches: HashMap::new(),
+            held_buttons: std::collections::HashSet::new(),
             _sensor_ctx: sensor_ctx,
             accelerometer,
             virtual_cursor_last: None,
@@ -636,6 +853,17 @@ impl Window {
             virtual_accelerometer_last: None,
             on_main_stack: true,
         };
+
+        // Include controllers connected before launch, before the first event
+        // poll.
+        // SDL provides automatic mappings for generic Android controllers.
+        if let Ok(count) = window.controller_ctx.num_joysticks() {
+            for index in 0..count {
+                if window.controller_ctx.is_game_controller(index) {
+                    window.controller_added(index);
+                }
+            }
+        }
 
         // Set up OpenGL ES context used for splash screen and app UI rendering
         // (see src/frameworks/core_animation/composition.rs). OpenGL ES is used
@@ -669,6 +897,7 @@ impl Window {
         if now.duration_since(self.last_polled) < Duration::from_secs_f64(1.0 / 120.0) {
             return;
         }
+        let controller_elapsed = now.saturating_duration_since(self.last_polled);
         self.last_polled = now;
 
         fn transform_input_coords(
@@ -677,11 +906,13 @@ impl Window {
             independent_of_viewport: bool,
         ) -> (f32, f32) {
             let (vx, vy, vw, vh) = if independent_of_viewport {
-                let (width, height) = size_for_orientation(
-                    window.device_family.portrait_size(),
-                    window.device_orientation,
-                    NonZeroU32::new(1).unwrap(),
-                );
+                let (width, height) = window.touch_map_size.unwrap_or_else(|| {
+                    size_for_orientation(
+                        window.device_family.portrait_size(),
+                        window.device_orientation,
+                        NonZeroU32::new(1).unwrap(),
+                    )
+                });
                 (0, 0, width, height)
             } else {
                 window.input_viewport()
@@ -713,6 +944,12 @@ impl Window {
                 sdl2::controller::Button::LeftShoulder => {
                     Some(crate::options::Button::LeftShoulder)
                 }
+                sdl2::controller::Button::RightShoulder => {
+                    Some(crate::options::Button::RightShoulder)
+                }
+                sdl2::controller::Button::Back => Some(crate::options::Button::Back),
+                sdl2::controller::Button::LeftStick => Some(crate::options::Button::LeftStick),
+                sdl2::controller::Button::RightStick => Some(crate::options::Button::RightStick),
                 _ => None,
             }
         }
@@ -773,7 +1010,13 @@ impl Window {
                 _ => {}
             }
 
-            self.event_queue.push_back(match event {
+            let controller_event = matches!(
+                event,
+                E::ControllerButtonUp { .. }
+                    | E::ControllerButtonDown { .. }
+                    | E::ControllerAxisMotion { .. }
+            );
+            let translated_event = match event {
                 E::Quit { .. } => Event::Quit,
                 E::MouseButtonDown {
                     x,
@@ -812,11 +1055,26 @@ impl Window {
                 }
                 // Note that accelerometer simulation with analog sticks is
                 // handled with polling, rather than being event-based.
-                E::ControllerButtonUp { button, .. } | E::ControllerButtonDown { button, .. } => {
+                E::ControllerButtonUp { button, which, .. }
+                | E::ControllerButtonDown { button, which, .. } => {
                     controller_updated = true;
                     let Some(button) = translate_button(button) else {
                         continue;
                     };
+                    if self.native_controller_input || !self.controller_input_focused {
+                        continue;
+                    }
+                    let pressed = matches!(event, E::ControllerButtonDown { .. });
+                    let was_pressed = self.held_buttons.iter().any(|&(_, b)| b == button);
+                    if pressed {
+                        self.held_buttons.insert((which, button));
+                    } else {
+                        self.held_buttons.remove(&(which, button));
+                    }
+                    let pressed = self.held_buttons.iter().any(|&(_, b)| b == button);
+                    if pressed == was_pressed {
+                        continue;
+                    }
                     // Called whenever a DPad direction is pressed or released
                     if (button == crate::options::Button::DPadLeft
                         || button == crate::options::Button::DPadUp
@@ -829,7 +1087,6 @@ impl Window {
                         };
 
                         // Update held state
-                        let pressed = matches!(event, E::ControllerButtonDown { .. });
                         match button {
                             crate::options::Button::DPadLeft => self.dpad_state.left = pressed,
                             crate::options::Button::DPadRight => self.dpad_state.right = pressed,
@@ -886,64 +1143,150 @@ impl Window {
                         let Some(&(x, y)) = options.button_to_touch.get(&button) else {
                             continue;
                         };
-                        match event {
-                            E::ControllerButtonUp { .. } => {
-                                let coords = transform_input_coords(self, (x, y), true);
-                                Event::TouchesUp(HashMap::from([(
-                                    FingerId::ButtonToTouch(button),
-                                    coords,
-                                )]))
-                            }
-                            E::ControllerButtonDown { .. } => {
-                                let coords = transform_input_coords(self, (x, y), true);
-                                Event::TouchesDown(HashMap::from([(
-                                    FingerId::ButtonToTouch(button),
-                                    coords,
-                                )]))
-                            }
-                            _ => unreachable!(),
+                        let coords = transform_input_coords(self, (x, y), true);
+                        let points = HashMap::from([(FingerId::ButtonToTouch(button), coords)]);
+                        if pressed {
+                            Event::TouchesDown(points)
+                        } else {
+                            Event::TouchesUp(points)
                         }
                     }
                 }
-                E::ControllerAxisMotion { axis, .. } => {
+                E::ControllerAxisMotion {
+                    axis, value, which, ..
+                } => {
                     controller_updated = true;
-                    let Some((x, y, w, h)) = options.stick_to_touch else {
+                    if self.native_controller_input || !self.controller_input_focused {
                         continue;
-                    };
-                    if axis == sdl2::controller::Axis::LeftX
-                        || axis == sdl2::controller::Axis::LeftY
-                    {
-                        let (stick_x, stick_y, _) = self.get_controller_stick(options, true);
-                        let coords = transform_input_coords(
-                            self,
-                            (
-                                x + ((stick_x + 1.0) / 2.0) * w,
-                                y + ((stick_y + 1.0) / 2.0) * h,
-                            ),
-                            true,
-                        );
-                        if stick_x.abs() < options.deadzone && stick_y.abs() < options.deadzone {
-                            if !self.stick_active {
-                                // Ignore deadzone events when stick is inactive
-                                continue;
-                            } else {
-                                // Release touch when stick returns to deadzone
-                                self.stick_active = false;
-                                Event::TouchesUp(HashMap::from([(FingerId::StickToTouch, coords)]))
-                            }
-                        } else if !self.stick_active {
-                            // New touch
-                            self.stick_active = true;
-                            Event::TouchesDown(HashMap::from([(FingerId::StickToTouch, coords)]))
+                    }
+                    if matches!(
+                        axis,
+                        sdl2::controller::Axis::TriggerLeft | sdl2::controller::Axis::TriggerRight
+                    ) {
+                        let button = if axis == sdl2::controller::Axis::TriggerLeft {
+                            crate::options::Button::LeftTrigger
                         } else {
-                            // Move existing touch
-                            Event::TouchesMove(HashMap::from([(FingerId::StickToTouch, coords)]))
+                            crate::options::Button::RightTrigger
+                        };
+                        let held = self.held_buttons.contains(&(which, button));
+                        let pressed = trigger_pressed(value, held);
+                        if held == pressed {
+                            continue;
+                        }
+                        let was_pressed = self.held_buttons.iter().any(|&(_, b)| b == button);
+                        if pressed {
+                            self.held_buttons.insert((which, button));
+                        } else {
+                            self.held_buttons.remove(&(which, button));
+                        }
+                        let pressed = self.held_buttons.iter().any(|&(_, b)| b == button);
+                        if was_pressed == pressed {
+                            continue;
+                        }
+                        let Some(&(x, y)) = options.button_to_touch.get(&button) else {
+                            continue;
+                        };
+                        let coords = transform_input_coords(self, (x, y), true);
+                        let points = HashMap::from([(FingerId::ButtonToTouch(button), coords)]);
+                        if pressed {
+                            Event::TouchesDown(points)
+                        } else {
+                            Event::TouchesUp(points)
                         }
                     } else {
-                        continue;
+                        let left = matches!(
+                            axis,
+                            sdl2::controller::Axis::LeftX | sdl2::controller::Axis::LeftY
+                        );
+                        let region = if left {
+                            options.stick_to_touch
+                        } else {
+                            options.right_stick_to_touch
+                        };
+                        let finger = if left {
+                            FingerId::StickToTouch
+                        } else {
+                            FingerId::RightStickToTouch
+                        };
+                        let mut active = if left {
+                            self.stick_active
+                        } else {
+                            self.right_stick_active
+                        };
+                        let Some((x, y, w, h)) = region else {
+                            continue;
+                        };
+                        if matches!(
+                            axis,
+                            sdl2::controller::Axis::LeftX
+                                | sdl2::controller::Axis::LeftY
+                                | sdl2::controller::Axis::RightX
+                                | sdl2::controller::Axis::RightY
+                        ) {
+                            let (stick_x, stick_y, _) = self.get_controller_stick(options, left);
+                            let coords = transform_input_coords(
+                                self,
+                                (
+                                    x + ((stick_x + 1.0) / 2.0) * w,
+                                    y + ((stick_y + 1.0) / 2.0) * h,
+                                ),
+                                true,
+                            );
+                            if stick_x == 0.0 && stick_y == 0.0 {
+                                if !active {
+                                    // Ignore deadzone events when stick is
+                                    // inactive
+                                    continue;
+                                } else {
+                                    // Release touch when stick returns to
+                                    // deadzone
+                                    active = false;
+                                    if left {
+                                        self.stick_active = active;
+                                    } else {
+                                        self.right_stick_active = active;
+                                    }
+                                    Event::TouchesUp(HashMap::from([(finger, coords)]))
+                                }
+                            } else if !active {
+                                // New touch
+                                active = true;
+                                if left {
+                                    self.stick_active = active;
+                                } else {
+                                    self.right_stick_active = active;
+                                }
+                                if left && options.stick_touch_start_at_center {
+                                    let center = transform_input_coords(
+                                        self,
+                                        (x + w * 0.5, y + h * 0.5),
+                                        true,
+                                    );
+                                    self.event_queue.push_back(Event::TouchesDown(HashMap::from(
+                                        [(finger, center)],
+                                    )));
+                                    self.track_controller_touch();
+                                    Event::TouchesMove(HashMap::from([(finger, coords)]))
+                                } else {
+                                    Event::TouchesDown(HashMap::from([(finger, coords)]))
+                                }
+                            } else {
+                                // Move existing touch
+                                if left {
+                                    self.stick_active = active;
+                                } else {
+                                    self.right_stick_active = active;
+                                }
+                                Event::TouchesMove(HashMap::from([(finger, coords)]))
+                            }
+                        } else {
+                            continue;
+                        }
                     }
                 }
                 E::AppWillEnterBackground { .. } => {
+                    self.release_controller_touches();
+                    self.controller_input_focused = false;
                     log!("Received app-will-resign-active event.");
                     assert!(self.high_priority_event.is_none());
                     self.high_priority_event = Some(Event::AppWillResignActive);
@@ -962,8 +1305,22 @@ impl Window {
                     window_id,
                     ..
                 } if window_id == self.window.id() => Event::Quit,
-                E::Window { win_event, .. } => {
+                E::Window {
+                    win_event,
+                    window_id,
+                    ..
+                } => {
+                    // Hidden ES2 windows must not change main-window state.
+                    if window_id != self.window.id() {
+                        continue;
+                    }
                     use sdl2::event::WindowEvent as WE;
+                    if matches!(win_event, WE::FocusLost | WE::Minimized | WE::Hidden) {
+                        self.release_controller_touches();
+                        self.controller_input_focused = false;
+                    } else if matches!(win_event, WE::FocusGained) {
+                        self.controller_input_focused = true;
+                    }
                     match win_event {
                         WE::Minimized | WE::Hidden => self.minimized = true,
                         WE::Restored | WE::Shown | WE::Maximized => self.minimized = false,
@@ -992,6 +1349,7 @@ impl Window {
                     continue;
                 }
                 E::AppDidEnterForeground { .. } => {
+                    self.controller_input_focused = true;
                     log!("Received app-did-become-active event.");
                     Event::AppDidBecomeActive
                 }
@@ -1115,10 +1473,50 @@ impl Window {
                     Event::TextInput(TextInputEvent::Text(text))
                 }
                 _ => continue,
-            })
+            };
+            self.event_queue.push_back(translated_event);
+            if controller_event {
+                self.track_controller_touch();
+            }
         }
 
-        if controller_updated {
+        // Polling, rather than axis events, keeps the camera moving while held.
+        if self.controller_input_focused && !self.native_controller_input {
+            if let Some(region) = options.right_stick_swipe {
+                let (x, y, _) = self.get_controller_stick(options, false);
+                let (position, events) = step_controller_swipe(
+                    self.right_swipe_position,
+                    (x, y),
+                    region,
+                    controller_elapsed,
+                );
+                self.right_swipe_position = position;
+                for (phase, coords) in events {
+                    let coords = transform_input_coords(self, coords, true);
+                    let points = HashMap::from([(FingerId::RightStickToTouch, coords)]);
+                    let event = match phase {
+                        ControllerTouchPhase::Down => Event::TouchesDown(points),
+                        ControllerTouchPhase::Move => Event::TouchesMove(points),
+                        ControllerTouchPhase::Up => Event::TouchesUp(points),
+                    };
+                    self.event_queue.push_back(event);
+                    self.track_controller_touch();
+                }
+            }
+        }
+
+        if controller_updated
+            && self.controller_input_focused
+            && !self.native_controller_input
+            && options.right_stick_to_touch.is_none()
+            && options.right_stick_swipe.is_none()
+            && !options
+                .button_to_touch
+                .contains_key(&crate::options::Button::RightStick)
+            && !options
+                .button_to_touch
+                .contains_key(&crate::options::Button::RightShoulder)
+        {
             let (new_x, new_y, pressed, pressed_changed, moved) =
                 self.update_virtual_cursor(options);
             self.event_queue
@@ -1137,6 +1535,7 @@ impl Window {
                     }
                     _ => return,
                 });
+            self.track_controller_touch();
         }
     }
 
@@ -1170,7 +1569,7 @@ impl Window {
                 .position(|e| matches!(e, Event::AppDidBecomeActive))
             {
                 // Input from before the app was paused is stale.
-                self.event_queue.drain(..=i);
+                discard_paused_input(&mut self.event_queue, i + 1);
                 return true;
             }
         }
@@ -1188,6 +1587,14 @@ impl Window {
             return;
         };
 
+        // SDL also queues added events for controllers enumerated at startup.
+        if self
+            .controllers
+            .iter()
+            .any(|c| c.instance_id() == controller.instance_id())
+        {
+            return;
+        }
         let controller_name = controller.name();
         if env::consts::OS == "android" && controller_name.starts_with("uinput-") {
             log!("ignoring fingerprint device: {}", controller_name);
@@ -1200,6 +1607,7 @@ impl Window {
         self.controllers.push(controller);
     }
     fn controller_removed(&mut self, instance_id: u32) {
+        self.release_controller_touches();
         let Some(idx) = self
             .controllers
             .iter()
@@ -1262,7 +1670,11 @@ impl Window {
     /// Get the real or simulated accelerometer output.
     /// See also [crate::frameworks::uikit::ui_accelerometer].
     pub fn get_acceleration(&self, options: &Options) -> (f32, f32, f32) {
-        if self.controllers.is_empty() || !options.analog_stick_tilt_controls {
+        if self.native_controller_input
+            || !self.controller_input_focused
+            || self.controllers.is_empty()
+            || !options.analog_stick_tilt_controls
+        {
             if let Some(ref accelerometer) = self.accelerometer {
                 let data = accelerometer.get_data().unwrap();
                 let sdl2::sensor::SensorData::Accel(data) = data else {
@@ -1292,10 +1704,12 @@ impl Window {
             self.virtual_accelerometer_last
                 .map(|(x, y, _right_click_hold)| (x, y))
                 .unwrap()
-        } else {
+        } else if options.analog_stick_tilt_controls {
             // Get left analog stick input. The range is [-1, 1] on each axis.
             let (x, y, _) = self.get_controller_stick(options, true);
             (x, y)
+        } else {
+            (0.0, 0.0)
         };
 
         // Correct for window rotation
@@ -1333,6 +1747,9 @@ impl Window {
     /// press state of the analog stick-controlled virtual cursor, if it is
     /// visible.
     pub fn virtual_cursor_visible_at(&self) -> Option<(f32, f32, bool)> {
+        if self.native_controller_input || !self.controller_input_focused {
+            return None;
+        }
         let (x, y, pressed, visible) = self.virtual_cursor_last?;
         if visible {
             // When stickyness is in use, the visual cursor movement appears
@@ -1440,13 +1857,10 @@ impl Window {
     /// analog stick of the game controllers. Each axis value is in the range
     /// [-1, 1].
     fn get_controller_stick(&self, options: &Options, left: bool) -> (f32, f32, bool) {
-        fn convert_axis(axis: i16, deadzone: f32) -> f32 {
-            assert!(deadzone >= 0.0);
-            let axis = ((axis as f32) / (i16::MAX as f32)).clamp(-1.0, 1.0);
-            let abs_axis = (axis.abs().max(deadzone) - deadzone) / (1.0 - deadzone);
-            abs_axis.copysign(axis)
+        // Guard the accelerometer fallback when no real sensor is present.
+        if self.native_controller_input || !self.controller_input_focused {
+            return (0.0, 0.0, false);
         }
-
         let (mut x, mut y) = (0.0, 0.0);
         let mut pressed = false;
         for controller in &self.controllers {
@@ -1466,10 +1880,19 @@ impl Window {
                     Button::RightShoulder,
                 )
             };
-            x += convert_axis(controller.axis(x_axis), options.deadzone);
-            y += convert_axis(controller.axis(y_axis), options.deadzone);
-            pressed |= controller.button(button1);
-            pressed |= controller.button(button2);
+            x += normalize_controller_axis(controller.axis(x_axis), options.deadzone);
+            y += normalize_controller_axis(controller.axis(y_axis), options.deadzone);
+            let mapped = |button| match button {
+                Button::RightStick => options
+                    .button_to_touch
+                    .contains_key(&crate::options::Button::RightStick),
+                Button::RightShoulder => options
+                    .button_to_touch
+                    .contains_key(&crate::options::Button::RightShoulder),
+                _ => false,
+            };
+            pressed |= !mapped(button1) && controller.button(button1);
+            pressed |= !mapped(button2) && controller.button(button2);
         }
         let (x, y) = (x.clamp(-1.0, 1.0), y.clamp(-1.0, 1.0));
 
@@ -2005,6 +2428,137 @@ fn p2g_input_viewport((x, y, w, h): (i32, i32, u32, u32)) -> (i32, i32, u32, u32
     } else {
         let safe_h = ((w as u64 * 568 / 320) as u32).min(h);
         (x, y + ((h - safe_h) / 2) as i32, w, safe_h)
+    }
+}
+
+#[cfg(test)]
+mod controller_input_tests {
+    use super::{normalize_controller_axis, trigger_pressed, ControllerSnapshot};
+
+    #[test]
+    fn camera_swipe_seeds_moves_continuously_and_releases() {
+        use super::{
+            step_controller_swipe,
+            ControllerTouchPhase::{Down, Move, Up},
+        };
+        use std::time::Duration;
+        let region = (180.0, 100.0, 130.0, 100.0);
+        let (position, events) =
+            step_controller_swipe(None, (1.0, -0.5), region, Duration::from_millis(25));
+        assert_eq!(events, [(Down, (245.0, 150.0)), (Move, (249.0, 148.0))]);
+        let (position, events) =
+            step_controller_swipe(position, (1.0, -0.5), region, Duration::from_millis(25));
+        assert_eq!(events, [(Move, (253.0, 146.0))]);
+        let (position, events) =
+            step_controller_swipe(position, (0.0, 0.0), region, Duration::from_millis(25));
+        assert_eq!(position, None);
+        assert_eq!(events, [(Up, (253.0, 146.0))]);
+        assert!(
+            step_controller_swipe(None, (0.0, 0.0), region, Duration::ZERO)
+                .1
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn camera_swipe_caps_time_and_reseeds_without_backwards_move() {
+        use super::{
+            step_controller_swipe,
+            ControllerTouchPhase::{Down, Move, Up},
+        };
+        use std::time::Duration;
+        let region = (180.0, 100.0, 130.0, 100.0);
+        let start = Some((245.0, 150.0));
+        let capped = step_controller_swipe(start, (1.0, 1.0), region, Duration::from_millis(50));
+        assert_eq!(capped.0, Some((253.0, 158.0)));
+        assert_eq!(
+            step_controller_swipe(start, (1.0, 1.0), region, Duration::from_secs(5)),
+            capped
+        );
+        assert_eq!(
+            step_controller_swipe(start, (1.0, 1.0), region, Duration::ZERO).0,
+            start
+        );
+        for (position, stick, edge) in [
+            ((309.0, 150.0), (1.0, 0.0), (310.0, 150.0)),
+            ((181.0, 150.0), (-1.0, 0.0), (180.0, 150.0)),
+            ((245.0, 199.0), (0.0, 1.0), (245.0, 200.0)),
+            ((245.0, 101.0), (0.0, -1.0), (245.0, 100.0)),
+        ] {
+            let (next, events) =
+                step_controller_swipe(Some(position), stick, region, Duration::from_millis(50));
+            assert_eq!(next, start);
+            assert_eq!(events, [(Move, edge), (Up, edge), (Down, (245.0, 150.0))]);
+        }
+    }
+
+    #[test]
+    fn resume_keeps_controller_releases_before_new_input() {
+        use super::{discard_paused_input, Event, FingerId};
+        use std::collections::{HashMap, VecDeque};
+        let finger = FingerId::ButtonToTouch(crate::options::Button::RightTrigger);
+        let points = HashMap::from([(finger, (10.0, 20.0))]);
+        let mut queue = VecDeque::from([
+            Event::TouchesMove(points.clone()),
+            Event::TouchesUp(points.clone()),
+            Event::TouchesUp(HashMap::from([(FingerId::Mouse, (1.0, 2.0))])),
+            Event::AppDidBecomeActive,
+            Event::TouchesDown(points),
+        ]);
+        discard_paused_input(&mut queue, 4);
+        let Some(Event::TouchesUp(releases)) = queue.pop_front() else {
+            panic!("controller release lost during resume");
+        };
+        assert_eq!(releases.len(), 1);
+        assert_eq!(releases.get(&finger), Some(&(10.0, 20.0)));
+        assert!(matches!(queue.pop_front(), Some(Event::TouchesDown(_))));
+        assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn focus_loss_neutralizes_input_without_disconnect() {
+        let snapshot = ControllerSnapshot {
+            instance_id: 42,
+            name: "Host controller".into(),
+            axes: [0.5, -0.5, 1.0, -1.0, 0.7, 0.9],
+            buttons: vec![sdl2::controller::Button::A],
+        };
+        let focused = snapshot.clone().with_focus(true);
+        assert_eq!(focused.axes, snapshot.axes);
+        assert_eq!(focused.buttons, snapshot.buttons);
+        let unfocused = snapshot.with_focus(false);
+        assert_eq!(unfocused.instance_id, 42);
+        assert_eq!(unfocused.name, "Host controller");
+        assert_eq!(unfocused.axes, [0.0; 6]);
+        assert!(unfocused.buttons.is_empty());
+    }
+
+    #[test]
+    fn axes_have_bounded_endpoints_and_rescaled_deadzone() {
+        assert_eq!(normalize_controller_axis(i16::MIN, 0.2), -1.0);
+        assert_eq!(normalize_controller_axis(i16::MAX, 0.2), 1.0);
+        assert_eq!(normalize_controller_axis(6000, 0.2), 0.0);
+        assert!((normalize_controller_axis(19660, 0.2) - 0.5).abs() < 0.001);
+        assert_eq!(normalize_controller_axis(0, 0.0), 0.0);
+        for deadzone in [1.0, 2.0, f32::NAN] {
+            assert!(normalize_controller_axis(i16::MAX, deadzone).is_finite());
+        }
+    }
+
+    #[test]
+    fn trigger_hysteresis_releases_without_repeated_edges() {
+        let mut held = false;
+        let mut transitions = Vec::new();
+        for value in [0, 15000, 17000, 16000, 14000, 12000, 0] {
+            let pressed = trigger_pressed(value, held);
+            if held != pressed {
+                transitions.push(pressed);
+            }
+            held = pressed;
+        }
+        assert_eq!(transitions, [true, false]);
+        assert!(!trigger_pressed(i16::MIN, true));
+        assert!(trigger_pressed(i16::MAX, false));
     }
 }
 

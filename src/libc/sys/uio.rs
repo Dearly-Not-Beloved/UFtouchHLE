@@ -34,7 +34,7 @@ fn writev(
         let len = next.iov_len;
         let written = write(env, fd, next.iov_base.cast_const(), len);
         assert!(written >= 0); // TODO
-        assert_eq!(written, len.try_into().unwrap()); // TODO
+        assert_eq!(written, i32::try_from(len).unwrap()); // TODO
         res += written;
     }
     res

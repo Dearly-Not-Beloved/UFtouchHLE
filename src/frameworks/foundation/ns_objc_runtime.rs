@@ -14,6 +14,7 @@ fn NSStringFromSelector(env: &mut Environment, selector: SEL) -> id {
 fn NSSelectorFromString(env: &mut Environment, string: id) -> SEL {
     // TODO: avoid copy?
     let string = ns_string::to_rust_string(env, string);
+
     env.objc.register_host_selector(string.into(), &mut env.mem)
 }
 
@@ -32,6 +33,11 @@ fn NSClassFromString(env: &mut Environment, string: id) -> Class {
     }
     // TODO: avoid copy?
     let string = ns_string::to_rust_string(env, string);
+
+    // AdSupport is not provided. P2G probes this optional framework on iOS 7.
+    if string == "ASIdentifierManager" {
+        return nil;
+    }
 
     // While this method is supposed to return nil if the class is not found,
     // touchHLE is missing many classes that apps might expect to be present,

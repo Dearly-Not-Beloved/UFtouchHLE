@@ -17,6 +17,7 @@ use crate::abi::{CallFromHost, GuestFunction};
 use crate::dyld::{export_c_func, ConstantExports, FunctionExports, HostConstant};
 use crate::libc::semaphore::{host_create_semaphore, sem_t};
 use crate::mem::{ConstPtr, ConstVoidPtr, MutPtr, MutVoidPtr};
+use crate::objc::{id, msg_class, objc_classes, ClassExports};
 use crate::Environment;
 use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
@@ -33,6 +34,7 @@ const IS_GLOBAL: u32 = 1 << 28;
 
 #[derive(Default)]
 pub struct State {
+    block_class: id,
     main_queue: MutVoidPtr,
     global_queue: MutVoidPtr,
     source_type_timer: MutVoidPtr,
@@ -127,14 +129,46 @@ fn source_type_timer(env: &mut Environment) -> ConstVoidPtr {
 }
 
 fn block_class(env: &mut Environment) -> ConstVoidPtr {
-    env.mem.calloc(64).cast_const()
+    let class = env.objc.get_known_class("_touchHLE_NSBlock", &mut env.mem);
+    env.libc_state.dispatch.block_class = class;
+    class.cast_void().cast_const()
 }
+
+/// Block literals live in guest stack/static memory, outside ObjC's object map.
+pub(crate) fn is_block(env: &Environment, object: id) -> bool {
+    let class = env.libc_state.dispatch.block_class;
+    !class.is_null() && env.mem.read(object.cast::<id>()) == class
+}
+
+pub const CLASSES: ClassExports = objc_classes! {
+(env, this, _cmd);
+@implementation _touchHLE_NSBlock: NSObject
+- (id)copyWithZone:(MutVoidPtr)_zone {
+    _Block_copy(env, this.cast_void().cast_const()).cast()
+}
+- (id)copy {
+    _Block_copy(env, this.cast_void().cast_const()).cast()
+}
+- (id)retain {
+    let block = this.cast_void();
+    if let Some(count) = env.libc_state.dispatch.copies.get_mut(&block) {
+        *count = count.checked_add(1).unwrap();
+    }
+    this
+}
+- (())release { _Block_release(env, this.cast_void()); }
+- (id)autorelease {
+    let _: () = msg_class![env; NSAutoreleasePool addObject:this];
+    this
+}
+@end
+};
 
 fn block_word(env: &Environment, block: ConstVoidPtr, word: u32) -> u32 {
     env.mem.read(block.cast::<u32>() + word)
 }
 
-fn _Block_copy(env: &mut Environment, block: ConstVoidPtr) -> MutVoidPtr {
+pub(crate) fn _Block_copy(env: &mut Environment, block: ConstVoidPtr) -> MutVoidPtr {
     if block.is_null() || block_word(env, block, 1) & IS_GLOBAL != 0 {
         return block.cast_mut();
     }
@@ -155,7 +189,7 @@ fn _Block_copy(env: &mut Environment, block: ConstVoidPtr) -> MutVoidPtr {
     copy
 }
 
-fn _Block_release(env: &mut Environment, block: MutVoidPtr) {
+pub(crate) fn _Block_release(env: &mut Environment, block: MutVoidPtr) {
     let Some(count) = env.libc_state.dispatch.copies.get_mut(&block) else {
         return;
     };

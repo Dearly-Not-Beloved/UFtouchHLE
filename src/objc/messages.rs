@@ -212,8 +212,12 @@ fn objc_msgSend_inner(
     }
 
     let orig_class = super2.unwrap_or_else(|| ObjC::read_isa(receiver, &env.mem));
-    assert!(orig_class != nil);
-    if !skip_initialize {
+    assert!(
+        orig_class != nil,
+        "Message {} to {receiver:?} has a null class",
+        selector.as_str(&env.mem)
+    );
+    if !skip_initialize && !crate::libc::dispatch::is_block(env, receiver) {
         maybe_initialize_class(env, receiver);
     }
 

@@ -251,12 +251,14 @@ com.ea.nfshp.ipad.inc: --force-composition
 jp.co.capcom.deadrisingus: --device-model=iPhone3,1 --subpixel-offset=0.01
 
 # Grand Theft Auto: Vice City
+# Controller coordinates checked against 480x320 screenshots. Dynamic joystick
+# and camera swipe behavior still await device gameplay testing.
 # Requires a device with OpenGL ES 2.0 support. On an iPhone 4 (iPhone3,1) it
 # renders at 65% resolution, on an iPhone 4S at full Retina resolution.
-com.rockstargames.gta3vc: --device-model=iPhone4,1 --retina
+com.rockstargames.gta3vc: --device-model=iPhone4,1 --retina --system-version=7.0 --touch-map-size=480,320 --disable-analog-stick-tilt-controls --stick-to-touch=25,220,80,80 --stick-touch-start-at-center --right-stick-swipe=180,100,130,100 --button-to-touch=A,447,260 --button-to-touch=B,385,260 --button-to-touch=X,447,203 --button-to-touch=Y,447,158 --button-to-touch=RightTrigger,447,203 --button-to-touch=LeftTrigger,385,260 --button-to-touch=Start,24,84 --button-to-touch=Back,24,84 --button-to-touch=LeftShoulder,450,25 --button-to-touch=RightShoulder,412,122 --button-to-touch=DPadLeft,34,260 --button-to-touch=DPadRight,92,260
 
 # Monster Hunter Portable 2nd G
 # Renders at Retina resolution when told it has a Retina display. The game
 # lists older models (e.g. iPhone1,1, the default) separately, so report an
 # iPhone 4S.
-jp.co.capcom.mhp2gjp: --device-model=iPhone4,1 --retina
+jp.co.capcom.mhp2gjp: --device-model=iPhone4,1 --retina --system-version=7.0

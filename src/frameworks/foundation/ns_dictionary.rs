@@ -313,6 +313,12 @@ pub fn init_with_objects_and_keys(
 
 /// Helper function to share `initWithDictionary:` implementations
 fn init_with_dictionary_common(env: &mut Environment, this: id, other_dict: id) -> id {
+    // A missing source is an empty dictionary, as with enumeration of nil.
+    // Avoid trying to borrow a host object for the null pointer.
+    if other_dict == nil {
+        *env.objc.borrow_mut(this) = DictionaryHostObject::default();
+        return this;
+    }
     let other_host_object: DictionaryHostObject = std::mem::take(env.objc.borrow_mut(other_dict));
 
     let mut host_object = <DictionaryHostObject as Default>::default();
@@ -431,6 +437,14 @@ pub const CLASSES: ClassExports = objc_classes! {
     let new_dict: id = msg![env; this alloc];
     let new_dict: id = msg![env; new_dict initWithDictionary:dict];
     autorelease(env, new_dict)
+}
+
++ (id)dictionaryWithObjects:(ConstPtr<id>)objects forKeys:(ConstPtr<id>)keys count:(NSUInteger)count {
+    let entries = (0..count)
+        .map(|i| (env.mem.read(keys + i), env.mem.read(objects + i)))
+        .collect::<Vec<_>>();
+    let dictionary = dict_from_keys_and_objects(env, &entries);
+    autorelease(env, dictionary)
 }
 
 - (id)init {

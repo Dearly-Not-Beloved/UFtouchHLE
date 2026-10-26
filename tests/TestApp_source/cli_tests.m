@@ -5972,6 +5972,63 @@ int test_NSKeyedArchiver_NSKeyedUnarchiver() {
   return 0;
 }
 
+int test_NSJSONSerialization_writing() {
+  NSAutoreleasePool *pool = [NSAutoreleasePool new];
+  NSString *text = [NSString stringWithUTF8String:"a\"\n"];
+  NSArray *array =
+      [NSArray arrayWithObjects:text, [NSNumber numberWithInt:-7],
+                                [NSNumber numberWithBool:true], nil];
+  id error = nil;
+  NSData *data = [NSJSONSerialization dataWithJSONObject:array
+                                                 options:0
+                                                   error:&error];
+  const char *expected = "[\"a\\\"\\n\",-7,true]";
+  int result = data == nil || [data length] != strlen(expected) ||
+                       memcmp([data bytes], expected, strlen(expected)) != 0
+                   ? -1
+                   : 0;
+  id keys[] = {[NSString stringWithUTF8String:"items"]};
+  id values[] = {array};
+  NSDictionary *dict = [NSDictionary dictionaryWithObjects:values
+                                                   forKeys:keys
+                                                     count:1];
+  data = [NSJSONSerialization dataWithJSONObject:dict options:0 error:&error];
+  const char *expected_dict = "{\"items\":[\"a\\\"\\n\",-7,true]}";
+  if (data == nil || [data length] != strlen(expected_dict) ||
+      memcmp([data bytes], expected_dict, strlen(expected_dict)) != 0) {
+    result = -3;
+  }
+  NSArray *bad =
+      [NSArray arrayWithObjects:[NSNumber numberWithFloat:INFINITY], nil];
+  if ([NSJSONSerialization isValidJSONObject:bad] ||
+      [NSJSONSerialization isValidJSONObject:text]) {
+    result = -2;
+  }
+  [pool drain];
+  return result;
+}
+
+int test_NSDictionary_nil_source() {
+  NSAutoreleasePool *pool = [NSAutoreleasePool new];
+  NSDictionary *dict = [[NSDictionary alloc] initWithDictionary:nil];
+  NSMutableDictionary *mutable =
+      [[NSMutableDictionary alloc] initWithDictionary:nil];
+  int result =
+      dict == nil || mutable == nil || [dict count] != 0 || [mutable count] != 0
+          ? -1
+          : 0;
+  NSString *key = [NSString stringWithUTF8String:"key"];
+  NSString *value = [NSString stringWithUTF8String:"value"];
+  [mutable setObject:value forKey:key];
+  if (![[mutable objectForKey:key] isEqualToString:value]) {
+    result = -2;
+  }
+  [dict release];
+  [mutable release];
+  [pool drain];
+  return result;
+}
+
 int test_NSKeyedArchiver_NSDictionary_of_NSArray_of_NSStrings() {
   NSAutoreleasePool *pool = [NSAutoreleasePool new];
 
@@ -6989,6 +7046,8 @@ struct {
     FUNC_DEF(test_RespondsToSelector),
     FUNC_DEF(test_NSKeyedArchiver_encodeIntForKey),
     FUNC_DEF(test_NSKeyedArchiver_NSKeyedUnarchiver),
+    FUNC_DEF(test_NSDictionary_nil_source),
+    FUNC_DEF(test_NSJSONSerialization_writing),
     FUNC_DEF(test_NSKeyedArchiver_NSDictionary_of_NSArray_of_NSStrings),
     FUNC_DEF(test_AutoreleasePool),
     FUNC_DEF(test_NSNumber_stringValue),

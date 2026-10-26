@@ -35,6 +35,7 @@ pub mod ns_file_manager;
 pub mod ns_garbage_collector;
 pub mod ns_index_path;
 pub mod ns_invocation;
+pub mod ns_json_serialization;
 pub mod ns_keyed_archiver;
 pub mod ns_keyed_unarchiver;
 pub mod ns_locale;
@@ -88,6 +89,7 @@ pub const DYLIB: crate::dyld::HostDylib = crate::dyld::HostDylib {
         ns_garbage_collector::CLASSES,
         ns_index_path::CLASSES,
         ns_invocation::CLASSES,
+        ns_json_serialization::CLASSES,
         ns_keyed_archiver::CLASSES,
         ns_keyed_unarchiver::CLASSES,
         ns_locale::CLASSES,

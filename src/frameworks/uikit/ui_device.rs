@@ -12,7 +12,8 @@ use crate::frameworks::foundation::ns_string::get_static_str;
 use crate::frameworks::foundation::{ns_string, NSInteger};
 use crate::msg_class;
 use crate::objc::{
-    id, msg, objc_classes, todo_objc_setter, ClassExports, NSZonePtr, TrivialHostObject,
+    autorelease, id, msg, objc_classes, todo_objc_setter, ClassExports, NSZonePtr,
+    TrivialHostObject,
 };
 use crate::window::{get_battery_status, BatteryState, DeviceFamily, DeviceOrientation};
 
@@ -112,7 +113,9 @@ pub const CLASSES: ClassExports = objc_classes! {
 
 // NSString
 - (id)systemVersion {
-    ns_string::get_static_str(env, "2.0")
+    let version = env.options.system_version.clone();
+    let string = ns_string::from_rust_string(env, version);
+    autorelease(env, string)
 }
 
 - (id)uniqueIdentifier {

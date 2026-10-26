@@ -103,12 +103,17 @@ pub const CLASSES: ClassExports = objc_classes! {
 
     retain(env, object);
 
+    let controller_notification = matches!(name.as_deref(), Some("GCControllerDidConnectNotification" | "GCControllerDidDisconnectNotification"))
+        && env.framework_state.foundation.ns_notification_center.default_center == Some(this);
     let host_obj = env.objc.borrow_mut::<NSNotificationCenterHostObject>(this);
     host_obj.observers.entry(name).or_default().push(Observer {
         observer,
         selector,
         object,
     });
+    if controller_notification {
+        crate::frameworks::game_controller::request_input(env);
+    }
 }
 
 - (())removeObserver:(id)observer {

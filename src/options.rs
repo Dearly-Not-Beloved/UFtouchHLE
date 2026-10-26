@@ -29,6 +29,12 @@ pub enum Button {
     X,
     Y,
     LeftShoulder,
+    RightShoulder,
+    Back,
+    LeftStick,
+    RightStick,
+    LeftTrigger,
+    RightTrigger,
 }
 
 /// How the app's screen is fitted into a fullscreen window.
@@ -109,6 +115,10 @@ pub struct Options {
     pub device_screen_size: Option<(u32, u32)>,
     /// Runtime device pixel multiplier (3 for iPhone 6 Plus).
     pub device_screen_scale: Option<u32>,
+    /// Orientation-relative coordinate reference for controller touch mappings.
+    pub touch_map_size: Option<(u32, u32)>,
+    /// Operating system version reported by UIDevice.
+    pub system_version: String,
     /// Report a Retina display (`[UIScreen scale]` of 2).
     pub retina: bool,
     /// Shift for everything the app draws, in pixels (see
@@ -124,6 +134,9 @@ pub struct Options {
     pub y_tilt_offset: f32,
     pub button_to_touch: HashMap<Button, (f32, f32)>,
     pub dpad_to_touch: Option<(f32, f32, f32, f32)>,
+    pub stick_touch_start_at_center: bool,
+    pub right_stick_swipe: Option<(f32, f32, f32, f32)>,
+    pub right_stick_to_touch: Option<(f32, f32, f32, f32)>,
     pub stick_to_touch: Option<(f32, f32, f32, f32)>,
     pub stabilize_virtual_cursor: Option<(f32, f32)>,
     pub gles1_implementation: Option<GLESImplementation>,
@@ -158,6 +171,8 @@ impl Default for Options {
             device_profile: "auto",
             device_screen_size: None,
             device_screen_scale: None,
+            touch_map_size: None,
+            system_version: "2.0".to_string(),
             retina: false,
             subpixel_offset: None,
             initial_orientation: DeviceOrientation::Portrait,
@@ -171,6 +186,9 @@ impl Default for Options {
             button_to_touch: HashMap::new(),
             dpad_to_touch: None,
             stick_to_touch: None,
+            right_stick_to_touch: None,
+            right_stick_swipe: None,
+            stick_touch_start_at_center: false,
             stabilize_virtual_cursor: None,
             gles1_implementation: None,
             direct_memory_access: true,
@@ -250,6 +268,35 @@ impl Options {
                     .ok_or_else(|| format!("Unknown device profile {value:?}"))?
                     .machine
             };
+        } else if let Some(value) = arg.strip_prefix("--touch-map-size=") {
+            let (width, height) = value
+                .split_once(',')
+                .ok_or_else(|| "--touch-map-size requires W,H".to_string())?;
+            let dimension = |value: &str| -> Result<u32, String> {
+                if value.is_empty() || !value.bytes().all(|b| b.is_ascii_digit()) {
+                    return Err("--touch-map-size requires positive integer dimensions".to_string());
+                }
+                value
+                    .parse::<u32>()
+                    .ok()
+                    .filter(|&v| v > 0)
+                    .ok_or_else(|| "--touch-map-size requires positive u32 dimensions".to_string())
+            };
+            self.touch_map_size = Some((dimension(width)?, dimension(height)?));
+        } else if let Some(value) = arg.strip_prefix("--system-version=") {
+            let parts: Vec<_> = value.split('.').collect();
+            if !(1..=3).contains(&parts.len())
+                || parts.iter().any(|part| {
+                    part.is_empty()
+                        || !part.bytes().all(|byte| byte.is_ascii_digit())
+                        || part.parse::<u16>().is_err()
+                })
+            {
+                return Err(
+                    "--system-version requires 1 to 3 dot-separated u16 numbers".to_string()
+                );
+            }
+            self.system_version = value.to_string();
         } else if let Some(value) = arg.strip_prefix("--device-family=") {
             let parsed =
                 DeviceFamily::try_from(value).map_err(|_| "Invalid device family".to_string())?;
@@ -304,6 +351,12 @@ impl Options {
                 "X" => Ok(Button::X),
                 "Y" => Ok(Button::Y),
                 "LeftShoulder" => Ok(Button::LeftShoulder),
+                "RightShoulder" => Ok(Button::RightShoulder),
+                "Back" => Ok(Button::Back),
+                "LeftStick" => Ok(Button::LeftStick),
+                "RightStick" => Ok(Button::RightStick),
+                "LeftTrigger" => Ok(Button::LeftTrigger),
+                "RightTrigger" => Ok(Button::RightTrigger),
                 _ => Err("Invalid button for --button-to-touch=".to_string()),
             }?;
             let x: f32 = x
@@ -313,6 +366,40 @@ impl Options {
                 .parse()
                 .map_err(|_| "Invalid Y co-ordinate for --button-to-touch=".to_string())?;
             self.button_to_touch.insert(button, (x, y));
+        } else if arg == "--stick-touch-start-at-center" {
+            self.stick_touch_start_at_center = true;
+        } else if let Some(values) = arg
+            .strip_prefix("--right-stick-to-touch=")
+            .or_else(|| arg.strip_prefix("--right-stick-swipe="))
+        {
+            let swipe = arg.starts_with("--right-stick-swipe=");
+            let option_name = if swipe {
+                "--right-stick-swipe"
+            } else {
+                "--right-stick-to-touch"
+            };
+            let nums = values
+                .split(',')
+                .map(str::parse::<f32>)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|_| format!("invalid {option_name}"))?;
+            if nums.len() != 4
+                || nums.iter().any(|v| !v.is_finite())
+                || nums[2] <= 0.0
+                || nums[3] <= 0.0
+            {
+                return Err(format!(
+                    "{option_name} requires X,Y,positive width,positive height"
+                ));
+            }
+            let region = Some((nums[0], nums[1], nums[2], nums[3]));
+            if swipe {
+                self.right_stick_swipe = region;
+                self.right_stick_to_touch = None;
+            } else {
+                self.right_stick_to_touch = region;
+                self.right_stick_swipe = None;
+            }
         } else if let Some(values) = arg.strip_prefix("--stick-to-touch=") {
             let nums: [f32; 4] = values
                 .split(',')
@@ -484,6 +571,113 @@ fn parse_dump_options(options: &str) -> Result<DumpingOptions, String> {
 }
 
 #[cfg(test)]
+mod controller_mapping_tests {
+    use super::{Button, Options};
+
+    #[test]
+    fn gta_gestures_are_opt_in_and_camera_modes_are_exclusive() {
+        let mut options = Options::default();
+        assert!(!options.stick_touch_start_at_center);
+        assert_eq!(options.right_stick_swipe, None);
+        options
+            .parse_argument("--stick-touch-start-at-center")
+            .unwrap();
+        assert!(options.stick_touch_start_at_center);
+        options
+            .parse_argument("--right-stick-to-touch=1,2,3,4")
+            .unwrap();
+        options
+            .parse_argument("--right-stick-swipe=180,100,130,100")
+            .unwrap();
+        assert_eq!(
+            options.right_stick_swipe,
+            Some((180.0, 100.0, 130.0, 100.0))
+        );
+        assert_eq!(options.right_stick_to_touch, None);
+        options
+            .parse_argument("--right-stick-to-touch=1,2,3,4")
+            .unwrap();
+        assert_eq!(options.right_stick_swipe, None);
+        for invalid in [
+            "0,0,0,10",
+            "0,0,10,-1",
+            "NaN,0,10,10",
+            "0,0,10,inf",
+            "0,0,10",
+        ] {
+            assert!(options
+                .parse_argument(&format!("--right-stick-swipe={invalid}"))
+                .is_err());
+        }
+    }
+
+    #[test]
+    fn extended_buttons_and_camera_region_parse() {
+        let mut options = Options::default();
+        for (name, button) in [
+            ("RightShoulder", Button::RightShoulder),
+            ("Back", Button::Back),
+            ("LeftStick", Button::LeftStick),
+            ("RightStick", Button::RightStick),
+            ("LeftTrigger", Button::LeftTrigger),
+            ("RightTrigger", Button::RightTrigger),
+        ] {
+            options
+                .parse_argument(&format!("--button-to-touch={name},10,20"))
+                .unwrap();
+            assert_eq!(options.button_to_touch.get(&button), Some(&(10.0, 20.0)));
+        }
+        options
+            .parse_argument("--right-stick-to-touch=200,50,100,80")
+            .unwrap();
+        assert_eq!(
+            options.right_stick_to_touch,
+            Some((200.0, 50.0, 100.0, 80.0))
+        );
+        for invalid in ["0,0,0,10", "0,0,10,-1", "NaN,0,10,10", "0,0,10"] {
+            assert!(options
+                .parse_argument(&format!("--right-stick-to-touch={invalid}"))
+                .is_err());
+        }
+    }
+}
+
+#[cfg(test)]
+mod system_version_tests {
+    use super::Options;
+
+    #[test]
+    fn accepts_one_to_three_u16_components() {
+        let mut options = Options::default();
+        assert_eq!(options.system_version, "2.0");
+        for version in ["7", "7.0", "7.0.1", "0", "65535.65535.65535", "07.00"] {
+            assert!(options
+                .parse_argument(&format!("--system-version={version}"))
+                .unwrap());
+            assert_eq!(options.system_version, version);
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_versions_without_changing_previous_value() {
+        let mut options = Options::default();
+        options.parse_argument("--system-version=7.0").unwrap();
+        for version in [
+            "", ".7", "7.", "7..0", "1.2.3.4", "65536", "7.65536", "-1", "+7", "7.a", "7. 0", " 7",
+            "7\n", "７.０",
+        ] {
+            assert!(
+                options
+                    .parse_argument(&format!("--system-version={version}"))
+                    .is_err(),
+                "accepted {version:?}"
+            );
+            assert_eq!(options.system_version, "7.0");
+        }
+    }
+}
+
+#[cfg(test)]
 mod device_geometry_options_tests {
     use super::Options;
 
@@ -501,5 +695,30 @@ mod device_geometry_options_tests {
         assert_eq!(options.device_profile, "iPhone2,1");
         options.parse_argument("--device-profile=auto").unwrap();
         assert_eq!(options.device_profile, "auto");
+    }
+
+    #[test]
+    fn mapping_reference_requires_positive_integer_pair() {
+        let mut options = Options::default();
+        assert_eq!(options.touch_map_size, None);
+        options.parse_argument("--touch-map-size=480,320").unwrap();
+        assert_eq!(options.touch_map_size, Some((480, 320)));
+        for invalid in [
+            "",
+            "480",
+            "0,320",
+            "480,-1",
+            "480,320.5",
+            "NaN,320",
+            "480,inf",
+            "480,320,1",
+            "+480,320",
+            "4294967296,320",
+        ] {
+            assert!(options
+                .parse_argument(&format!("--touch-map-size={invalid}"))
+                .is_err());
+            assert_eq!(options.touch_map_size, Some((480, 320)));
+        }
     }
 }

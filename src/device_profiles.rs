@@ -347,9 +347,11 @@ mod tests {
     fn apply_preserves_non_display_options() {
         let mut options = Options {
             device_profile: "iPhone6,1",
+            system_version: "7.0".into(),
             ..Options::default()
         };
         apply(&mut options, &support(true), Some((1080, 2400)));
+        assert_eq!(options.system_version, "7.0");
         assert_eq!(options.device_model, Some("iPhone6,1"));
         assert_eq!(options.device_screen_size, Some((320, 568)));
     }

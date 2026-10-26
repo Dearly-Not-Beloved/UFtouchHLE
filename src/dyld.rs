@@ -230,7 +230,7 @@ pub struct Dyld {
     linked_host_functions: Vec<(&'static str, HostFunction)>,
     return_to_host_routine: Option<GuestFunction>,
     thread_exit_routine: Option<GuestFunction>,
-    constants_to_link_later: Vec<(MutPtr<ConstVoidPtr>, &'static HostConstant)>,
+    constants_to_link_later: Vec<(MutPtr<ConstVoidPtr>, &'static HostConstant, u32)>,
     non_lazy_host_functions: HashMap<&'static str, GuestFunction>,
 }
 
@@ -511,9 +511,13 @@ impl Dyld {
                     trampoline_ptr
                 );
                 trampoline_ptr
-            } else if search_host_dylibs(|dylib| dylib.constant_exports, name).is_some() {
-                // Skip the constants from DYLD_INFO because we already
-                // handle the consts when reading the __nl_symbol_ptr section
+            } else if let Some((_, template)) =
+                search_host_dylibs(|dylib| dylib.constant_exports, name)
+            {
+                // Constants may also be embedded directly in __const (e.g.
+                // global block isa pointers), outside __nl_symbol_ptr.
+                self.constants_to_link_later
+                    .push((ptr_ptr, template, offset));
                 continue;
             } else {
                 unhandled_relocations
@@ -589,7 +593,13 @@ impl Dyld {
             {
                 // Delay linking of constant until we have a `&mut Environment`,
                 // that makes it much easier to build NSString objects etc.
-                self.constants_to_link_later.push((ptr_ptr, template));
+                if !self
+                    .constants_to_link_later
+                    .iter()
+                    .any(|&(ptr, _, _)| ptr == ptr_ptr)
+                {
+                    self.constants_to_link_later.push((ptr_ptr, template, 0));
+                }
                 continue;
             }
 
@@ -610,7 +620,7 @@ impl Dyld {
         // TODO: do symbols ever appear in __nl_symbol_ptr multiple times?
 
         let to_link = std::mem::take(&mut env.dyld.constants_to_link_later);
-        for (symbol_ptr_ptr, template) in to_link {
+        for (symbol_ptr_ptr, template, offset) in to_link {
             let symbol_ptr: ConstVoidPtr = match template {
                 HostConstant::NSString(static_str) => {
                     let string_ptr = ns_string::get_static_str(env, static_str);
@@ -624,7 +634,10 @@ impl Dyld {
                 }
                 HostConstant::Custom(f) => f(env),
             };
-            env.mem.write(symbol_ptr_ptr, symbol_ptr.cast());
+            env.mem.write(
+                symbol_ptr_ptr,
+                ConstVoidPtr::from_bits(symbol_ptr.to_bits().wrapping_add(offset)),
+            );
         }
     }
 

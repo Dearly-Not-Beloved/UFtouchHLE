@@ -55,6 +55,7 @@ pub struct State {
     core_animation: core_animation::State,
     core_graphics: core_graphics::State,
     foundation: foundation::State,
+    game_controller: game_controller::State,
     game_kit: game_kit::State,
     media_player: media_player::State,
     openal: openal::State,

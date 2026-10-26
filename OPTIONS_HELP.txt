@@ -100,6 +100,12 @@ Device options:
         2x canvas is used. Auto prefers the existing lower-resolution profile
         when aspect ratios differ by less than 0.5%.
 
+    --system-version=...
+        Sets the operating system version reported by UIDevice.systemVersion.
+        The default is 2.0. Accepts 1 to 3 dot-separated decimal numbers, each
+        from 0 to 65535, for example 7, 7.0 or 7.0.1. This can enable an app's
+        version-gated features; it does not add missing operating system APIs.
+
     --retina
         Tells the app the screen is a Retina display (twice the resolution in
         each direction, like the iPhone 4's). Apps that support it can then
@@ -169,14 +175,24 @@ Game controller options:
         This is a floating-point (decimal) number of degrees, without a degree
         symbol. It may be negative.
 
+    --touch-map-size=W,H
+        Sets the coordinate reference for all controller touch mappings. Both
+        dimensions must be positive integers. This reference is relative to the
+        current orientation: 480,320 describes a landscape layout. Coordinates
+        are normalized and rotated onto the selected device's logical screen.
+        Without this option, mappings retain the family's legacy reference
+        (iPhone 320x480 portrait or 480x320 landscape), even on taller profiles.
+        This does not change mouse or physical touch coordinates.
+
     --button-to-touch=...
         Maps a button on a game controller to a point on the simulated touch
         screen of the device. Pressing the button will behave like touching that
         part of the screen.
 
         This is three parts separated by commas: the name of a button (DPadLeft,
-        DPadUp, DPadRight, DPadDown, Start, LeftShoulder or Xbox-like
-        A, B, X or Y), the X co-ordinate and the Y co-ordinate.
+        DPadUp, DPadRight, DPadDown, Start, Back, LeftShoulder, RightShoulder,
+        LeftStick, RightStick, LeftTrigger, RightTrigger or Xbox-like A, B, X
+        or Y), the X co-ordinate and the Y co-ordinate.
         The co-ordinates are floating-point (decimal) numbers. 0,0 is the
         top-left corner. The bottom-right corner is 320,480 if the app is in
         portrait, and 480,320 if the app is in landscape.
@@ -188,6 +204,19 @@ Game controller options:
         by default. There is however a virtual cursor that is controlled by the
         right analog stick (tap/hold by pressing the stick or right shoulder
         button).
+
+        Triggers press at 50% travel and release below 40% to avoid noise.
+        Mapping RightStick or RightShoulder disables the virtual cursor.
+        Disconnecting a controller releases synthetic controller touches.
+
+    --right-stick-to-touch=X,Y,WIDTH,HEIGHT
+        Maps the right stick to a touch region, using the same co-ordinates as
+        --stick-to-touch. Width and height must be positive. Moving out of the
+        deadzone presses and moves a touch; returning to center releases it.
+        Disables the right-stick virtual cursor. Useful for camera touch areas;
+        this is an absolute region mapping, not continuous swipe emulation.
+        Native GameController input disables controller touch, cursor and tilt
+        simulation while keeping host controller state available to the app.
 
     --dpad-to-touch=...
         Maps a D-pad on a game controller to simulated finger movement within a
@@ -228,6 +257,22 @@ Game controller options:
         by default. There is however a virtual cursor that is controlled by the
         right analog stick (tap/hold by pressing the stick or right shoulder
         button).
+
+    --stick-touch-start-at-center
+        With --stick-to-touch, begin each left-stick gesture with TouchDown at
+        the region center followed by TouchMove to the deflected position.
+        Useful for dynamic joysticks that take the initial touch as their origin.
+        Off by default; enabled in the GTA Vice City profile only.
+
+    --right-stick-swipe=X,Y,WIDTH,HEIGHT
+        Continuously swipe for camera control while the right stick is held.
+        Starts at the region center, then moves at up to 160 logical pixels per
+        second per axis. Each poll integrates at most 50ms. At a region boundary,
+        releases and starts again at the center, avoiding a backwards drag.
+        Releases in the deadzone, on focus loss, disconnect or native mode.
+        Width and height must be positive finite numbers. Uses the same logical
+        co-ordinates as --stick-to-touch and disables the virtual cursor.
+        Separate from --right-stick-to-touch; the last of these options wins.
 
     --stabilize-virtual-cursor=...
         Apply motion smoothing and a sticky radius to the virtual cursor

@@ -360,6 +360,7 @@ pub fn run_run_loop(
 
         // We want to process those only on the main run loop
         if is_main_run_loop {
+            crate::frameworks::game_controller::handle_controllers(env);
             let next_due = uikit::handle_events(env);
             limit_sleep_time(&mut sleep_until, next_due);
 

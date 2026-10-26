@@ -137,6 +137,11 @@ pub const CLASSES: ClassExports = objc_classes! {
     }
 }
 
+// No iCloud account or ubiquity containers are available to guest apps.
+- (id)URLForUbiquityContainerIdentifier:(id)_identifier {
+    nil
+}
+
 - (id)currentDirectoryPath {
     ns_string::from_rust_string(env, env.fs.working_directory().as_str().to_string())
 }

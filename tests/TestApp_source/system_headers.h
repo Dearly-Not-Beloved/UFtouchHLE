@@ -83,11 +83,19 @@ static inline NSRange NSMakeRange(NSUInteger loc, NSUInteger len) {
 @end
 
 @interface NSDictionary<KeyType, ObjectType> : NSObject
+- (instancetype)initWithDictionary:(NSDictionary *)dictionary;
++ (instancetype)dictionaryWithObjects:(const id *)objects
+                              forKeys:(const id *)keys
+                                count:(NSUInteger)count;
 + (instancetype)dictionaryWithObjects:(NSArray<ObjectType> *)objects
                               forKeys:(NSArray<KeyType> *)keys;
 - (NSUInteger)count;
 - (ObjectType)objectForKey:(KeyType)aKey;
 - (BOOL)isEqualToDictionary:(NSDictionary *)otherDictionary;
+@end
+
+@interface NSMutableDictionary<KeyType, ObjectType> : NSDictionary
+- (void)setObject:(ObjectType)object forKey:(KeyType)key;
 @end
 
 @interface NSSet<ObjectType> : NSObject
@@ -160,6 +168,15 @@ typedef double NSTimeInterval;
 
 @interface NSData : NSObject
 + (id)dataWithContentsOfURL:(NSURL *)url;
+- (const void *)bytes;
+- (NSUInteger)length;
+@end
+
+@interface NSJSONSerialization : NSObject
++ (BOOL)isValidJSONObject:(id)object;
++ (NSData *)dataWithJSONObject:(id)object
+                       options:(NSUInteger)options
+                         error:(id *)error;
 @end
 
 @interface NSCoder : NSObject
