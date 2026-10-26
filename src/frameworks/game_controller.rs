@@ -52,4 +52,12 @@ const CLASSES: ClassExports = objc_classes! {
 
 @end
 
+// Apps may query these profile classes even when no controllers are connected.
+// Keep class discovery available without advertising a controller or inputs.
+@implementation GCGamepad: NSObject
+@end
+
+@implementation GCExtendedGamepad: NSObject
+@end
+
 };
