@@ -69,6 +69,9 @@ pub const DYLIB: crate::dyld::HostDylib = crate::dyld::HostDylib {
     path: "/System/Library/Frameworks/Foundation.framework/Foundation",
     aliases: &[],
     class_exports: &[
+        // Block literals use NSObject methods; keep the private class in a
+        // framework linked after libobjc, including in legacy SDK test stubs.
+        crate::libc::dispatch::CLASSES,
         _nib_archive_decoder::CLASSES,
         ns_array::CLASSES,
         ns_attributed_string::CLASSES,

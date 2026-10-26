@@ -50,7 +50,7 @@ pub mod wchar;
 pub const DYLIB: crate::dyld::HostDylib = crate::dyld::HostDylib {
     path: "/usr/lib/libSystem.B.dylib",
     aliases: &["/usr/lib/libSystem.dylib"],
-    class_exports: &[dispatch::CLASSES],
+    class_exports: &[],
     constant_exports: &[
         dispatch::CONSTANTS,
         ctype::CONSTANTS,
