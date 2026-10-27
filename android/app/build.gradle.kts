@@ -112,7 +112,11 @@ android {
                 signingConfigs.getByName("debug")
             }
             isMinifyEnabled = false
-            isDebuggable = true // allow use of ADB to manage files, etc
+            // Release builds must NOT be debuggable: a debuggable app is
+            // treated by Android as debuggable (allows adb, exposes debug
+            // surfaces, and is subject to stricter restrictions). AGP's
+            // default for release is isDebuggable=false, so we simply don't
+            // set it here.
         }
         debug {
             isMinifyEnabled = false
