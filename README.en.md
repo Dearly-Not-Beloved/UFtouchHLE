@@ -2,13 +2,15 @@
 
 [简体中文](README.md) | [English](README.en.md)
 
+[![GitHub Release](https://img.shields.io/github/v/release/shawnw67/UFtouchHLE?style=for-the-badge&logo=github&color=1f6feb)](https://github.com/shawnw67/UFtouchHLE/releases)
+[![GitHub Stars](https://img.shields.io/github/stars/shawnw67/UFtouchHLE?style=for-the-badge&logo=github&color=gold)](https://github.com/shawnw67/UFtouchHLE)
+[![GitHub Issues](https://img.shields.io/github/issues/shawnw67/UFtouchHLE?style=for-the-badge&logo=github&color=lightgrey)](https://github.com/shawnw67/UFtouchHLE/issues)
+[![License](https://img.shields.io/github/license/shawnw67/UFtouchHLE?style=for-the-badge&logo=github&color=blue)](LICENSE)
+[![Platform](https://img.shields.io/badge/Platform-Android%20%7C%20macOS%20%7C%20Windows-blue?style=for-the-badge)](https://github.com/shawnw67/UFtouchHLE/releases)
+
 **UFtouchHLE** is an unofficial fork of [touchHLE](https://github.com/touchHLE/touchHLE), a high-level emulator for early iOS apps. This fork adds game-specific compatibility fixes, an Android launcher, save import/export, device profiles, and native controller support.
 
 Maintained by [shawnw67](https://github.com/shawnw67). This fork includes AI-assisted code and is maintained independently of upstream touchHLE.
-
-- [Download releases](https://github.com/shawnw67/UFtouchHLE/releases)
-- [Report an issue](https://github.com/shawnw67/UFtouchHLE/issues)
-- [Source code](https://github.com/shawnw67/UFtouchHLE)
 
 ## Features added in this fork
 
