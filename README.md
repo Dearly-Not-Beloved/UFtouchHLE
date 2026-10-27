@@ -1,147 +1,203 @@
-# touchHLE: high-level emulator for early iOS apps
+# UFtouchHLE
 
-**touchHLE** is a high-level emulator for early iOS apps. It runs on modern desktop operating systems and Android, and is written in Rust.
+**UFtouchHLE（应用内名称：touchHLE UF）** 是 [touchHLE](https://github.com/touchHLE/touchHLE) 的非官方分支，面向早期 iOS 游戏，增加了特定游戏兼容修复、Android 启动器、存档导入导出、模拟机型选择及原生手柄支持。
 
-touchHLE's high-level emulation (HLE) approach differs from low-level emulation (LLE) in that it does not directly simulate the iPhone/iPod touch hardware. Instead of running iOS inside emulation, touchHLE _itself_ takes the place of iOS and provides its own implementations of the system frameworks (Foundation, UIKit, OpenGL ES, OpenAL, etc). The only code the [emulated CPU](https://github.com/merryhime/dynarmic) executes is the app binary and [a handful of libraries](touchHLE_dylibs/).
+本分支由 [shawnw67](https://github.com/shawnw67) 维护，包含 AI 辅助开发的代码，与上游 touchHLE 独立维护。
 
-The goal of this project is to run games from the early days of iOS:
+- [下载发行版](https://github.com/shawnw67/UFtouchHLE/releases)
+- [反馈问题](https://github.com/shawnw67/UFtouchHLE/issues)
+- [源码仓库](https://github.com/shawnw67/UFtouchHLE)
 
-* Currently: iPhone, iPod touch and iPad apps for iPhone OS 2.x, iPhone OS 3.x, and iOS 4.0.x.
-* Longer term: high-DPI (“Retina Display”) support, newer iOS 4 versions, iOS 5.x, iOS 6.x.
-* [Never](https://github.com/touchHLE/touchHLE/issues/181#issuecomment-1777098259): 64-bit iOS.
+## 分支功能
 
-**This does not mean that all apps for these OS versions work.** The vast majority of iOS 2.x, 3.x and 4.x apps do not currently work in touchHLE, and the ones that do work are generally games (support for other apps is not prioritized as it is more complex and less fun). Compatibility will improve gradually over time with contributions from various developers. The [touchHLE app compatibility database](https://appdb.touchhle.org/) tracks which apps work in touchHLE; it is a crowdsourced effort to which anyone can contribute. **We don't take requests, so please do not ask us to support your favourite game.**
+- **游戏适配**：针对 P2G、罪恶都市、Inotia 1 / 2、Resident Evil Mercenaries VS. 和 Dead Rising Mobile 等游戏补充接口、修复兼容问题。
+- **Android 启动器**：导入游戏、长按管理游戏、查看和分享日志，设置页面提供模拟机型、游戏联网和更新检查等选项。
+- **存档迁移**：通过 ZIP 导入、导出游戏存档，导入前备份已有存档。
+- **机型与分辨率选择**：按屏幕比例自动选择，也可设置全局机型或为单个游戏指定机型。
+- **手柄支持**：实现游戏使用的 GameController 接口，已对 P2G 和罪恶都市进行实机测试；保留触屏映射和虚拟光标等输入方式。
+- **P2G 画面扩展**：可选扩展横向视野，触控布局保持在中间的 16:9 操作区域；默认模式支持摇杆拖入黑边后继续操作。
+- **音频与生命周期修复**：包含 P2G 背景音乐循环、罪恶都市部分音效噪声，以及退出和 Android 切后台恢复等路径的修复。
 
-If you're curious about the history and motivation behind the project, you might want to read [the original announcement](https://hikari.noyu.me/blog/2023-02-06-touchhle-anouncement-thread-tech-games-me-and-passion-projects.html). For an introduction to some of the technical details, check out [_touchHLE in depth_](https://hikari.noyu.me/blog/2023-04-13-touchhle-in-depth-1-function-calls.html).
+各版本改动见 [Release 说明](https://github.com/shawnw67/UFtouchHLE/releases)。[CHANGELOG.md](CHANGELOG.md) 目前主要保留上游历史记录，不是 UF 分支完整的发布日志。
 
-**Check out the website for downloads, FAQ, social media, and more:**<br>👉 <https://touchhle.org/> 👈
+## 兼容范围
 
-## Important disclaimer
+UFtouchHLE 使用高层模拟：执行游戏的 ARM 代码，并自行实现游戏需要的 iOS 系统接口，不需要启动完整的 iOS 系统。
 
-This project is not affiliated with or endorsed by Apple Inc in any way. iPhone, iOS, iPod, iPod touch and iPad are trademarks of Apple Inc in the United States and other countries.
+仅支持 **32 位 ARM（armv6 / armv7）应用**。基础兼容范围来自上游的 iPhone OS 2–4 时代应用，本分支为部分 iOS 5 / 6 时代游戏增加了支持；这不代表这些系统版本的所有应用都能运行。
 
-Only use touchHLE to emulate software you have obtained legally.
+选择 iPhone 5s、iPhone 6 等模拟机型，改变的是设备信息、屏幕尺寸和渲染配置，**不会启用 arm64 模拟，也不会将模拟器升级为对应版本的 iOS**。宽屏和高清资源能否启用，取决于具体 IPA 版本及游戏实现。
 
-## Platform support
+| 重点适配游戏 | UF 分支的适配内容 |
+| --- | --- |
+| 怪物猎人 Portable 2nd G（P2G） | Retina、角色命名输入、存档相关兼容、原生手柄、可选扩展视野、音乐循环 |
+| Grand Theft Auto: Vice City | OpenGL ES 2.0、1.4 版本兼容、分辨率适配、音频、原生手柄及退出处理 |
+| Inotia 1 / 2 | 游戏运行所需的兼容修复 |
+| Resident Evil Mercenaries VS. | 游戏运行、角色渲染及退出相关修复 |
+| Dead Rising Mobile | 游戏运行及渲染相关兼容修复 |
 
-* Officially supported: x64 Windows, x64 macOS and AArch64 Android.
-  * These are the platforms with binary releases.
-  * If you're an Apple Silicon Mac user, the x64 build reportedly works in Rosetta.
-* Probably works, but you must build it yourself: AArch64 macOS, x64 Linux, AArch64 Linux.
-* Never?: other architectures.
+同名游戏的不同版本、语言包或修改包可能有不同表现。上述列表不表示所有流程、联网功能和所有设备均已验证。上游的 [应用兼容数据库](https://appdb.touchhle.org/) 可作参考，但不会完整反映本分支的新增适配。
 
-Input methods:
+## 下载与安装
 
-- For simulated touch input, there are four options:
-  - Mouse/trackpad input (tap/hold/drag by pressing the left mouse button)
-  - Virtual cursor using a game controller (move the cursor with the right analog stick, and tap/hold/drag by pressing the stick or the right shoulder button)
-  - Mapping of game controller buttons or the left analog stick to specific on-screen locations (see the descriptions of `--button-to-touch=`, `--dpad-to-touch=` and `--stick-to-touch=` in `OPTIONS_HELP.txt`)
-  - Real touch input, if you're on a device that has a touch screen
-- For simulated accelerometer input, there are three options:
-  - Tilt control simulation using the left analog stick of a game controller
-  - Tilt control simulation using a mouse (hold down the right mouse button)
-  - Real accelerometer input, if you are using a phone, tablet or some other device with a built-in accelerometer (TODO: support game controllers with accelerometers)
+从本仓库 [Releases](https://github.com/shawnw67/UFtouchHLE/releases) 下载对应平台的包：
 
-## Development status
+| 平台 | 包名（以 v0.3.21 为例） |
+| --- | --- |
+| Android ARM64 | `UFtouchHLE_v0.3.21_Android_AArch64.apk` |
+| macOS Intel x86_64 | `UFtouchHLE_v0.3.21_macOS_x86_64.dmg` |
+| Windows x86_64 | `UFtouchHLE_v0.3.21_Windows_x86_64.zip` |
 
-This project has been in development since December 2022. This was originally [hikari\_no\_yume](https://hikari.noyu.me/)'s full-time passion project. Since its release in February 2023, a number of other volunteers have also [contributed in their free time](https://github.com/touchHLE/touchHLE/graphs/contributors), and this is no longer a single-person project. There's only been a handful of releases so far and no promises can be made about the future. Please be patient.
+Apple Silicon Mac 可通过 Rosetta 运行发布的 x86_64 版本，也可自行编译 ARM64 版本。Linux 需要自行编译。
 
-In general, the supported functionality is defined by the supported apps: most contributors are interested in getting a particular game working, and contribute support for whichever missing features are needed for that game. Consequently, the completeness varies a lot between APIs, e.g. UIKit is easily the most hacky and incomplete of the large frameworks that have been implemented, because most games don't use very much of its functionality, whereas the OpenGL ES and OpenAL implementations are probably complete enough to cover a large number of early apps, because games make heavy use of these.
+项目不提供游戏 IPA。请自行准备合法取得且可用于模拟的已解密应用；发行包不包含游戏文件。
 
-# Usage
+### Android
 
-First obtain touchHLE, either a [binary release](https://github.com/touchHLE/touchHLE/releases) or by building it yourself (see the next section).
+1. 安装 APK 并打开应用。
+2. 点击“导入游戏”，选择 `.ipa` 文件。
+3. 在列表中点击游戏启动，长按游戏可打开管理菜单。
+4. 通过设置图标调整全局选项，或长按游戏单独选择模拟机型。
 
-You'll then need an app that you can run. The [app compatibility database](https://appdb.touchhle.org/) is a good guide for which versions of which apps are known to work, but bear in mind that it may contain outdated or inaccurate information. Note that the app binary must be decrypted to be usable.
+UF 版包名为 `org.touchhleuf.android`，数据目录为：
 
-There's a few ways you can run an app in touchHLE.
+```text
+/storage/emulated/0/Android/data/org.touchhleuf.android/files/
+```
 
-## Special Android notes
+常用子目录：
 
-Windows, Mac and Linux users can skip this section.
+```text
+touchHLE_apps/          游戏文件
+touchHLE_sandbox/       游戏沙盒与存档
+touchHLE_save_exports/  存档导出目录（选择应用内目录导出时）
+touchHLE_save_backups/  导入前备份的旧存档
+```
 
-On Android, only the graphical user interface (app picker) is available. Therefore, you must put your “.ipa” files or “.app” bundles inside the “touchHLE\_apps” directory. Note that you can only do that once you have run touchHLE at least once.
+较新的 Android 系统可能限制文件管理器访问 `Android/data`，优先使用启动器的导入、导出功能。UF 版与上游版使用不同包名，存档需要自行迁移。
 
-File management can be tricky on Android due to [restrictions introduced by Google in newer Android versions](https://developer.android.com/about/versions/11/privacy/storage#scoped-storage). One of these methods may work:
+“允许游戏联网”控制被模拟游戏的网络访问；“自动检查更新”是独立设置。检测到新发行版后，可打开对应下载页面。
 
-* If you tap the “File manager” button in touchHLE, this should open some sort of file manager. You might also be able to find touchHLE in your device's file manager app (often called “Files”, or sometimes “Downloads”), alongside cloud storage services. There are some limitations on what kinds of operations are possible. The files in this location are stored on your device. Warning: on some devices, the “File manager” button _will_ open a file manager, but it will crash when actually doing file operations (this is probably a bug in Android, we have not been able to debug it). If this happens to you, clear that file manager from your recent apps list and try to navigate to your device's file manager app directly instead, rather than via the touchHLE UI.
-* If you have an older version of Android, you may be able to directly access touchHLE's files by browsing to `/sdcard/Android/data/org.touchhle.android/files/touchHLE_apps`. Note that the `/sdcard` directory is usually not on the SD card.
-* You may be able to use ADB. If you're unfamiliar with ADB, try using <https://yume-chan.github.io/ya-webadb/> (in Google Chrome or another browser with WebUSB) with your device connected over USB. touchHLE's files can be found in “sdcard” > “Android” > “data” > “org.touchhle.android” > “files” > “touchHLE\_apps”.
+### Windows / macOS
 
-## Graphical user interface
+打开发布包中的应用，将 `.ipa` 或 `.app` 放入 `touchHLE_apps` 目录后，通过内置游戏选择器运行。Windows 请先完整解压 ZIP，保留附带的字体、动态库和配置文件。
 
-touchHLE has a built-in app picker. If you put your `.ipa` files and `.app` bundles in the `touchHLE_apps` directory, they will show up in the app picker when you run touchHLE.
+也可以在终端指定游戏路径：
 
-To configure the options, you can edit the `touchHLE_options.txt` file. To get a list of options, look in the `OPTIONS_HELP.txt` file.
+```powershell
+# Windows
+.\touchHLE.exe "路径\游戏.ipa"
+```
 
-## Command-line user interface
+```sh
+# macOS：在包含 touchHLE 可执行文件和配套资源的目录中运行
+./touchHLE "路径/游戏.ipa"
+```
 
-**This section does not apply on Android.**
+更多参数见 [OPTIONS_HELP.txt](OPTIONS_HELP.txt)，目录安排及构建方式见 [构建文档](dev-docs/building.md)。
 
-You can see the command-line usage by passing the `--help` flag.
+## 存档迁移
 
-If you're a Windows user and unfamiliar with the command line, these instructions may help you get started:
+Android 启动器中长按游戏，选择“导出存档”生成 ZIP。在另一台设备导入同一游戏后，长按游戏选择“导入存档”，再选择该 ZIP。
 
-1. Move the `.ipa` file or `.app` bundle to the same folder as `touchHLE.exe`.
-2. Hold the Shift key and right-click on the empty space in the folder window.
-3. Click “Open with PowerShell”.
-4. Type `.\touchHLE.exe "YourAppNameHere.ipa"` (or `.app` as appropriate) and press Enter. If you want to specify options, add a space after the app name (outside the quotes) and then type the options, separated by spaces.
+导入时已有存档会先移入 `touchHLE_save_backups`。迁移时尽量使用相同游戏版本及相同 Bundle ID；不同地区或版本的存档不保证通用。存档 ZIP 不包含游戏本体。
 
-## Local multiplayer support
+桌面版游戏数据保存在 `touchHLE_sandbox` 中。手动迁移前请退出游戏并备份原目录。
 
-touchHLE provides limited support for local multiplayer via Wi-Fi in some games. At the moment of writing it is supported in Asphalt 4 and N.O.V.A.
+## 模拟机型与画面设置
 
-Real iOS devices could also join/host games!
+Android 设置支持全局选择“自动”或指定机型，也可以长按游戏单独设置。当前配置包括：
 
-**Usage:**
-1. Install touchHLE on 2+ devices connected to the same Wi-Fi network.
-2. **Important:** Ensure touchHLE is whitelisted in your OS firewall/network settings.
-3. Enable "Network access" in Quick options or via `--allow-network-access`.
-4. Start/join multiplayer in the game.
+| 机型 | 横屏像素尺寸 |
+| --- | --- |
+| iPhone 3GS | 480 × 320 |
+| iPhone 4 / 4S | 960 × 640 |
+| iPhone 5 / 5s | 1136 × 640 |
+| iPhone 6 | 1334 × 750 |
+| iPhone 6 Plus | 2208 × 1242 |
+| iPad 2 | 1024 × 768 |
+| iPad Retina | 2048 × 1536 |
 
-**FAQs:**
-* **Tunneling over Internet/VPN:** Not officially supported, but might work.
-* **Bluetooth:** Not supported.
+这些是模拟屏幕配置，实际游戏渲染尺寸可能不同；不支持对应屏幕的游戏会使用兼容尺寸。更高分辨率会增加渲染开销，也不会增加 IPA 中没有的纹理资源。
 
-**Known issues:**
-* On macOS you may need to launch touchHLE from terminal as otherwise OS will block network connections.
+`touchHLE_default_options.txt` 的游戏默认配置和 `touchHLE_options.txt` 的自定义参数仍然生效，启动器传入的机型选择也会参与最终配置。请以启动日志中的 `Device:` 信息为准。
 
-## Other stuff
+P2G 的扩展视野可在长按菜单的“画面与按键布局”中选择，通过扩展视野利用更宽的屏幕，并将触控操作区保持在中间。遇到画面或操作异常时可切回默认布局。
 
-Any data saved by the app (e.g. **saved games**) are stored in the `touchHLE_sandbox` folder.
+## 手柄
 
-If the emulator crashes almost immediately while running a **known-working** version of a game, please check whether you have any overlays turned on like the Steam overlay, Discord overlay, RivaTuner Statistics Server, etc. Sadly, as useful as these tools are, they work by injecting themselves into other apps or games and don't always clean up after themselves, so they can break touchHLE… it's not our fault. 😢 Currently only RivaTuner Statistics Server is known to be a problem. If you find another overlay that doesn't work, please tell us about it.
+通过蓝牙或 USB 将手柄连接到运行模拟器的设备，再启动游戏。已用实际手柄验证 P2G 和罪恶都市原生输入；其他蓝牙或有线手柄取决于系统及 SDL 是否能正确识别其按键和轴。
 
-# Building and contributing
+### P2G：Xbox / 标准布局
 
-See the `CONTRIBUTING.md` file in the git repo if you want to contribute. If you just want build touchHLE, look at `dev-docs/building.md`.
+| 按键 | 游戏操作 |
+| --- | --- |
+| 左摇杆 | 移动 |
+| 右摇杆 | 镜头 |
+| A | 回避（对应 ×） |
+| B | 攻击／互动；收武器后采集、剥取（对应 ○） |
+| X | 收武器／使用道具（对应 □） |
+| Y | 攻击（对应 △） |
+| LB | L 键：镜头归位及组合操作 |
+| RB | R 键：奔跑及武器相关动作 |
+| LT | Select |
+| RT | Start |
 
-# License
+推满左摇杆是普通移动，奔跑需配合 RB。具体动作随武器和当前状态变化，采集、剥取前通常需要先用 X 收武器。
 
-touchHLE © 2023–2026 touchHLE project contributors.
+### 罪恶都市
 
-The source code of touchHLE itself (not its dependencies) is licensed under the Mozilla Public License, version 2.0.
+支持游戏原生手柄路径，左摇杆控制移动，右摇杆控制镜头。其余操作随步行、驾驶等状态变化，以游戏提示为准。支持方向键下 + B 打开地图、方向键上 + B 切换镜头。
 
-Due to license compatibility concerns, binaries are under the GNU General Public License version 3 or later.
+其他未使用原生手柄接口的游戏，可以使用触屏映射、虚拟光标或倾斜控制映射，参数见 [OPTIONS_HELP.txt](OPTIONS_HELP.txt)。
 
-For a best effort listing of all licenses of dependencies, build touchHLE and pass the `--copyright` flag when running it, or click the “Copyright info” button in the app picker.
+## 问题反馈
 
-Please note that different licensing terms apply to the bundled dynamic libraries (in `touchHLE_dylibs/`) and fonts (in `touchHLE_fonts/`). Please consult the respective directories for more information.
+请向 [本仓库 Issues](https://github.com/shawnw67/UFtouchHLE/issues) 提供：
 
-# Thanks
+- UFtouchHLE 版本、设备型号和系统版本。
+- 游戏名称、版本、Bundle ID，以及模拟机型和画面布局。
+- 复现步骤、`touchHLE_log.txt`，必要时附上 `touchHLE_log_previous.txt`。
+- 画面问题附截图，手柄问题附型号及蓝牙／USB 连接方式。
 
-We stand on the shoulders of giants. Thank you to:
+Android 启动器可查看、分享运行日志；罪恶都市还提供性能和声音对比测试入口。
 
-* Everyone who has contributed to the project or supported any of its contributors financially.
-* The authors of and contributors to the many libraries used by this project: [dynarmic](https://github.com/merryhime/dynarmic), [rust-macho](https://github.com/flier/rust-macho), [SDL](https://libsdl.org/), [rust-sdl2](https://github.com/Rust-SDL2/rust-sdl2), [stb\_image](https://github.com/nothings/stb), Imagination Technologies' [PVRTC decompressor](https://github.com/powervr-graphics/Native_SDK/blob/master/framework/PVRCore/texture/PVRTDecompress.cpp), [openal-soft](https://github.com/kcat/openal-soft), [hound](https://github.com/ruuda/hound), [Symphonia](https://github.com/pdeljanov/Symphonia), [RustType](https://gitlab.redox-os.org/redox-os/rusttype), [the Liberation fonts](https://github.com/liberationfonts/liberation-fonts), [the Noto CJK fonts](https://github.com/googlefonts/noto-cjk), [rust-plist](https://github.com/ebarnard/rust-plist), [nibarchive](https://github.com/michaelwright235/nibarchive), [quick-xml](https://github.com/tafia/quick-xml), [gl-rs](https://github.com/brendanzab/gl-rs), [cargo-license](https://github.com/onur/cargo-license), [cc-rs](https://github.com/rust-lang/cc-rs), [cmake-rs](https://github.com/rust-lang/cmake-rs), [cargo-ndk](https://github.com/bbqsrc/cargo-ndk), [cargo-ndk-android-gradle](https://github.com/willir/cargo-ndk-android-gradle), [md-5 and sha1](https://github.com/RustCrypto/hashes), [encoding_rs](https://github.com/hsivonen/encoding_rs), [corosensei](https://github.com/Amanieu/corosensei), [uuid](https://github.com/uuid-rs/uuid) and the Rust standard library.
-* The Skyline emulator project (RIP), for [writing the tedious boilerplate needed to replace file management on newer Android versions](https://github.com/skyline-emu/skyline/blob/dc20a615275f66bee20a4fd851ef0231daca4f14/app/src/main/java/emu/skyline/provider/DocumentsProvider.kt).
-* The [Rust project](https://www.rust-lang.org/) generally.
-* The various people out there who've documented the iOS platform, officially or otherwise. Much of this documentation is linked to within this codebase!
-* The iOS hacking/jailbreaking community.
-* The Free Software Foundation, for making libgcc and libstdc++ copyleft and therefore saving this project from ABI hell.
-* The National Security Agency of the United States of America, for [Ghidra](https://ghidra-sre.org/).
-* [GerritForge](http://www.gerritforge.com/) for providing free Gerrit hosting to the general public, including us.
-* The many contributors to [Gerrit](https://www.gerritcodereview.com/).
-* Many friends who took an interest in the project and gave suggestions and encouragement.
-* Developers of early iOS apps. What treasures you created!
-* Apple, and NeXT before them, for creating such fantastic platforms.
+## 构建与开发
+
+依赖安装及完整流程见 [dev-docs/building.md](dev-docs/building.md)。获取本分支源码：
+
+```sh
+git clone --recurse-submodules https://github.com/shawnw67/UFtouchHLE.git
+cd UFtouchHLE
+```
+
+macOS 本地编译与测试：
+
+```sh
+export CMAKE_POLICY_VERSION_MINIMUM=3.5
+cargo build --release
+cargo test --release --lib
+python3 dev-scripts/macos-integration-tests.py
+```
+
+准备好 Android SDK、NDK、Rust 目标及 Gradle 后，可运行签名脚本：
+
+```sh
+dev-scripts/build-android-uf.sh /path/to/your.keystore
+```
+
+脚本交互式询问签名密码。请使用自己的密钥；覆盖安装已有发行版需要相同包名和签名证书。
+
+版本 tag 的三平台 CI 构建成功后，自动将 `UFtouchHLE_版本_平台` 包上传到对应 Release 草稿，由维护者审核、填写英文说明并手动发布。
+
+本分支包含 AI 辅助代码。上游 touchHLE 不接受 AI 生成的代码，请勿将本分支代码作为贡献提交到上游。本分支的修改和讨论请留在本仓库。
+
+## 许可证与致谢
+
+touchHLE © 2023–2026 touchHLE project contributors。本分支保留上游及各依赖的版权与许可证声明。
+
+touchHLE 自身源码采用 **Mozilla Public License 2.0**；由于依赖的许可证兼容要求，发行二进制采用 **GNU GPL v3 或更高版本**。附带动态库和字体的条款分别见 [touchHLE_dylibs](touchHLE_dylibs/) 和 [touchHLE_fonts](touchHLE_fonts/)。完整依赖版权信息可在应用设置或通过 `--copyright` 参数查看。
+
+感谢 [上游 touchHLE 及贡献者](https://github.com/touchHLE/touchHLE/graphs/contributors)、dynarmic、SDL、OpenAL Soft、Symphonia、Rust 生态及所有相关开源项目，也感谢协助测试、反馈问题的用户。
+
+本项目与 Apple Inc. 无关联，也未获其背书。iPhone、iOS、iPod touch 和 iPad 等名称属于其各自权利人。请仅运行合法取得的软件。
