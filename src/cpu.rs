@@ -19,11 +19,24 @@ use touchHLE_dynarmic_wrapper::*;
 type VAddr = u32;
 pub type CpuContext = touchHLE_DynarmicContext;
 
+/// MHP2G save-analysis: module-level capture logs shared by the read/write
+/// hooks and the dump helper (read hook + write hook are in different fns).
+static MHP2G_RLOG: std::sync::Mutex<Vec<(u32, u32)>> = std::sync::Mutex::new(Vec::new());
+static MHP2G_WLOG: std::sync::Mutex<Vec<(u32, u32)>> = std::sync::Mutex::new(Vec::new());
+static MHP2G_RLOG_C: std::sync::Mutex<Vec<(u32, u32)>> = std::sync::Mutex::new(Vec::new());
+static MHP2G_WLOG_C: std::sync::Mutex<Vec<(u32, u32)>> = std::sync::Mutex::new(Vec::new());
+
 fn touchHLE_cpu_read_impl<T: SafeRead + Default>(
     mem: *mut touchHLE_Mem,
     addr: VAddr,
     error: *mut bool,
 ) -> T {
+    // MHP2G save-analysis hook: trace reads from the plaintext buffer
+    // (0x345dae0..0x3560a20). The inner-encryption routine reads plaintext
+    // here and writes ciphertext to 0x313f6000; the read order reveals
+    // whether a permutation is applied. Debug-only instrumentation.
+    const RTARGET_LO: VAddr = 0x345dae0;
+    const RTARGET_HI: VAddr = 0x3560a20;
     // If a panic occurs (probably due to a null-pointer access), we can't let
     // it keep unwinding as it will hit non-Rust stack frames (dynarmic).
     // Instead we catch the unwind and then tell the C++ code a problem occurred
@@ -45,10 +58,78 @@ fn touchHLE_cpu_read_impl<T: SafeRead + Default>(
     unsafe {
         error.write(res.is_err());
     }
-    res.unwrap_or_default()
+    let value = res.unwrap_or_default();
+    if addr >= RTARGET_LO && addr < RTARGET_HI {
+        unsafe {
+            let mut log = MHP2G_RLOG.lock().unwrap();
+            if log.len() < 2000000 {
+                let vbytes = std::slice::from_raw_parts(
+                    (&value as *const T) as *const u8,
+                    std::mem::size_of::<T>(),
+                );
+                let mut v32 = 0u32;
+                for (i, b) in vbytes.iter().enumerate().take(4) {
+                    v32 |= (*b as u32) << (8 * i);
+                }
+                log.push((addr, v32));
+            }
+        }
+    } else if addr >= 0x313f0000 && addr < 0x31570000 {
+        unsafe {
+            let mut log = MHP2G_RLOG_C.lock().unwrap();
+            if log.len() < 3000000 {
+                let vbytes = std::slice::from_raw_parts(
+                    (&value as *const T) as *const u8,
+                    std::mem::size_of::<T>(),
+                );
+                let mut v32 = 0u32;
+                for (i, b) in vbytes.iter().enumerate().take(4) {
+                    v32 |= (*b as u32) << (8 * i);
+                }
+                log.push((addr, v32));
+            }
+        }
+    }
+    value
 }
 
 fn touchHLE_cpu_write_impl<T: SafeWrite>(mem: *mut touchHLE_Mem, addr: VAddr, value: T) -> bool {
+    // MHP2G save-analysis hook: trace writes into the inner-cipher output
+    // buffer (0x313f6000..0x31561000 + ciphertext staging) and the main
+    // save buffer (0x345dae0..0x3560a20). Debug-only instrumentation.
+    const WTARGETS: [(VAddr, VAddr); 2] = [(0x313f0000, 0x31570000), (0x345dae0, 0x3560a20)];
+    let mut hit = false;
+    for (lo, hi) in WTARGETS {
+        if addr >= lo && addr < hi {
+            hit = true;
+            break;
+        }
+    }
+    if hit {
+        unsafe {
+            // Split logs: main plaintext buffer writes vs ciphertext staging.
+            let main = addr >= 0x345dae0 && addr < 0x3560a20;
+            let vbytes = std::slice::from_raw_parts(
+                (&value as *const T) as *const u8,
+                std::mem::size_of::<T>(),
+            );
+            let mut v32 = 0u32;
+            for (i, b) in vbytes.iter().enumerate().take(4) {
+                v32 |= (*b as u32) << (8 * i);
+            }
+            if main {
+                let mut log = MHP2G_WLOG.lock().unwrap();
+                if log.len() < 2000000 {
+                    log.push((addr, v32));
+                }
+            } else {
+                let mut log = MHP2G_WLOG_C.lock().unwrap();
+                if log.len() < 3000000 {
+                    log.push((addr, v32));
+                }
+            }
+        }
+    }
     // See comments above about catch_unwind
     let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mem = unsafe { &mut *mem.cast::<Mem>() };
@@ -298,5 +379,47 @@ impl Cpu {
             _ if res < -4 => panic!("Unexpected CPU execution result"),
             svc => CpuState::Svc(svc as u32),
         }
+    }
+}
+
+/// MHP2G save-analysis helper: clear the capture logs. Called just before
+/// the inner-encryption window so the logs contain only cipher operations.
+pub fn clear_mhp2g_logs() {
+    MHP2G_WLOG.lock().unwrap().clear();
+    MHP2G_RLOG.lock().unwrap().clear();
+    MHP2G_WLOG_C.lock().unwrap().clear();
+    MHP2G_RLOG_C.lock().unwrap().clear();
+    log!("[WRITEHOOK] cleared read/write logs for cipher window");
+}
+
+/// MHP2G save-analysis helper: dump the captured inner-cipher read/write
+/// logs to files. Called from the save-write path after CCCrypt.
+pub fn dump_mhp2g_write_log() {
+    let dump = |path: &str, log: &Vec<(u32, u32)>| {
+        let mut out = String::new();
+        for (i, (a, v)) in log.iter().enumerate() {
+            out.push_str(&format!("{i} {a:x} {v:08x}\n"));
+        }
+        let _ = std::fs::write(path, out);
+    };
+    {
+        let wlog = MHP2G_WLOG.lock().unwrap();
+        dump("/tmp/touchhle_dump/inner_cipher_writes.txt", &wlog);
+        log!("[WRITEHOOK] dumped {} main-buffer write entries", wlog.len());
+    }
+    {
+        let rlog = MHP2G_RLOG.lock().unwrap();
+        dump("/tmp/touchhle_dump/inner_cipher_reads.txt", &rlog);
+        log!("[WRITEHOOK] dumped {} main-buffer read entries", rlog.len());
+    }
+    {
+        let wlog = MHP2G_WLOG_C.lock().unwrap();
+        dump("/tmp/touchhle_dump/inner_cipher_writes_313f.txt", &wlog);
+        log!("[WRITEHOOK] dumped {} 0x313f write entries", wlog.len());
+    }
+    {
+        let rlog = MHP2G_RLOG_C.lock().unwrap();
+        dump("/tmp/touchhle_dump/inner_cipher_reads_313f.txt", &rlog);
+        log!("[WRITEHOOK] dumped {} 0x313f read entries", rlog.len());
     }
 }

@@ -234,7 +234,8 @@ public:
     user_config.global_monitor = mon.get();
     // TODO: only do this in debug builds? it's probably expensive
     user_config.check_halt_on_memory_access = true;
-    if (direct_memory_access_ptr) {
+    const char *no_fastmem = getenv("MHP2G_NO_FASTMEM");
+    if (direct_memory_access_ptr && !(no_fastmem && no_fastmem[0] == '1')) {
       // Allow fast accesses to all pages other than the null page, which will
       // fall back to a memory callback, which will then abort execution.
       // TODO: Eventually we should use dynarmic's true fastmem mode, but that
@@ -254,6 +255,8 @@ public:
       }
       user_config.page_table = &page_table;
       user_config.absolute_offset_page_table = true;
+    } else if (no_fastmem && no_fastmem[0] == '1') {
+      printf("[MHP2G] fastmem disabled for write tracing\n");
     }
     cpu = std::make_unique<Dynarmic::A32::Jit>(user_config);
     env.cpu = cpu.get();

@@ -1,0 +1,88 @@
+# PSP_IOS_FORMAT_COMPARISON.md - PSP vs iOS MHP2G save format comparison
+
+> Status: partial. PSP fully solved; iOS outer solved, inner pending. Field mapping table is incomplete by design - only facts with evidence are listed.
+
+---
+
+## 1. Overview
+
+| Aspect | PSP (MHP2G JP) | iOS (MHP2G JP, touchHLE) |
+|---|---|---|
+| Sample | k73.com save | touchHLE sandbox savedata.dat |
+| File | ULUS10391/PARAM.SFO + save data | single savedata.dat |
+| File size | 1,483,004B (decrypted) | 1,483,024B (outer ciphertext) / 1,483,008B (inner) |
+| Outer crypto | KIRK AES-128-CBC (system layer) | CCCrypt AES-128-CBC (key/iv fixed, see IOS_SAVE_DYNAMIC_ANALYSIS.md) |
+| Inner crypto | Capcom table perm + LCG | NOT DETERMINED |
+| Checksum | tail 20B = SHA1(data[:-12] + salt "S)R?Bf8xW3#5h9lGU8wR") | tail has 20B suspected checksum (unverified algorithm) |
+| Version header | 00 03 07 07 | 00 01 04 04 |
+| Zero ratio | 98.44% | 99.94% |
+
+---
+
+## 2. Crypto layers (verified facts)
+
+### PSP (fully solved)
+- System layer: KIRK AES-128-CBC; game key JP = cd1f2059ae70ef68dca24513b45adb0a
+- Game layer: table permutation + LCG
+  - encrypt: c[i] = T1[ T1[p[i]] XOR beta[i] ]
+  - decrypt: p[i] = T2[ T2[c[i]] XOR beta[i] ]
+  - beta[i] = lower[i] + (upper[i] << 16)
+  - lower = (lower * 0x215F) % 0xFF8F
+  - upper = (upper * 0xDFA3) % 0xFFEF
+  - seed = last 4B, permuted twice through T2 table
+- SHA1 over data[:-12] + salt, stored in last 20B
+- Verified: k73 save SHA1 exactly matches; 370751/370751 blocks decrypt correctly; zero ratio 98.44%
+
+### iOS (outer solved, inner pending)
+- Outer: CCCrypt AES-128-CBC, key = ls6([f$]=~I(nf28 (hex 6c7336285b66245d3d7e49286e663238), iv = ;lknc(;f_wnX98<if (hex 3b6c6b6e63283b665f776e5839383c69)
+- Outer verified: encrypt(cccrypt_plain.bin) == savedata_write_stream.bin
+- Inner ciphertext = 1,483,008B; inner plaintext 99.94% zero; keystream = plaintext XOR inner ciphertext
+- Keystream upper16 fixed, lower16 seeded with 9346-period component
+- PSP inner scheme (table perm + LCG with PSP params) DISPROVEN on iOS inner
+
+---
+
+## 3. Structural comparison (confirmed fields only)
+
+| Field | PSP offset (k73) | iOS offset | Status |
+|---|---|---|---|
+| version header | 0x0000: 00 03 07 07 | 0x0000: 00 01 04 04 | CONFIRMED different |
+| character name | present (UTF-16, found in plaintext) | 0x1000: UTF-16 "111" | CONFIRMED location on iOS, PSP offset TBD |
+| quest name ref | m60038.mib @ 0x148b00 | not found in same layout | PSP-specific |
+| tail seed (4B) | last 4B (permuted via T2) | inner ciphertext last 4B: upper 0x7777 fixed + lower varying | CONFIRMED seed-like on iOS, algorithm TBD |
+| checksum (20B) | SHA1(data[:-12]+salt) | @0x16a0e8+2: 20B, algorithm TBD | iOS unverified |
+
+---
+
+## 4. Known differences (do NOT copy fields blindly)
+
+1. **Size and layout**: PSP 1,483,004B vs iOS inner 1,483,008B - different offsets for the same logical fields are expected; byte-copy is invalid.
+2. **Version header** differs (00 03 07 07 vs 00 01 04 04): the game likely switches serialization layout by version.
+3. **Zero regions** differ (98.44% vs 99.94%): iOS plaintext is sparser; the iOS plaintext is built from a template (memcpy 2 from HaXe heap 426,044B onto offset 0x1000).
+4. **Seed handling**: PSP seed = tail 4B permuted via table; iOS seed-like region = tail 4B with fixed 0x7777 upper. Different derivation expected.
+5. **Checksum**: PSP SHA1+salt verified; iOS tail 20B may be SHA1 too but NOT verified - do not assume.
+
+---
+
+## 5. Field mapping table (to be completed)
+
+To be completed only with evidence from controlled 3-sample diff (see IOS_SAVE_DIFF_REPORT.md):
+- character: name, gender, appearance
+- playtime, zenny, resources
+- inventory (bag), box (warehouse)
+- equipment + upgrade states
+- skills
+- completed quests, unlock states
+- hunter rank progress
+- guild card
+- game settings
+
+Current blocker: iOS inner layer encryption/PRNG not determined + no controlled single-value-change sample, so no field offset can yet be cross-mapped to PSP with confidence.
+
+---
+
+## 6. Risks
+
+- Mapping by assumption (same layout as PSP) is explicitly rejected per task rules; all differences above prove layouts differ.
+- Unknown-field loss: converting unknown iOS fields to PSP (or vice versa) must produce a migration report, not silent truncation.
+- Version mismatch: PSP saves from non-JP regions (ULUS10391 uses a different KIRK key, already archived at /tmp/ulus10391.key) may use different game-layer tables - verify region before converting.
