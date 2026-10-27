@@ -8,6 +8,9 @@ on:
   create: # for tags
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -37,7 +40,7 @@ jobs:
         run: brew install boost
       - name: Try to get cached copy of cmake
         id: cache-cmake
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: vendor/cmake
           key: cmake_3_31_6_macos
@@ -56,7 +59,7 @@ jobs:
           CMAKE: ${{ github.workspace }}/vendor/cmake/bin/cmake
       - name: Try to get cached copy of LLVM
         id: cache-llvm
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: tests/llvm
           key: llvm_12_0_0_macOS_x64
@@ -82,11 +85,24 @@ jobs:
         env:
           CMAKE: ${{ github.workspace }}/vendor/cmake/bin/cmake
       - name: Create .app bundle
-        run: cd dev-scripts && ./make-macos-bundle.sh ../target/x86_64-apple-darwin/release/touchHLE "`cargo run --package touchHLE_version`" "`cargo run --package touchHLE_version -- --branding`" && mkdir touchHLE-dmg-src && mv *.app touchHLE-dmg-src/ && hdiutil create -volname touchHLE -srcfolder touchHLE-dmg-src touchHLE.dmg && mv touchHLE.dmg ..
+        id: package
+        shell: bash
+        run: |
+          version="$(cargo run -q --package touchHLE_version)"
+          branding="$(cargo run -q --package touchHLE_version -- --branding)"
+          asset="UFtouchHLE_${version}_macOS_x86_64.dmg"
+          cd dev-scripts
+          ./make-macos-bundle.sh ../target/x86_64-apple-darwin/release/touchHLE "$version" "$branding"
+          mkdir UFtouchHLE-dmg-src
+          mv -- *.app UFtouchHLE-dmg-src/
+          hdiutil create -volname UFtouchHLE -srcfolder UFtouchHLE-dmg-src "$GITHUB_WORKSPACE/$asset"
+          echo "asset=$asset" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         with:
-          name: touchHLE_macOS_x86_64
-          path: touchHLE.dmg
+          name: ${{ steps.package.outputs.asset }}
+          path: ${{ steps.package.outputs.asset }}
+          if-no-files-found: error
+          compression-level: 0
       - uses: actions/upload-artifact@v4
         with:
           name: TestApp_built_on_macOS
@@ -113,7 +129,7 @@ jobs:
       run: git submodule update --init
     - name: Try to get cached copy of Boost
       id: cache-boost
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: vendor/boost
         key: boost_1_81_0
@@ -125,7 +141,7 @@ jobs:
       run: 7z -ovendor x boost_1_81_0.7z && mv vendor/boost_1_81_0 vendor/boost
     - name: Try to get cached copy of cmake
       id: cache-cmake
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: vendor/cmake
         key: cmake_3_31_6_linux
@@ -142,7 +158,7 @@ jobs:
     # Gradle version compatibility is a nightmare and we refuse to use gradlew.
     - name: Try to get a cached copy of Gradle
       id: cache-gradle
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: gradle
         key: gradle-8.11.1
@@ -155,7 +171,7 @@ jobs:
     # We need to install the correct version of Android NDK manually
     - name: Try to get a cached copy of Android NDK
       id: cache-android-ndk
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: android-ndk
         key: android-ndk-r25c
@@ -193,16 +209,26 @@ jobs:
         fi
     # Don't attempt to run tests (can't run on Android).
     - name: Build for Android
-      run: cd android && ../gradle/gradle-8.11.1/bin/gradle assembleRelease && mv app/build/outputs/apk/release/app-release.apk ../touchHLE.apk
+      run: cd android && ../gradle/gradle-8.11.1/bin/gradle assembleRelease
       env:
         # The version should match the ndkVersion defined in `android\app\build.gradle`
         ANDROID_NDK_ROOT: '/usr/local/lib/android/sdk/ndk/25.2.9519653'
         CMAKE: ${{ github.workspace }}/vendor/cmake/bin/cmake
         TOUCHHLE_KEYSTORE_PASSWORD: ${{ secrets.TOUCHHLE_KEYSTORE_PASSWORD }}
+    - name: Package APK
+      id: package
+      shell: bash
+      run: |
+        version="$(cargo run -q --package touchHLE_version)"
+        asset="UFtouchHLE_${version}_Android_AArch64.apk"
+        cp android/app/build/outputs/apk/release/app-release.apk "$asset"
+        echo "asset=$asset" >> "$GITHUB_OUTPUT"
     - uses: actions/upload-artifact@v4
       with:
-        name: touchHLE_Android_AArch64
-        path: touchHLE.apk
+        name: ${{ steps.package.outputs.asset }}
+        path: ${{ steps.package.outputs.asset }}
+        if-no-files-found: error
+        compression-level: 0
 
   build-win:
 
@@ -227,7 +253,7 @@ jobs:
       run: git submodule update --init
     - name: Try to get cached copy of Boost
       id: cache-boost
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: vendor\boost
         key: boost_1_81_0
@@ -239,7 +265,7 @@ jobs:
       run: 7z -ovendor x boost_1_81_0.7z && ren vendor\boost_1_81_0 boost
     - name: Try to get cached copy of cmake
       id: cache-cmake
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: vendor/cmake
         key: cmake_3_31_6_windows
@@ -259,7 +285,7 @@ jobs:
         CMAKE: ${{ github.workspace }}\vendor\cmake\bin\cmake
     - name: Try to get cached copy of LLVM
       id: cache-llvm
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: tests/llvm
         key: llvm_12_0_1_Windows_x64
@@ -281,13 +307,50 @@ jobs:
       env:
         CMAKE: ${{ github.workspace }}\vendor\cmake\bin\cmake
     - name: Create bundle
+      id: package
       shell: bash
-      run: cd dev-scripts && ./make-windows-bundle.sh ../target/release/touchHLE.exe && mv touchHLE_windows_bundle/ ..
+      run: |
+        version="$(cargo run -q --package touchHLE_version)"
+        asset="UFtouchHLE_${version}_Windows_x86_64.zip"
+        cd dev-scripts
+        ./make-windows-bundle.sh ../target/release/touchHLE.exe
+        cd touchHLE_windows_bundle
+        7z a -tzip "$GITHUB_WORKSPACE/$asset" .
+        echo "asset=$asset" >> "$GITHUB_OUTPUT"
     - uses: actions/upload-artifact@v4
       with:
-        name: touchHLE_Windows_x86_64
-        path: touchHLE_windows_bundle/
+        name: ${{ steps.package.outputs.asset }}
+        path: ${{ steps.package.outputs.asset }}
+        if-no-files-found: error
+        compression-level: 0
     - uses: actions/upload-artifact@v4
       with:
         name: TestApp_built_on_Windows
         path: tests/TestApp.app
+
+  upload-release-draft:
+    needs: [build-osx, build-android, build-win]
+    if: startsWith(github.ref, 'refs/tags/v') && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    concurrency:
+      group: release-draft-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Download release packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: UFtouchHLE_*
+          path: release-assets
+          merge-multiple: true
+      - name: Upload packages to release draft
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: bash dev-scripts/upload-release-draft.sh "$GITHUB_REF_NAME" release-assets

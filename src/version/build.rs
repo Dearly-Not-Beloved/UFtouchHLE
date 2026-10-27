@@ -20,7 +20,9 @@ pub fn main() {
     // Cargo.toml version. This is used in main.rs
 
     let toml_version = std::env::var("CARGO_PKG_VERSION").unwrap();
-    let version = Command::new("git").arg("describe").arg("--always").output();
+    let version = Command::new("git")
+        .args(["describe", "--tags", "--always"])
+        .output();
     let version = match version.as_ref() {
         Ok(version) if version.status.success() => {
             rerun_if_changed(&workspace_root.join(".git/HEAD"));

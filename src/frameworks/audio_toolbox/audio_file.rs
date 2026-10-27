@@ -471,42 +471,65 @@ fn AudioFileStreamOpen(
     kAudioFileUnspecifiedError
 }
 
-/// User data chunks (e.g. loop points in a `smpl` chunk) aren't supported, so
-/// files never have any.
 const kAudioFileInvalidChunkError: OSStatus = fourcc(b"chk?") as _;
 
 fn AudioFileGetUserDataSize(
     env: &mut Environment,
-    _audio_file: AudioFileID,
+    audio_file: AudioFileID,
     user_data_id: u32,
     index: u32,
     out_size: MutPtr<u32>,
 ) -> OSStatus {
+    let data = State::get(&mut env.framework_state)
+        .audio_files
+        .get(&audio_file)
+        .and_then(|file| file.audio_file.user_data(user_data_id, index));
     log_dbg!(
-        "AudioFileGetUserDataSize(_, {}, {}): no user data",
+        "AudioFileGetUserDataSize({:?}, {}, {}): {:?} bytes",
+        audio_file,
         debug_fourcc(user_data_id),
-        index
+        index,
+        data.map(|data| data.len())
     );
     if !out_size.is_null() {
-        env.mem.write(out_size, 0);
+        env.mem
+            .write(out_size, data.map_or(0, |data| data.len() as u32));
     }
-    kAudioFileInvalidChunkError
+    if data.is_some() {
+        0
+    } else {
+        kAudioFileInvalidChunkError
+    }
 }
 
 fn AudioFileGetUserData(
-    _env: &mut Environment,
-    _audio_file: AudioFileID,
+    env: &mut Environment,
+    audio_file: AudioFileID,
     user_data_id: u32,
     index: u32,
-    _io_size: MutPtr<u32>,
-    _out_data: MutVoidPtr,
+    io_size: MutPtr<u32>,
+    out_data: MutVoidPtr,
 ) -> OSStatus {
+    let Some(data) = State::get(&mut env.framework_state)
+        .audio_files
+        .get(&audio_file)
+        .and_then(|file| file.audio_file.user_data(user_data_id, index))
+    else {
+        return kAudioFileInvalidChunkError;
+    };
+    let count = (env.mem.read(io_size) as usize).min(data.len());
     log_dbg!(
-        "AudioFileGetUserData(_, {}, {}): no user data",
+        "AudioFileGetUserData({:?}, {}, {}): {} bytes",
+        audio_file,
         debug_fourcc(user_data_id),
-        index
+        index,
+        count
     );
-    kAudioFileInvalidChunkError
+    env.mem
+        .bytes_at_mut(out_data.cast(), count as u32)
+        .copy_from_slice(&data[..count]);
+    env.mem.write(io_size, count as u32);
+    0
 }
 
 pub const FUNCTIONS: FunctionExports = &[

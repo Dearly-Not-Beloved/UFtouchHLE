@@ -116,7 +116,7 @@ public class LauncherActivity extends Activity {
 
     /// The newest release of this fork, checked for updates.
     private static final String LATEST_RELEASE_URL =
-        "https://api.github.com/repos/wesleyicode/touchHLE/releases/latest";
+        "https://api.github.com/repos/shawnw67/UFtouchHLE/releases/latest";
     private static final String PREFS = "launcher";
     private static final String PREF_CHECK_UPDATES = "checkUpdates";
     private static final String PREF_IGNORED_VERSION = "ignoredUpdateVersion";

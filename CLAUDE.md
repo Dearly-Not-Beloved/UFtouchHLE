@@ -17,4 +17,8 @@ This is **touchHLE UF**, an unofficial fork of [touchHLE](https://github.com/tou
 
 ## Releases
 
-Push a tag `vX.Y.Z`, then run the "Build touchHLE" workflow on it. Rename the artifacts to `touchHLE_UF_vX.Y.Z_{Android_AArch64.apk,macOS_x86_64.dmg,Windows_x86_64.zip}` and create a GitHub release with English notes.
+Push a tag `vX.Y.Z`, then run the "Build touchHLE" workflow on it. Successful tag builds automatically upload `UFtouchHLE_vX.Y.Z_{Android_AArch64.apk,macOS_x86_64.dmg,Windows_x86_64.zip}` to a GitHub release draft. Existing draft notes are preserved; published releases are not modified. Review the packages and add English release notes before publishing.
+
+When the user asks for a release, commit and push the approved changes, push
+the version tag, and trigger CI. Stop after dispatch succeeds: the user handles
+build monitoring, draft review, release notes, and publishing.

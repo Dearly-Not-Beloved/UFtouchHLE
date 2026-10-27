@@ -241,6 +241,11 @@ fn ExtAudioFileSetProperty(
         .extended_audio_files
         .get_mut(&in_ext_audio_file)
         .unwrap();
+    // P2G reapplies the client format after seeking to its loop start. This
+    // must not reset the read position or discard already converted audio.
+    if host_object.client_data_format == Some(client_audio_desc) {
+        return 0;
+    }
     assert!(host_object.client_data_format.is_none());
     host_object.client_data_format = Some(client_audio_desc);
 
@@ -379,6 +384,11 @@ fn ExtAudioFileSeek(
 ) -> OSStatus {
     return_if_null!(in_ext_audio_file);
     let bytes_per_frame = client_data_format(env, in_ext_audio_file).bytes_per_frame;
+    log_dbg!(
+        "ExtAudioFileSeek({:?}, {})",
+        in_ext_audio_file,
+        in_frame_offset
+    );
     assert!(bytes_per_frame != 0, "TODO: seeking in a compressed file");
     State::get(&mut env.framework_state)
         .extended_audio_files

@@ -56,7 +56,37 @@ pub struct AudioDescription {
     pub bits_per_channel: u32,
 }
 
-pub struct AudioFile(AudioFileInner);
+pub struct AudioFile(AudioFileInner, Vec<(u32, Vec<u8>)>);
+
+/// Preserve CAF metadata verbatim. Chunk headers are big endian, but payloads
+/// are opaque to AudioFileGetUserData (some games write little-endian markers).
+fn caf_user_data(bytes: &[u8]) -> Vec<(u32, Vec<u8>)> {
+    let mut chunks = Vec::new();
+    if bytes.get(..8) != Some(b"caff\0\x01\0\0") {
+        return chunks;
+    }
+    let mut offset = 8;
+    while let Some(header) = bytes.get(offset..).and_then(|b| b.get(..12)) {
+        let id = u32::from_be_bytes(header[..4].try_into().unwrap());
+        let size = i64::from_be_bytes(header[4..].try_into().unwrap());
+        let Ok(size) = usize::try_from(size) else {
+            break; // A final data chunk may extend to EOF (size -1).
+        };
+        let start = offset + 12;
+        let Some(end) = start.checked_add(size) else {
+            break;
+        };
+        let Some(data) = bytes.get(start..end) else {
+            break;
+        };
+        // Audio data and padding aren't user metadata, and can be very large.
+        if !matches!(&header[..4], b"data" | b"free") {
+            chunks.push((id, data.to_vec()));
+        }
+        offset = end;
+    }
+    chunks
+}
 enum AudioFileInner {
     Wave(hound::WavReader<Cursor<Vec<u8>>>),
     Symphonia(symphonia_formats::SymphoniaDecodedToPcm),
@@ -85,6 +115,7 @@ impl AudioFile {
     }
 
     pub fn read_from_vec(bytes: Vec<u8>) -> Result<Self, AudioFileOpenError> {
+        let user_data = caf_user_data(&bytes);
         // WavReader::new() consume the reader (in this case, a Cursor)
         // passed to it. This is a bit annoying considering we don't know
         // which is appropriate for the file. This is worked around here by
@@ -92,13 +123,13 @@ impl AudioFile {
         // format, then recreating the reader if that works.
         if hound::WavReader::new(Cursor::new(&bytes)).is_ok() {
             let reader = hound::WavReader::new(Cursor::new(bytes)).unwrap();
-            Ok(AudioFile(AudioFileInner::Wave(reader)))
+            Ok(AudioFile(AudioFileInner::Wave(reader), user_data))
         // TODO: Real MP3/MP4/Non-linear PCM container handling. Currently we
         // are immediately decoding the entire file to PCM and acting as if
         // it's a PCM file, simply because because this is easier. Full MP3
         // support would require a lot of changes in Audio Toolbox.
         } else if let Ok(pcm) = symphonia_formats::decode_symphonia_to_pcm(Cursor::new(bytes)) {
-            Ok(AudioFile(AudioFileInner::Symphonia(pcm)))
+            Ok(AudioFile(AudioFileInner::Symphonia(pcm), user_data))
         } else {
             Err(AudioFileOpenError::FileDecodeError)
         }
@@ -148,6 +179,14 @@ impl AudioFile {
                 bits_per_channel: 16,
             },
         }
+    }
+
+    pub fn user_data(&self, id: u32, index: u32) -> Option<&[u8]> {
+        self.1
+            .iter()
+            .filter(|(chunk_id, _)| *chunk_id == id)
+            .nth(index as usize)
+            .map(|(_, data)| data.as_slice())
     }
 
     fn bytes_per_sample(&self) -> u64 {
@@ -272,3 +311,53 @@ impl AudioFile {
 pub mod sound_test;
 
 pub mod sound_trace;
+
+#[cfg(test)]
+mod metadata_tests {
+    use super::*;
+
+    fn chunk(file: &mut Vec<u8>, id: &[u8; 4], payload: &[u8]) {
+        file.extend_from_slice(id);
+        file.extend_from_slice(&(payload.len() as i64).to_be_bytes());
+        file.extend_from_slice(payload);
+    }
+
+    #[test]
+    fn caf_markers_survive_decoding_without_byte_swapping() {
+        let mut file = b"caff\0\x01\0\0".to_vec();
+        let mut description = 44100.0_f64.to_be_bytes().to_vec();
+        description.extend_from_slice(b"lpcm");
+        for value in [2_u32, 2, 1, 1, 16] {
+            description.extend_from_slice(&value.to_be_bytes());
+        }
+        chunk(&mut file, b"desc", &description);
+        let markers = b"\0\0\0\0\x03\0\0\0gbls\0\0\0\0\xd6\x44\x22\x41";
+        chunk(&mut file, b"mark", markers);
+        chunk(&mut file, b"free", &[0; 4]);
+        chunk(&mut file, b"mark", b"second");
+        chunk(&mut file, b"data", &[0; 8]);
+        let audio = AudioFile::read_from_vec(file).unwrap();
+        assert_eq!(
+            audio.user_data(u32::from_be_bytes(*b"mark"), 0),
+            Some(markers.as_slice())
+        );
+        assert_eq!(
+            audio.user_data(u32::from_be_bytes(*b"mark"), 1),
+            Some(b"second".as_slice())
+        );
+        assert_eq!(audio.user_data(u32::from_be_bytes(*b"mark"), 2), None);
+        assert_eq!(audio.user_data(u32::from_be_bytes(*b"data"), 0), None);
+        assert_eq!(audio.user_data(u32::from_be_bytes(*b"free"), 0), None);
+    }
+
+    #[test]
+    fn caf_metadata_handles_truncated_and_unbounded_chunks() {
+        for size in [i64::MAX, -2, -1, 10] {
+            let mut file = b"caff\0\x01\0\0mark".to_vec();
+            file.extend_from_slice(&size.to_be_bytes());
+            assert!(caf_user_data(&file).is_empty());
+        }
+        assert!(caf_user_data(b"RIFF\0\0\0\0WAVE").is_empty());
+        assert!(caf_user_data(b"caff\0\x01\0\0mar").is_empty());
+    }
+}

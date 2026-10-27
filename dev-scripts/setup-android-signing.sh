@@ -13,7 +13,7 @@ set -e
 #
 # Usage: dev-scripts/setup-android-signing.sh [owner/repo]
 
-REPO="${1:-wesleyicode/touchHLE}"
+REPO="${1:-shawnw67/UFtouchHLE}"
 KEYSTORE_DIR="$HOME/Documents/touchHLE-signing"
 KEYSTORE="$KEYSTORE_DIR/touchHLE_UF.keystore"
 KEYTOOL="${KEYTOOL:-/opt/homebrew/opt/openjdk@17/bin/keytool}"
