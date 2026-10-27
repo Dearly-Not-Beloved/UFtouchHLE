@@ -2,7 +2,7 @@
 
 [简体中文](README.md) | [English](README.en.md)
 
-**UFtouchHLE (named touchHLE UF in the app)** is an unofficial fork of [touchHLE](https://github.com/touchHLE/touchHLE), a high-level emulator for early iOS apps. This fork adds game-specific compatibility fixes, an Android launcher, save import/export, device profiles, and native controller support.
+**UFtouchHLE** is an unofficial fork of [touchHLE](https://github.com/touchHLE/touchHLE), a high-level emulator for early iOS apps. This fork adds game-specific compatibility fixes, an Android launcher, save import/export, device profiles, and native controller support.
 
 Maintained by [shawnw67](https://github.com/shawnw67). This fork includes AI-assisted code and is maintained independently of upstream touchHLE.
 

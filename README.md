@@ -2,7 +2,7 @@
 
 [简体中文](README.md) | [English](README.en.md)
 
-**UFtouchHLE（应用内名称：touchHLE UF）** 是 [touchHLE](https://github.com/touchHLE/touchHLE) 的非官方分支，面向早期 iOS 游戏，增加了特定游戏兼容修复、Android 启动器、存档导入导出、模拟机型选择及原生手柄支持。
+**UFtouchHLE** 是 [touchHLE](https://github.com/touchHLE/touchHLE) 的非官方分支，面向早期 iOS 游戏，增加了特定游戏兼容修复、Android 启动器、存档导入导出、模拟机型选择及原生手柄支持。
 
 本分支由 [shawnw67](https://github.com/shawnw67) 维护，包含 AI 辅助开发的代码，与上游 touchHLE 独立维护。
 

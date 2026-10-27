@@ -445,15 +445,7 @@ fn app_picker_inner(
         })];
         () = msg![env; main_view addSubview:icon_view];
 
-        let title = format!(
-            "touchHLE{}{}",
-            if crate::branding().is_empty() {
-                ""
-            } else {
-                " "
-            },
-            crate::branding()
-        );
+        let title = "UFtouchHLE".to_string();
         add_label(
             env,
             main_view,

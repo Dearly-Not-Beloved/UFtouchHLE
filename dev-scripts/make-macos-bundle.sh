@@ -11,12 +11,11 @@ if [[ $# == 3 ]]; then
     shift 3
 
     if [[ "x$BRANDING" == "x" ]]; then
-        APP_NAME=touchHLE
+        APP_NAME=UFtouchHLE
         ICON_NAME=icon
     else
-        APP_NAME="touchHLE $BRANDING"
+        APP_NAME=UFtouchHLE
         ICON_NAME="icon_$(echo "$BRANDING" | tr 'A-Z' 'a-z')"
-        VERSION="$VERSION $BRANDING"
     fi
     rm -rf "$ICON_NAME.icns" "$ICON_NAME.iconset"
     mkdir "$ICON_NAME.iconset"

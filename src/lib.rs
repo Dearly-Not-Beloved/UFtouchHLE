@@ -112,8 +112,8 @@ pub extern "C" fn SDL_main(
         })
         .collect();
     match main(args.into_iter()) {
-        Ok(_) => echo!("touchHLE finished"),
-        Err(e) => echo!("touchHLE errored: {e:?}"),
+        Ok(_) => echo!("UFtouchHLE finished"),
+        Err(e) => echo!("UFtouchHLE errored: {e:?}"),
     }
     0
 }
@@ -138,12 +138,7 @@ Special options:
 ";
 
 pub fn main<T: Iterator<Item = String>>(mut args: T) -> Result<(), String> {
-    echo!(
-        "touchHLE {}{}{} — https://touchhle.org/",
-        branding(),
-        if branding().is_empty() { "" } else { " " },
-        VERSION,
-    );
+    echo!("UFtouchHLE {} — https://touchhle.org/", VERSION);
     if GITHUB_RUN_ID.is_some() && !branding().is_empty() {
         echo!(
             "Built from branch {:?} of {:?} by GitHub Actions workflow run {}/{}/actions/runs/{}.",

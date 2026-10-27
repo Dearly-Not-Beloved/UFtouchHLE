@@ -54,11 +54,11 @@ android {
                 applicationIdSuffix = branding.lowercase()
             }
         }
-        resValue("string", "app_name", join("touchHLE", " ", branding))
-        buildConfigField("String", "APP_NAME", "\"${join("touchHLE", " ", branding)}\"")
+        resValue("string", "app_name", "UFtouchHLE")
+        buildConfigField("String", "APP_NAME", "\"UFtouchHLE\"")
         manifestPlaceholders["icon"] = join("@drawable/icon", "_", branding.lowercase())
         buildConfigField("int", "APP_ICON", join("R.drawable.icon", "_", branding.lowercase()))
-        versionName = join(getTouchHLEVersionName(), " ", branding)
+        versionName = getTouchHLEVersionName()
 
         minSdk = 21 // first version with AArch64
         targetSdk = 31

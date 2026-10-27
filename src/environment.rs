@@ -418,7 +418,7 @@ impl Environment {
 
             Some(Box::new(window::Window::new(
                 &format!(
-                    "{} (touchHLE {}{}{})",
+                    "{} (UFtouchHLE {})",
                     bundle.localized_display_name(
                         &fs,
                         &options
@@ -426,12 +426,6 @@ impl Environment {
                             .clone()
                             .unwrap_or_else(window::system_language_codes),
                     ),
-                    super::branding(),
-                    if super::branding().is_empty() {
-                        ""
-                    } else {
-                        " "
-                    },
                     super::VERSION
                 ),
                 icon.ok(),
@@ -831,16 +825,7 @@ impl Environment {
 
         assert!(!options.headless);
         let window = Some(Box::new(window::Window::new(
-            &format!(
-                "touchHLE {}{}{}",
-                super::branding(),
-                if super::branding().is_empty() {
-                    ""
-                } else {
-                    " "
-                },
-                super::VERSION
-            ),
+            &format!("UFtouchHLE {}", super::VERSION),
             Some(icon),
             launch_image,
             &mut options,

@@ -38,7 +38,7 @@ rm -rf app/build/intermediates/merged_jni_libs app/build/intermediates/merged_na
 "$GRADLE" assembleRelease -q
 
 VERSION="$(cd "$ROOT" && cargo run -q --package touchHLE_version)"
-OUT="$ROOT/touchHLE_UF_${VERSION}_Android.apk"
+OUT="$ROOT/UFtouchHLE_${VERSION}_Android.apk"
 cp app/build/outputs/apk/release/app-release.apk "$OUT"
 echo
 echo "Built $OUT"
