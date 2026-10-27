@@ -38,7 +38,12 @@ fun join(prefix: String, separator: String, branding: String): String {
 }
 
 android {
-    ndkVersion = "25.2.9519653"
+    // NDK r28+ links 64-bit ELF LOAD segments aligned to 16 KB by default,
+    // which is required on Android devices with a 16 KB page size. Older NDKs
+    // (e.g. r25) only produce 4 KB aligned libraries, which the OS refuses to
+    // load. 16 KB alignment for libtouchHLE.so/libSDL2.so is additionally
+    // enforced via the rustflags in .cargo/config.toml.
+    ndkVersion = "28.2.13676358"
     compileSdk = 31
     buildFeatures {
         buildConfig = true
@@ -132,6 +137,13 @@ android {
         tasks.named("merge${variantName}JniLibFolders").configure {
             dependsOn("buildCargoNdk${variantName}")
         }
+        // Patch the SDL2 source that the bundled rust-sdl2 build compiles (it
+        // comes from the cargo checkout of rust-sdl2, not vendor/SDL) before
+        // cargo-ndk builds, so the NDK r28+ obsoleted ALooper_pollAll call is
+        // replaced with ALooper_pollOnce.
+        tasks.named("buildCargoNdk${variantName}").configure {
+            dependsOn(patchSdlForNdk28)
+        }
     }
 
     sourceSets {
@@ -167,6 +179,13 @@ cargoNdk {
     extraCargoEnv = mapOf(
         "ANDROID_NDK" to android.ndkDirectory.toString(),
         "ANDROID_NDK_HOME" to android.ndkDirectory.toString(),
+        // NDK r28 marks some APIs as strict-availability errors for the app's
+        // minSdk. Defining __ANDROID_UNAVAILABLE_SYMBOLS_ARE_WEAK__ (see NDK's
+        // android/versioning.h) turns those into weak references, keeping
+        // SDL2 2.26 buildable. (The separately-patched ALooper_pollAll call,
+        // which uses the obsoleted= form that this flag does not affect, is
+        // handled by dev-scripts/patch-sdl-ndk28.sh.)
+        "CFLAGS_aarch64_linux_android" to "-D__ANDROID_UNAVAILABLE_SYMBOLS_ARE_WEAK__",
     )
 
     if (DefaultNativePlatform.host().operatingSystem.isWindows) {
@@ -201,6 +220,18 @@ cargoNdk {
         "--features",
         "touchHLE_openal_soft_wrapper/static,sdl2/bundled"
     )
+}
+
+// The bundled rust-sdl2 build compiles SDL 2.26 from the cargo checkout of the
+// rust-sdl2 dependency (sdl2-sys/SDL). That SDL calls ALooper_pollAll(), which
+// NDK r28+ declares with __REMOVED_IN(1,...) and therefore rejects as a hard
+// compile error. Patch the call site to ALooper_pollOnce (same signature, and
+// the replacement used by upstream SDL 2.28+) before cargo-ndk builds, so local
+// and CI builds are consistent. The script is idempotent (cargo re-checks out
+// the dependency on a clean checkout, e.g. in CI).
+val patchSdlForNdk28 by tasks.registering(Exec::class) {
+    val script = rootDir.parentFile.resolve("dev-scripts/patch-sdl-ndk28.sh")
+    commandLine("bash", script.absolutePath)
 }
 
 dependencies {

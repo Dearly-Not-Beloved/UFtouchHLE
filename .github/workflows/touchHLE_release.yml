@@ -174,15 +174,15 @@ jobs:
       uses: actions/cache@v4
       with:
         path: android-ndk
-        key: android-ndk-r25c
+        key: android-ndk-r28c
     - if: ${{ steps.cache-android-ndk.outputs.cache-hit != 'true' }}
       name: Download Android NDK
-      run: curl -L -o android-ndk-r25c-linux.zip "https://dl.google.com/android/repository/android-ndk-r25c-linux.zip"
+      run: curl -L -o android-ndk-r28c-linux.zip "https://dl.google.com/android/repository/android-ndk-r28c-linux.zip"
     - if: ${{ steps.cache-android-ndk.outputs.cache-hit != 'true' }}
       name: Extract Android NDK
-      run: 7z -oandroid-ndk -snld x android-ndk-r25c-linux.zip
+      run: 7z -oandroid-ndk -snld x android-ndk-r28c-linux.zip
     - name: Link Android NDK
-      run: ln -s $PWD'/android-ndk/android-ndk-r25c' $ANDROID_SDK_ROOT'/ndk/25.2.9519653'
+      run: ln -s $PWD'/android-ndk/android-ndk-r28c' $ANDROID_SDK_ROOT'/ndk/28.2.13676358'
     # Why isn't there a command for this?
     - name: Generate local.properties file
       run: echo 'sdk.dir='$ANDROID_SDK_ROOT > android/local.properties
@@ -190,9 +190,9 @@ jobs:
       run: dev-scripts/lint.sh ndk -t arm64-v8a
       env:
         # The version should match the ndkVersion defined in `android\app\build.gradle`
-        ANDROID_NDK_ROOT: '/usr/local/lib/android/sdk/ndk/25.2.9519653'
-        ANDROID_NDK: '/usr/local/lib/android/sdk/ndk/25.2.9519653'
-        ANDROID_NDK_HOME: '/usr/local/lib/android/sdk/ndk/25.2.9519653'
+        ANDROID_NDK_ROOT: '/usr/local/lib/android/sdk/ndk/28.2.13676358'
+        ANDROID_NDK: '/usr/local/lib/android/sdk/ndk/28.2.13676358'
+        ANDROID_NDK_HOME: '/usr/local/lib/android/sdk/ndk/28.2.13676358'
         CMAKE: ${{ github.workspace }}/vendor/cmake/bin/cmake
     # Sign with a fixed key (from repository secrets) so new versions can be
     # installed over old ones. Without the secrets, Gradle falls back to a
@@ -212,7 +212,7 @@ jobs:
       run: cd android && ../gradle/gradle-8.11.1/bin/gradle assembleRelease
       env:
         # The version should match the ndkVersion defined in `android\app\build.gradle`
-        ANDROID_NDK_ROOT: '/usr/local/lib/android/sdk/ndk/25.2.9519653'
+        ANDROID_NDK_ROOT: '/usr/local/lib/android/sdk/ndk/28.2.13676358'
         CMAKE: ${{ github.workspace }}/vendor/cmake/bin/cmake
         TOUCHHLE_KEYSTORE_PASSWORD: ${{ secrets.TOUCHHLE_KEYSTORE_PASSWORD }}
     - name: Package APK
