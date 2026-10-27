@@ -1,8 +1,19 @@
 # IOS_SAVE_DYNAMIC_ANALYSIS.md - iOS MHP2G save dynamic analysis
 
-> Status: ongoing. Outer encryption fully solved. Inner algorithm NOT determined.
+> Status: ongoing. **Inner algorithm SOLVED (2026-10-28): table permutation + PSP-identical LCG dual stream, closed-loop 0-byte diff.** Remaining blocker: save checksum F (see NEXT_STEPS.md).
 > Dates: 2026-10-27 ~ 2026-10-28
 > Method: touchHLE source instrumentation + dynamic capture + static disassembly
+
+---
+
+## 0. UPDATE 2026-10-28 — inner layer SOLVED + game load-verify mechanism mapped
+
+- Inner layer: per-byte `c=T1[T1[p]^beta]` / `p=T2[T2[c]^beta]`, beta=lower+(upper<<16), LCG `lower*0x215F %0xFF8F`, `upper*0xDFA3 %0xFFEF` (identical to PSP params; iOS table T1@0x5f27d0/T2@0x5f28d0 differs from PSP).
+- beta[0] is per-save random. Closed loop: inner_decrypt(inner_encrypt(x))==x, 0-byte diff, on all 4 real saves.
+- **Game load decrypt (WLOG-verified)**: game recovers beta from ciphertext block at offset 0xDFC00 (`beta=T2[c]^T1[0]`, zero-plaintext anchor), then runs the LCG BACKWARD 229120 steps to get block-0 beta, then decrypts the whole save from block 0. Simulated full decrypt with recovered beta matches real plaintext 100.00%.
+- Tail u32 is NOT the seed (changing it leaves game beta unchanged).
+- **Original male save loads fine in touchHLE (no alert); any re-encrypted save (same plaintext, new beta) is rejected as corrupt** => the game checksums the inner ciphertext (or a function of it). tailzero + body-1-byte-flip experiments both fail => checksum covers body and tail region.
+- Checksum is NOT standard SHA1/MD5/SHA256 (no constants in binary, no CC_* calls logged). Algorithm F = UNKNOWN (top blocker).
 
 ---
 
