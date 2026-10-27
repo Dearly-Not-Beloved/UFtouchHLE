@@ -2,11 +2,11 @@
 
 [简体中文](README.md) | [English](README.en.md)
 
-[![GitHub Release](https://img.shields.io/github/v/release/shawnw67/UFtouchHLE?style=for-the-badge&logo=github&color=1f6feb)](https://github.com/shawnw67/UFtouchHLE/releases)
-[![GitHub Stars](https://img.shields.io/github/stars/shawnw67/UFtouchHLE?style=for-the-badge&logo=github&color=gold)](https://github.com/shawnw67/UFtouchHLE)
-[![GitHub Issues](https://img.shields.io/github/issues/shawnw67/UFtouchHLE?style=for-the-badge&logo=github&color=lightgrey)](https://github.com/shawnw67/UFtouchHLE/issues)
-[![License](https://img.shields.io/github/license/shawnw67/UFtouchHLE?style=for-the-badge&logo=github&color=blue)](LICENSE)
-[![Platform](https://img.shields.io/badge/Platform-Android%20%7C%20macOS%20%7C%20Windows-blue?style=for-the-badge)](https://github.com/shawnw67/UFtouchHLE/releases)
+[![GitHub Release](https://img.shields.io/github/v/release/shawnw67/UFtouchHLE?style=flat&logo=github&color=1f6feb)](https://github.com/shawnw67/UFtouchHLE/releases)
+[![GitHub Stars](https://img.shields.io/github/stars/shawnw67/UFtouchHLE?style=flat&logo=github&color=gold)](https://github.com/shawnw67/UFtouchHLE)
+[![GitHub Issues](https://img.shields.io/github/issues/shawnw67/UFtouchHLE?style=flat&logo=github&color=lightgrey)](https://github.com/shawnw67/UFtouchHLE/issues)
+[![License](https://img.shields.io/github/license/shawnw67/UFtouchHLE?style=flat&logo=github&color=blue)](LICENSE)
+[![Platform](https://img.shields.io/badge/Platform-Android%20%7C%20macOS%20%7C%20Windows-blue?style=flat)](https://github.com/shawnw67/UFtouchHLE/releases)
 
 **UFtouchHLE** 是 [touchHLE](https://github.com/touchHLE/touchHLE) 的非官方分支，面向早期 iOS 游戏，增加了特定游戏兼容修复、Android 启动器、存档导入导出、模拟机型选择及原生手柄支持。
 
