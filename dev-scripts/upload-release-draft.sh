@@ -3,45 +3,72 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-# Upload a complete three-platform build to a draft; never publish it or
-# replace assets belonging to an already published release.
+# Upload a locally built Android APK to a draft release; never publish it or
+# replace assets belonging to an already published release. Uses the GitHub
+# REST API directly (no gh CLI required); the token comes from $GH_TOKEN or
+# from git's stored credentials for github.com.
+#
+# Usage: GH_REPO=owner/repo dev-scripts/upload-release-draft.sh TAG APK_PATH
 set -euo pipefail
 
-tag="${1:?Usage: upload-release-draft.sh TAG ASSET_DIRECTORY}"
-asset_directory="${2:?Usage: upload-release-draft.sh TAG ASSET_DIRECTORY}"
+tag="${1:?Usage: upload-release-draft.sh TAG APK_PATH}"
+apk="${2:?Usage: upload-release-draft.sh TAG APK_PATH}"
 : "${GH_REPO:?GH_REPO must name the destination repository}"
 
 if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-+][A-Za-z0-9.-]+)?$ ]]; then
     echo "Not a supported version tag: $tag" >&2
     exit 1
 fi
-
-assets=(
-    "$asset_directory/UFtouchHLE_${tag}_Android_AArch64.apk"
-    "$asset_directory/UFtouchHLE_${tag}_macOS_x86_64.dmg"
-    "$asset_directory/UFtouchHLE_${tag}_Windows_x86_64.zip"
-)
-for asset in "${assets[@]}"; do
-    if [[ ! -s "$asset" ]]; then
-        echo "Missing or empty release package: $asset" >&2
-        exit 1
-    fi
-done
-
-if draft="$(gh release view "$tag" --repo "$GH_REPO" --json isDraft --jq .isDraft)"; then
-    if [[ "$draft" != true ]]; then
-        echo "Release $tag is already published; refusing to change its assets." >&2
-        exit 1
-    fi
-else
-    gh release create "$tag" --repo "$GH_REPO" --verify-tag --draft \
-        --title "UFtouchHLE $tag" \
-        --notes "Build artifacts for $tag. Release notes are pending review."
-fi
-
-# Preserve existing draft notes and allow a failed upload to be retried.
-if [[ "$(gh release view "$tag" --repo "$GH_REPO" --json isDraft --jq .isDraft)" != true ]]; then
-    echo "Release $tag is no longer a draft; refusing to upload." >&2
+if [[ ! -s "$apk" ]]; then
+    echo "Missing or empty APK: $apk" >&2
     exit 1
 fi
-gh release upload "$tag" "${assets[@]}" --repo "$GH_REPO" --clobber
+
+if [[ -n "${GH_TOKEN:-}" ]]; then
+    token="$GH_TOKEN"
+else
+    token="$(git credential fill <<< $'protocol=https\nhost=github.com' 2>/dev/null | sed -n 's/^password=//p')"
+fi
+if [[ -z "${token:-}" ]]; then
+    echo "No GitHub token found: set GH_TOKEN or authenticate git with GitHub." >&2
+    exit 1
+fi
+
+api="https://api.github.com/repos/$GH_REPO"
+asset_name="$(basename "$apk")"
+
+# Find the draft for this tag; create it if it does not exist yet.
+if release_json="$(curl -sS -H "Authorization: Bearer $token" "$api/releases/tags/$tag")" \
+    && echo "$release_json" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(1 if d.get("message") == "Not Found" else 0)'; then
+    :
+else
+    body="$(python3 -c 'import json,sys; print(json.dumps({"tag_name": sys.argv[1], "name": "UFtouchHLE " + sys.argv[1], "draft": True, "body": "Build artifacts for " + sys.argv[1] + ". Release notes are pending review."}))' "$tag")"
+    release_json="$(curl -sS -X POST -H "Authorization: Bearer $token" \
+        -H "Accept: application/vnd.github+json" -d "$body" "$api/releases")"
+fi
+
+if [[ "$(echo "$release_json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("is_draft"))')" != "True" ]]; then
+    echo "Release $tag is already published; refusing to change its assets." >&2
+    exit 1
+fi
+
+release_id="$(echo "$release_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+
+# A failed upload can be retried: remove an existing asset with the same name.
+existing_id="$(curl -sS -H "Authorization: Bearer $token" "$api/releases/$release_id/assets" | python3 -c "
+import json,sys
+name = sys.argv[1]
+for a in json.load(sys.stdin):
+    if a['name'] == name:
+        print(a['id'])
+" "$asset_name")"
+if [[ -n "$existing_id" ]]; then
+    curl -sS -X DELETE -H "Authorization: Bearer $token" "$api/releases/assets/$existing_id" >/dev/null
+fi
+
+uploaded="$(curl -sS -X POST -H "Authorization: Bearer $token" \
+    -H "Content-Type: application/vnd.android.package-archive" \
+    --data-binary "@$apk" \
+    "$api/releases/$release_id/assets?name=$asset_name")"
+echo "Uploaded: $(echo "$uploaded" | python3 -c 'import json,sys; print(json.load(sys.stdin)["name"])')"
+echo "Draft release ready: https://github.com/$GH_REPO/releases/tag/$tag"

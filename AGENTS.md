@@ -11,14 +11,19 @@ This is **touchHLE UF**, an unofficial fork of [touchHLE](https://github.com/tou
 ## Building and testing
 
 - macOS: set `CMAKE_POLICY_VERSION_MINIMUM=3.5`. Run `cargo build --release`, then the tests: `cargo test --release --lib` and `python3 dev-scripts/macos-integration-tests.py`.
-- Before pushing: run `dev-scripts/lint.sh` and `dev-scripts/format.sh --check`. CI runs clang-format 23 on macOS and older versions on Linux and Windows, so formatting of C/Objective-C test code must satisfy both.
+- Before pushing: run `dev-scripts/lint.sh` and `dev-scripts/format.sh --check`. Formatting of C/Objective-C test code must satisfy clang-format (macOS 23, older on Linux/Windows), so keep both in mind.
 - Android: `dev-scripts/build-android-uf.sh` builds a signed APK (package `org.touchhleuf.android`). The person running it enters the keystore password; never store or pass secrets yourself.
 - Test changes on macOS and then on a real Android phone before committing. The Android emulator's OpenGL ES 1.1 translation has bugs that real phones don't.
 
 ## Releases
 
-Push a tag `vX.Y.Z`, then run the "Build touchHLE" workflow on it. Successful tag builds automatically upload `UFtouchHLE_vX.Y.Z_{Android_AArch64.apk,macOS_x86_64.dmg,Windows_x86_64.zip}` to a GitHub release draft. Existing draft notes are preserved; published releases are not modified. Review the packages and add English release notes before publishing.
+Only the Android APK is shipped; there is no CI package build anymore (the
+build workflow was removed). Release flow, all local:
 
-When the user asks for a release, commit and push the approved changes, push
-the version tag, and trigger CI. Stop after dispatch succeeds: the user handles
-build monitoring, draft review, release notes, and publishing.
+1. Commit and push the approved changes.
+2. Push the tag `vX.Y.Z`.
+3. Build the APK locally: `dev-scripts/build-android-uf.sh` (enters keystore password itself).
+4. Upload it to the draft release: `GH_REPO=shawnw67/UFtouchHLE dev-scripts/upload-release-draft.sh vX.Y.Z /path/to/UFtouchHLE_vX.Y.Z_Android.apk`.
+
+Existing draft notes are preserved; published releases are not modified.
+Review the draft and add English release notes before publishing.
