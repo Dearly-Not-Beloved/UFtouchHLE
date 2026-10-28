@@ -5,7 +5,9 @@
 > SHA-1(plain[0:0x16A0DC] + "3Nc94Hq1zOLh8d62Sb69") at 0x16A0E8, and the
 > XOR-stream seed is the last 4 bytes (stored through the table twice), not a
 > per-save beta "recovered from 0xDFC00". The game does call CC_SHA1. Re-encrypted
-> saves failed only because the old converter didn't store the seed. See
+> saves failed only because the old converter didn't store the seed.
+> Also, PSP MHP2G JP uses the *same* byte tables as iOS, not the mhef table
+> (`A6 21 22 ...`) assumed below; only the salt differs. See
 > README.md and NEXT_STEPS.md; this file is kept as a research log.
 
 > Status: 2026-10-28 — inner layer SOLVED (table perm + LCG, PSP-homologous), controlled 3-sample diff DONE, checksum F = remaining blocker.

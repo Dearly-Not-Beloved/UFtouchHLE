@@ -12,7 +12,8 @@ crypto is fully understood from the game's own code:
   `SHA-1(plain[0:0x16A0DC] + "3Nc94Hq1zOLh8d62Sb69")` compared with the 20
   bytes at 0x16A0E8. (It temporarily writes the salt over 0x16A0DC..0x16A0F0
   and hashes 0x16A0F0 bytes, which is the same thing.) The salt is the PSP
-  MHFU (ULUS-10391) salt from mhef.
+  MHFU (ULUS-10391) salt from mhef. The byte tables are the same as the
+  PSP game's (and not the table in mhef).
 - `0x322868`: the game layer. The seed is the last 4 bytes, put through the
   decryption table twice; the LCG is advanced before each word is used.
 - `0x322AF4` (save): writes the hash, a new seed at 0x16A0FC, and encrypts.
@@ -33,12 +34,12 @@ new hash is rejected.
 
 ## Remaining work (ranked)
 
-1. PSP system layer (sceChnnlsv/KIRK). Decrypting the k73 `MHP2NDG.BIN`
-   with Apollo's `endecrypter` or mhef's `PSPSavedataCipher` and the JP game
-   key gives data that fails the SHA-1 check; its `SAVEDATA_PARAMS` byte is
-   0x41. Find out why (mode, key, or the file itself), then either document
-   a working external tool chain or implement the layer (check licences:
-   mhef and PPSSPP are GPL).
+1. PSP system layer: works with Apollo's `endecrypter` and the JP game key
+   (both directions, round trip verified on the k73 save). The earlier
+   "SHA-1 doesn't match" came from using mhef's byte table, which isn't
+   MHP2G JP's: the PSP game uses the same tables as iOS. A built-in
+   implementation would remove the external tool (check licences: mhef,
+   Apollo and PPSSPP are GPL).
 2. Check iOS -> PSP output on PPSSPP or a PSP.
 3. In-game write-back test: load a converted save, save in game, and check
    the result with `mhp2g_save.py inspect`.

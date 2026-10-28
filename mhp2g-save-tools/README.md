@@ -42,16 +42,16 @@ Capcom 游戏层加密：对除种子外的每个 32 位小端字，`查表 → 
 
 | | PSP（ULJM-05500） | iOS |
 |---|---|---|
-| 字节表 | mhef / mhtools 公开的表 | iOS 自己的表（二进制 VA 0x5F67D0 加密，0x5F68D0 解密） |
+| 字节表 | 相同：iOS 二进制 VA 0x5F67D0（加密）/ 0x5F68D0（解密）处的表。**不是** mhef / mhtools 里那张 `A6 21 22 …` 表 | 同左 |
 | 盐 | `S)R?Bf8xW3#5h9lGU8wR` | `3Nc94Hq1zOLh8d62Sb69`（与 PSP 美/欧版 MHFU 相同） |
-| 外层 | PSP 系统存档加密（sceChnnlsv/KIRK），0x16A110 字节 | AES-128-CBC + PKCS#7（CCCrypt），key `ls6([f$]=~I(nf28`，iv `;lknc(;f_wnX98<i`，0x16A110 字节 |
+| 外层 | PSP 系统存档加密（sceChnnlsv/KIRK AES-128-CBC），日版游戏 key `cd1f2059ae70ef68dca24513b45adb0a`，0x16A110 字节 | AES-128-CBC + PKCS#7（CCCrypt），key `ls6([f$]=~I(nf28`，iv `;lknc(;f_wnX98<i`，0x16A110 字节 |
 
 iOS 版的逻辑来自游戏二进制：`0x322704`（读档：解密 + 校验 SHA-1）、`0x322868`（游戏层加解密）、`0x322AF4`（写档：算 SHA-1、换种子、加密）。
 
 ## 验证情况
 
 - iOS：4 份真实存档全部能解密、SHA-1 吻合；用原种子重新加密后与原文件**逐字节一致**。
-- PSP 游戏层：本工具写出的文件能被 mhef 的 `SavedataCipher(MHP2G_JP)` 解密并通过校验，mhef 写出的文件本工具也能读。
+- PSP：真实的 k73 `MHP2NDG.BIN` 用 Apollo 的 `endecrypter` 加日版 key 解掉系统层后，本工具能读出来，SHA-1 吻合。反方向：本工具写出的 PSP 游戏层文件用 `endecrypter` 加回系统层，再解开，与原文件逐字节一致。
 - 在 UFtouchHLE（macOS release 版）里用 P2G 实际读档：
   - 原始存档：正常读取（对照组）
   - 同一存档换新种子重新加密：正常读取（旧版转换器正是这一步失败）
@@ -60,8 +60,17 @@ iOS 版的逻辑来自游戏二进制：`0x322704`（读档：解密 + 校验 SH
 
 ## 限制
 
-- **不处理 PSP 系统层加密。** 真机/PPSSPP 的 `MHP2NDG.BIN` 带有系统层加密，需要先用外部工具（如 Apollo Save Tool、SED-PC、mhef 的 `PSPSavedataCipher`）解密成 0x16A100 字节的游戏层文件再转换；iOS → PSP 的输出也要再加上系统层。本次用 Apollo 的 `endecrypter` 和 mhef 配日版游戏密钥解密 k73 的 `MHP2NDG.BIN`，结果都过不了 SHA-1（原因未查明，可能与该存档 `SAVEDATA_PARAMS` 的加密模式 0x41 有关），所以测试用的是之前会话留下的、来源不明但 SHA-1 正确的 k73 明文。
-- **iOS → PSP 没有在 PSP/PPSSPP 上实际验证过**，只验证了 mhef 能读。
+- **不内置 PSP 系统层加密。** 真机或 PPSSPP 的 `MHP2NDG.BIN` 带系统层，要用外部工具处理。已验证可用的是 Apollo Save Tool 的 `endecrypter`（`key.bin` 是 16 字节的日版游戏 key）：
+
+  ```bash
+  # 解密：MHP2NDG.BIN → 游戏层文件，再交给本工具
+  endecrypter MHP2NDG.BIN key.bin > game.bin
+  # 加密：本工具输出的 PSP 游戏层文件 → MHP2NDG.BIN（会更新同目录存档的 PARAM.SFO，先备份）
+  endecrypter game.bin key.bin PARAM.SFO > MHP2NDG.BIN
+  ```
+
+  mhef 的 `PSPSavedataCipher` 也能解系统层，但它的 `SavedataCipher` 用的是另一张字节表，读不了日版 MHP2G 的游戏层。
+- **iOS → PSP 没有在 PSP/PPSSPP 上实际读档验证过**，只验证了系统层能加回去再解开。
 - **只验证了读档。** 没有在游戏里进入任务后再存档，确认转换来的存档能正常回写。
 - 平台设置块（0x00–0x24）的含义没有逐字段确认，转换时整体换成目标平台的值；其他字段假定两平台相同（依据：两个平台样本在 0x24–0x1000 完全一致，角色数据结构对得上，游戏能读出角色）。PSP 独有的内容（例如 PSP 下载任务）在 iOS 上的表现未测试。
 - 只支持日版 MHP2G（ULJM-05500）和这个 iOS 版。美/欧版 MHFU 的 PSP 存档盐和 iOS 相同，但没有测试。
