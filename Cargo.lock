@@ -1166,6 +1166,7 @@ dependencies = [
  "libc",
  "mach_object",
  "md-5",
+ "mhp2g_save",
  "nibarchive",
  "openh264",
  "owned_ttf_parser",

@@ -6,7 +6,15 @@
 
 **这个目录是 GPL-3.0-or-later**（见 `COPYING`），和 UFtouchHLE 其余部分（MPL-2.0）不同。原因是 `src/psp.rs` 移植自 GPL-3.0-or-later 的代码：jpcsp、kirk-engine，以及 psp-savedata-endecrypter / Apollo Save Tool。原作者的版权声明保留在该文件开头。MPL-2.0 允许和 GPL 代码组合，以 GPL 分发；UFtouchHLE 的发布包本来就附带 GPL-3.0（`dev-scripts/prepare-release.sh`）。
 
-## 用法
+## 在 UFtouchHLE（安卓）里直接导入
+
+1. 在启动器里长按 MHP2G 的图标，打开菜单，选「导入 PSP 存档」。
+2. 选择 PSP 存档文件夹 `ULJM05500`：PPSSPP 放在它的 `memstick/PSP/SAVEDATA/` 里，真机 PSP 在记忆棒的 `PSP/SAVEDATA/` 里。选它的上一级文件夹也可以。如果系统不支持选文件夹，也可以选「选择文件」，直接选中其中的 `MHP2NDG.BIN` 和 `PARAM.SFO`。
+3. 存档会被转换成 iOS 版的格式，游戏设置沿用当前存档的。原来的 `savedata.dat` 会先移到 touchHLE 文件夹的 `touchHLE_save_backups/` 里。
+
+转换由这个 crate 完成（touchHLE 通过 JNI 调用 `mhp2g_save::import_psp`）。导出为 PSP 存档目前只能用下面的命令行工具。
+
+## 用法（命令行）
 
 ```bash
 cargo build -p mhp2g_save --release    # 生成 target/release/mhp2g-save

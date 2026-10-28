@@ -32,6 +32,7 @@ import android.graphics.drawable.RippleDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.provider.DocumentsContract;
 import android.provider.OpenableColumns;
 import android.text.TextUtils;
 import android.util.TypedValue;
@@ -50,6 +51,7 @@ import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -94,6 +96,7 @@ public class LauncherActivity extends Activity {
     private static native byte[] nativeScanApps(String appsDir, String iconsDir, String languages);
     private static native byte[] nativeCopyrightText(android.content.res.AssetManager assets);
     private static native byte[] nativeVersion();
+    private static native byte[] nativeImportPspSave(byte[] file, byte[] sfo, byte[] current);
 
     private static final String APPS_DIR = "touchHLE_apps";
     private static final String LOG_FILE = "touchHLE_log.txt";
@@ -103,6 +106,9 @@ public class LauncherActivity extends Activity {
     private static final int REQUEST_IMPORT = 1;
     private static final int REQUEST_IMPORT_SAVE = 2;
     private static final int REQUEST_EXPORT_SAVE = 3;
+    private static final int REQUEST_IMPORT_PSP_SAVE_FOLDER = 4;
+    private static final int REQUEST_IMPORT_PSP_SAVE_FILES = 5;
+    private static final String MHP2G_BUNDLE_ID = "jp.co.capcom.mhp2gjp";
     /// Where touchHLE keeps each app's data (see src/paths.rs), in a folder
     /// named after the app's bundle identifier.
     private static final String SANDBOX_DIR = "touchHLE_sandbox";
@@ -683,16 +689,21 @@ public class LauncherActivity extends Activity {
         if ("com.rockstargames.gta3vc".equals(app.bundleId)) {
             items.add(getString(R.string.menu_performance_tests));
             items.add(getString(R.string.menu_audio_tests));
-        } else if ("jp.co.capcom.mhp2gjp".equals(app.bundleId)) {
+        } else if (MHP2G_BUNDLE_ID.equals(app.bundleId)) {
             items.add(getString(R.string.menu_p2g_layout));
+            items.add(getString(R.string.menu_import_psp_save));
         }
         new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
             .setTitle(app.name)
             .setItems(items.toArray(new String[0]), (dialog, which) -> {
                 if (which == 5) {
-                    showAudioTests(app);
+                    if (MHP2G_BUNDLE_ID.equals(app.bundleId)) {
+                        confirmImportPspSave(app);
+                    } else {
+                        showAudioTests(app);
+                    }
                 } else if (which == 4) {
-                    if ("jp.co.capcom.mhp2gjp".equals(app.bundleId)) {
+                    if (MHP2G_BUNDLE_ID.equals(app.bundleId)) {
                         showP2GViewOptions();
                     } else {
                         showPerformanceTests(app);
@@ -1261,6 +1272,25 @@ public class LauncherActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQUEST_IMPORT_PSP_SAVE_FOLDER
+            || requestCode == REQUEST_IMPORT_PSP_SAVE_FILES) {
+            if (resultCode == RESULT_OK && data != null && saveBundleId != null) {
+                List<Uri> files = new ArrayList<>();
+                ClipData clip = data.getClipData();
+                if (clip != null) {
+                    for (int i = 0; i < clip.getItemCount(); i++) {
+                        files.add(clip.getItemAt(i).getUri());
+                    }
+                } else if (data.getData() != null) {
+                    files.add(data.getData());
+                }
+                boolean folder = requestCode == REQUEST_IMPORT_PSP_SAVE_FOLDER;
+                if (folder || !files.isEmpty()) {
+                    importPspSave(folder ? data.getData() : null, files);
+                }
+            }
+            return;
+        }
         if (requestCode == REQUEST_IMPORT_SAVE || requestCode == REQUEST_EXPORT_SAVE) {
             if (resultCode == RESULT_OK && data != null && data.getData() != null
                 && saveBundleId != null) {
@@ -1560,6 +1590,180 @@ public class LauncherActivity extends Activity {
             })
             .setNegativeButton(R.string.cancel, null)
             .show();
+    }
+
+    // ---- PSP saves (Monster Hunter Portable 2nd G) ----
+
+    private void confirmImportPspSave(final App app) {
+        new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+            .setTitle(getString(R.string.import_psp_save_title, app.name))
+            .setMessage(getString(R.string.import_psp_save_message, SAVE_BACKUPS_DIR))
+            .setPositiveButton(R.string.choose_folder, (dialog, which) -> {
+                saveBundleId = app.bundleId;
+                saveAppName = app.name;
+                try {
+                    startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE),
+                        REQUEST_IMPORT_PSP_SAVE_FOLDER);
+                } catch (ActivityNotFoundException | SecurityException e) {
+                    Toast.makeText(this, R.string.no_file_picker, Toast.LENGTH_LONG).show();
+                }
+            })
+            .setNeutralButton(R.string.choose_files, (dialog, which) -> {
+                saveBundleId = app.bundleId;
+                saveAppName = app.name;
+                Intent[] attempts = {new Intent(Intent.ACTION_OPEN_DOCUMENT),
+                                     new Intent(Intent.ACTION_GET_CONTENT)};
+                for (Intent intent : attempts) {
+                    intent.addCategory(Intent.CATEGORY_OPENABLE);
+                    intent.setType("*/*");
+                    intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+                    try {
+                        startActivityForResult(intent, REQUEST_IMPORT_PSP_SAVE_FILES);
+                        return;
+                    } catch (ActivityNotFoundException | SecurityException e) {
+                        // Try the next one.
+                    }
+                }
+                Toast.makeText(this, R.string.no_file_picker, Toast.LENGTH_LONG).show();
+            })
+            .setNegativeButton(R.string.cancel, null)
+            .show();
+    }
+
+    /// Finds MHP2NDG.BIN and PARAM.SFO in a chosen folder (or in its
+    /// ULJM05500 subfolder, e.g. if PSP/SAVEDATA was chosen) or among chosen
+    /// files. Returns {save, PARAM.SFO or null}.
+    private Uri[] findPspSave(Uri tree, List<Uri> files) {
+        Uri[] found = new Uri[2];
+        if (tree != null) {
+            String folder = DocumentsContract.getTreeDocumentId(tree);
+            if (findChild(tree, folder, "MHP2NDG.BIN") == null) {
+                String subfolder = findChild(tree, folder, "ULJM05500");
+                if (subfolder != null) {
+                    folder = subfolder;
+                }
+            }
+            found[0] = documentUri(tree, findChild(tree, folder, "MHP2NDG.BIN"));
+            found[1] = documentUri(tree, findChild(tree, folder, "PARAM.SFO"));
+        } else {
+            for (Uri uri : files) {
+                String name = displayName(uri);
+                if ("PARAM.SFO".equalsIgnoreCase(name)) {
+                    found[1] = uri;
+                } else if (found[0] == null || "MHP2NDG.BIN".equalsIgnoreCase(name)) {
+                    found[0] = uri;
+                }
+            }
+        }
+        return found;
+    }
+
+    /// The document ID of the child of `parent` called `name` (any case).
+    private String findChild(Uri tree, String parent, String name) {
+        Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, parent);
+        try (Cursor cursor = getContentResolver().query(children, new String[]{
+                DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                DocumentsContract.Document.COLUMN_DISPLAY_NAME}, null, null, null)) {
+            while (cursor != null && cursor.moveToNext()) {
+                if (name.equalsIgnoreCase(cursor.getString(1))) {
+                    return cursor.getString(0);
+                }
+            }
+        } catch (Exception e) {
+            // Treated as missing.
+        }
+        return null;
+    }
+
+    private static Uri documentUri(Uri tree, String documentId) {
+        return documentId == null ? null
+            : DocumentsContract.buildDocumentUriUsingTree(tree, documentId);
+    }
+
+    private byte[] readAll(InputStream in) throws Exception {
+        if (in == null) {
+            throw new Exception("Couldn't open the file");
+        }
+        try (InputStream input = in; ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            byte[] buffer = new byte[1 << 16];
+            int n;
+            while ((n = input.read(buffer)) != -1) {
+                out.write(buffer, 0, n);
+            }
+            return out.toByteArray();
+        }
+    }
+
+    /// Converts the chosen PSP save, backs up the current save, and puts the
+    /// converted one in its place.
+    private void importPspSave(final Uri tree, final List<Uri> files) {
+        final String bundleId = saveBundleId;
+        new Thread(() -> {
+            String message;
+            try {
+                Uri[] found = findPspSave(tree, files);
+                if (found[0] == null) {
+                    throw new Exception(getString(R.string.psp_save_not_found));
+                }
+                byte[] save = readAll(getContentResolver().openInputStream(found[0]));
+                byte[] sfo = found[1] == null ? null
+                    : readAll(getContentResolver().openInputStream(found[1]));
+                File documents = new File(getSaveDir(bundleId), "Documents");
+                File current = new File(documents, "savedata.dat");
+                byte[] currentBytes = null;
+                if (current.isFile()) {
+                    try {
+                        currentBytes = readAll(new FileInputStream(current));
+                    } catch (Exception e) {
+                        // Then the default settings are used.
+                    }
+                }
+
+                byte[] result = nativeImportPspSave(save, sfo, currentBytes);
+                if (result == null || result.length == 0) {
+                    throw new Exception("no result");
+                }
+                if (result[0] != 0) {
+                    throw new Exception(new String(result, 1, result.length - 1,
+                        StandardCharsets.UTF_8));
+                }
+                int namesLength = ByteBuffer.wrap(result, 1, 4)
+                    .order(java.nio.ByteOrder.LITTLE_ENDIAN).getInt();
+                String names = new String(result, 5, namesLength, StandardCharsets.UTF_8)
+                    .replace("\n", getString(R.string.list_separator));
+
+                // Write the new save next to the old one first, so nothing is
+                // lost if that fails.
+                documents.mkdirs();
+                File temp = new File(documents, "savedata.dat.importing");
+                try (OutputStream out = new FileOutputStream(temp)) {
+                    out.write(result, 5 + namesLength, result.length - 5 - namesLength);
+                }
+                String backup = null;
+                if (current.exists()) {
+                    File backupDir = new File(new File(getBaseDir(), SAVE_BACKUPS_DIR),
+                        bundleId + "_" + timestamp());
+                    try {
+                        moveAside(current, new File(new File(backupDir, "Documents"),
+                            "savedata.dat"));
+                    } catch (Exception e) {
+                        temp.delete();
+                        throw e;
+                    }
+                    backup = SAVE_BACKUPS_DIR + "/" + backupDir.getName();
+                }
+                if (!temp.renameTo(current)) {
+                    throw new Exception("Couldn't rename " + temp);
+                }
+                message = backup == null
+                    ? getString(R.string.imported_psp_save, names)
+                    : getString(R.string.imported_psp_save_backup, names, backup);
+            } catch (Exception e) {
+                message = getString(R.string.import_psp_save_failed, e.getMessage());
+            }
+            final String text = message;
+            runOnUiThread(() -> Toast.makeText(this, text, Toast.LENGTH_LONG).show());
+        }).start();
     }
 
     /// Unpacks the zip into a fresh folder in the cache, then checks it and
