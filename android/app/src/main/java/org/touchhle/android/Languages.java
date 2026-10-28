@@ -74,14 +74,43 @@ final class Languages {
         if (tag.isEmpty()) {
             return base;
         }
-        Locale locale = Locale.forLanguageTag(tag);
         Configuration config = new Configuration(base.getResources().getConfiguration());
+        Locale locale = withRegion(Locale.forLanguageTag(tag), systemRegion(config));
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             config.setLocales(new LocaleList(locale));
         } else {
             config.setLocale(locale);
         }
         return base.createConfigurationContext(config);
+    }
+
+    @SuppressWarnings("deprecation")
+    private static String systemRegion(Configuration config) {
+        Locale locale = Build.VERSION.SDK_INT >= Build.VERSION_CODES.N
+            ? config.getLocales().get(0) : config.locale;
+        return locale != null ? locale.getCountry() : "";
+    }
+
+    /**
+     * The chosen language with the system's region, which games get as the
+     * current locale's country (e.g. for dates or which server to use).
+     *
+     * touchHLE tells Simplified and Traditional Chinese apart by the region
+     * (see src/window.rs), so they get a region that matches if the system's
+     * doesn't.
+     */
+    private static Locale withRegion(Locale language, String region) {
+        boolean traditionalRegion = region.equals("TW") || region.equals("HK")
+            || region.equals("MO");
+        if (language.getScript().equals("Hant") && !traditionalRegion) {
+            region = "TW";
+        } else if (language.getScript().equals("Hans") && traditionalRegion) {
+            region = "CN";
+        }
+        if (region.isEmpty()) {
+            return language;
+        }
+        return new Locale.Builder().setLocale(language).setRegion(region).build();
     }
 
     /**
