@@ -23,7 +23,7 @@ build workflow was removed). Release flow, all local:
 1. Commit and push the approved changes.
 2. Push the tag `vX.Y.Z`.
 3. Build the APK locally: `dev-scripts/build-android-uf.sh` (enters keystore password itself).
-4. Upload it to the draft release: `GH_REPO=shawnw67/UFtouchHLE dev-scripts/upload-release-draft.sh vX.Y.Z /path/to/UFtouchHLE_vX.Y.Z_Android.apk`.
+4. Upload it to the draft release: `GH_REPO=shawnw67/UFtouchHLE dev-scripts/upload-release-draft.sh vX.Y.Z /path/to/UFtouchHLE_vX.Y.Z_Android_AArch64.apk`.
 
 Existing draft notes are preserved; published releases are not modified.
 Review the draft and add English release notes before publishing.

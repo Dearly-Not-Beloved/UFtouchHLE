@@ -37,18 +37,24 @@ fi
 api="https://api.github.com/repos/$GH_REPO"
 asset_name="$(basename "$apk")"
 
-# Find the draft for this tag; create it if it does not exist yet.
-if release_json="$(curl -sS -H "Authorization: Bearer $token" "$api/releases/tags/$tag")" \
-    && echo "$release_json" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(1 if d.get("message") == "Not Found" else 0)'; then
-    :
-else
+# Find the release for this tag (the tag endpoint doesn't return drafts, so
+# list the releases instead); create a draft if there is none yet.
+release_json="$(curl -sS -H "Authorization: Bearer $token" "$api/releases?per_page=100" | python3 -c '
+import json, sys
+for release in json.load(sys.stdin):
+    if release.get("tag_name") == sys.argv[1]:
+        print(json.dumps(release))
+        break
+' "$tag")"
+if [[ -z "$release_json" ]]; then
     body="$(python3 -c 'import json,sys; print(json.dumps({"tag_name": sys.argv[1], "name": "UFtouchHLE " + sys.argv[1], "draft": True, "body": "Build artifacts for " + sys.argv[1] + ". Release notes are pending review."}))' "$tag")"
     release_json="$(curl -sS -X POST -H "Authorization: Bearer $token" \
         -H "Accept: application/vnd.github+json" -d "$body" "$api/releases")"
 fi
 
-if [[ "$(echo "$release_json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("is_draft"))')" != "True" ]]; then
-    echo "Release $tag is already published; refusing to change its assets." >&2
+if [[ "$(echo "$release_json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("draft"))')" != "True" ]]; then
+    echo "Release $tag is already published, or couldn't be created; refusing to change its assets." >&2
+    echo "$release_json" >&2
     exit 1
 fi
 
@@ -69,6 +75,6 @@ fi
 uploaded="$(curl -sS -X POST -H "Authorization: Bearer $token" \
     -H "Content-Type: application/vnd.android.package-archive" \
     --data-binary "@$apk" \
-    "$api/releases/$release_id/assets?name=$asset_name")"
+    "https://uploads.github.com/repos/$GH_REPO/releases/$release_id/assets?name=$asset_name")"
 echo "Uploaded: $(echo "$uploaded" | python3 -c 'import json,sys; print(json.load(sys.stdin)["name"])')"
 echo "Draft release ready: https://github.com/$GH_REPO/releases/tag/$tag"

@@ -38,7 +38,8 @@ rm -rf app/build/intermediates/merged_jni_libs app/build/intermediates/merged_na
 "$GRADLE" assembleRelease -q
 
 VERSION="$(cd "$ROOT" && cargo run -q --package touchHLE_version)"
-OUT="$ROOT/UFtouchHLE_${VERSION}_Android.apk"
+# The launcher's update check looks for this name (see checkForUpdate).
+OUT="$ROOT/UFtouchHLE_${VERSION}_Android_AArch64.apk"
 cp app/build/outputs/apk/release/app-release.apk "$OUT"
 echo
 echo "Built $OUT"
