@@ -192,9 +192,11 @@ fn objc_msgSend_inner(
     let message_type_info = env.objc.message_type_info.take();
 
     if receiver == nil {
+        let trace = crate::network_trace::objc_begin(env, receiver, selector, None);
         // https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/ObjectiveC/Chapters/ocObjectsClasses.html#//apple_ref/doc/uid/TP30001163-CH11-SW7
         log_dbg!("[nil {}]", selector.as_str(&env.mem));
         env.cpu.regs_mut()[0..2].fill(0);
+        crate::network_trace::end(env, trace);
         return;
     }
 
@@ -212,6 +214,7 @@ fn objc_msgSend_inner(
     }
 
     let orig_class = super2.unwrap_or_else(|| ObjC::read_isa(receiver, &env.mem));
+    let trace = crate::network_trace::objc_begin(env, receiver, selector, Some(orig_class));
     assert!(
         orig_class != nil,
         "Message {} to {receiver:?} has a null class",
@@ -226,6 +229,9 @@ fn objc_msgSend_inner(
     let mut class = orig_class;
     loop {
         if class == nil {
+            if trace.is_some() {
+                crate::network_trace::missing_method(env, "selector_not_implemented");
+            }
             assert!(class != orig_class);
 
             let class_host_object = env.objc.get_host_object(orig_class).unwrap();
@@ -304,6 +310,7 @@ Type mismatch when sending message {} to {:?}!
                     // interfere with pass-through of stack arguments.
                     IMP::Guest(guest_imp) => guest_imp.call_without_pushing_stack_frame(env),
                 }
+                crate::network_trace::end(env, trace);
                 return;
             } else {
                 class = superclass;
@@ -313,13 +320,17 @@ Type mismatch when sending message {} to {:?}!
             is_metaclass,
         }) = host_object.as_any().downcast_ref()
         {
-            panic!(
+            let message = format!(
                 "Class \"{}\" ({:?}) is unimplemented. Call to {} method \"{}\".",
                 name,
                 class,
                 if is_metaclass { "class" } else { "instance" },
                 selector.as_str(&env.mem),
             );
+            if trace.is_some() {
+                crate::network_trace::missing_method(env, "class_not_implemented");
+            }
+            panic!("{}", message);
         } else if let Some(&super::FakeClass {
             ref name,
             is_metaclass,
@@ -333,6 +344,7 @@ Type mismatch when sending message {} to {:?}!
                 selector.as_str(&env.mem),
             );
             env.cpu.regs_mut()[0..2].fill(0);
+            crate::network_trace::end(env, trace);
             return;
         } else {
             panic!(

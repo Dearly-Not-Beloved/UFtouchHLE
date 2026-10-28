@@ -306,6 +306,23 @@ pub const CLASSES: ClassExports = objc_classes! {
     () = msg![env; this setAffineTransform:(transform.to_affine())];
 }
 
+// Lobi's activity indicator writes this documented transform component through
+// KVC. Use the existing affine model; do not silently swallow other key paths.
+- (())setValue:(id)value forKeyPath:(id)key_path {
+    let path=to_rust_string(env,key_path).into_owned();
+    if path=="transform.scale" {
+        assert!(value!=nil,"nil transform.scale is not supported");
+        let scale:CGFloat=msg![env; value floatValue];
+        let old=env.objc.borrow::<CALayerHostObject>(this).affine_transform;
+        let next=with_uniform_scale(old,scale);
+        let _:()=msg![env; this setAffineTransform:next];
+    } else if !path.contains('.') {
+        let _:()=msg![env; this setValue:value forKey:key_path];
+    } else {
+        let _:()=msg![env; this setValue:value forUndefinedKey:key_path];
+    }
+}
+
 - (CGRect)frame {
     let host_obj @ &CALayerHostObject {
         bounds,
@@ -801,4 +818,19 @@ fn is_implicit_animation_enabled(env: &mut Environment, layer: id) -> bool {
     let uiview_class = env.objc.get_known_class("UIView", &mut env.mem);
     let delegate_is_uiview: bool = msg![env; delegate isKindOfClass:uiview_class];
     !delegate_is_uiview || env.framework_state.uikit.ui_view.animation_block_count > 0
+}
+
+/// Replace uniform XY scale while retaining translation and the directions of
+/// the existing affine basis. The renderer already projects CATransform3D to XY.
+fn with_uniform_scale(t: CGAffineTransform, scale: CGFloat) -> CGAffineTransform {
+    let sx = t.a.hypot(t.b);
+    let sy = t.c.hypot(t.d);
+    CGAffineTransform {
+        a: if sx == 0.0 { scale } else { t.a / sx * scale },
+        b: if sx == 0.0 { 0.0 } else { t.b / sx * scale },
+        c: if sy == 0.0 { 0.0 } else { t.c / sy * scale },
+        d: if sy == 0.0 { scale } else { t.d / sy * scale },
+        tx: t.tx,
+        ty: t.ty,
+    }
 }

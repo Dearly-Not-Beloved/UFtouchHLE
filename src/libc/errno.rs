@@ -77,6 +77,15 @@ pub fn get_errno(env: &mut Environment) -> i32 {
     env.mem.read(ptr)
 }
 
+/// Diagnostic read only: unlike get_errno, never allocates guest memory.
+pub(crate) fn peek_errno(env: &Environment) -> Option<i32> {
+    env.libc_state
+        .errno
+        .errnos
+        .get(&env.current_thread)
+        .map(|p| env.mem.read(*p))
+}
+
 fn __error(env: &mut Environment) -> MutPtr<i32> {
     env.libc_state
         .errno

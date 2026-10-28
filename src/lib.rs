@@ -46,14 +46,17 @@ mod gles;
 mod image;
 mod libc;
 mod licenses;
+pub mod lan;
 mod mach_o;
 mod matrix;
 mod mem;
+mod network_trace;
 mod objc;
 mod options;
 mod paths;
 mod performance;
 mod stack;
+pub mod transport;
 mod window;
 
 // Environment is used very frequently used and used to be in this module, so
@@ -127,6 +130,10 @@ PATH should be a path to a .app bundle or .ipa file.
 If no app path or special option is specified, a GUI app picker is displayed.
 
 Special options:
+    --multiplayer host|browse|join [OPTIONS]
+        Standalone LAN transport console (must be the first option).
+        Use --multiplayer --help for details. No GameKit integration yet.
+
     --help
         Display this help text.
 

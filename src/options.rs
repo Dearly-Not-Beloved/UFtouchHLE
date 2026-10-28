@@ -150,6 +150,16 @@ pub struct Options {
     pub fps_limit: Option<f64>,
     pub force_composition: bool,
     pub network_access: bool,
+    pub network_trace: bool,
+    pub network_trace_limit: u64,
+    pub gamekit_role: Option<crate::transport::Role>,
+    pub gamekit_bind: std::net::SocketAddrV4,
+    pub gamekit_player_id: Option<crate::transport::PlayerId>,
+    pub gamekit_timeout: std::time::Duration,
+    pub gamekit_room: Option<String>,
+    pub gamekit_discover: Option<String>,
+    pub gamekit_discovery_bind: std::net::SocketAddrV4,
+    pub gamekit_broadcasts: Vec<std::net::SocketAddrV4>,
     pub popup_errors: bool,
     pub dumping_options: DumpingOptions,
     pub dumping_file: PathBuf,
@@ -201,6 +211,16 @@ impl Default for Options {
             fps_limit: Some(60.0), // Original iPhone is 60Hz and uses v-sync,
             force_composition: false,
             network_access: false,
+            network_trace: false,
+            network_trace_limit: 50_000,
+            gamekit_role: None,
+            gamekit_bind: "0.0.0.0:0".parse().unwrap(),
+            gamekit_player_id: None,
+            gamekit_timeout: std::time::Duration::from_secs(30),
+            gamekit_room: None,
+            gamekit_discover: None,
+            gamekit_discovery_bind: "0.0.0.0:42019".parse().unwrap(),
+            gamekit_broadcasts: Vec::new(),
             popup_errors: true,
             dumping_options: Default::default(),
             dumping_file: crate::paths::user_data_base_path().join("DUMP.txt"),
@@ -477,8 +497,87 @@ impl Options {
             }
         } else if arg == "--force-composition" {
             self.force_composition = true;
+        } else if arg == "--network-trace" || arg == "--network-trace=on" {
+            self.network_trace = true;
+        } else if arg == "--network-trace=off" {
+            self.network_trace = false;
+        } else if arg.starts_with("--network-trace=") {
+            return Err("Invalid --network-trace= (expected on or off)".to_string());
+        } else if let Some(value) = arg.strip_prefix("--network-trace-limit=") {
+            self.network_trace_limit = value
+                .parse()
+                .ok()
+                .filter(|v| *v > 0)
+                .ok_or_else(|| "Invalid --network-trace-limit=".to_string())?;
         } else if arg == "--allow-network-access" {
             self.network_access = true;
+        } else if let Some(value) = arg.strip_prefix("--gamekit-host=") {
+            if self.gamekit_discover.is_some()
+                || matches!(self.gamekit_role, Some(crate::transport::Role::Client(_)))
+            {
+                return Err("Conflicting GameKit roles".into());
+            }
+            self.gamekit_bind = value.parse().map_err(|_| "GameKit Host needs IPv4:port")?;
+            self.gamekit_role = Some(crate::transport::Role::Host);
+        } else if let Some(value) = arg.strip_prefix("--gamekit-join=") {
+            if self.gamekit_discover.is_some()
+                || matches!(self.gamekit_role, Some(crate::transport::Role::Host))
+            {
+                return Err("Conflicting GameKit roles".into());
+            }
+            self.gamekit_role = Some(crate::transport::Role::Client(crate::lan::ipv4_endpoint(
+                value,
+            )?));
+        } else if let Some(value) = arg.strip_prefix("--gamekit-room=") {
+            if value.is_empty() || value.len() > 96 || value.chars().any(char::is_control) {
+                return Err(
+                    "GameKit room name must be 1..96 UTF-8 bytes without control characters".into(),
+                );
+            }
+            self.gamekit_room = Some(value.into());
+        } else if let Some(value) = arg.strip_prefix("--gamekit-discover=") {
+            if self.gamekit_role.is_some() {
+                return Err("Conflicting GameKit roles".into());
+            }
+            if value != "auto"
+                && uuid::Uuid::parse_str(value)
+                    .ok()
+                    .is_none_or(|id| id.is_nil())
+            {
+                return Err("GameKit discovery needs auto or a nonzero room UUID".into());
+            }
+            self.gamekit_discover = Some(value.into());
+        } else if let Some(value) = arg.strip_prefix("--gamekit-discovery-bind=") {
+            let address: std::net::SocketAddrV4 = value
+                .parse()
+                .map_err(|_| "GameKit discovery needs IPv4:port")?;
+            if address.port() == 0 {
+                return Err("Discovery port cannot be zero".into());
+            }
+            self.gamekit_discovery_bind = address;
+        } else if let Some(value) = arg.strip_prefix("--gamekit-broadcast=") {
+            let address: std::net::SocketAddrV4 = value
+                .parse()
+                .map_err(|_| "GameKit broadcast needs IPv4:port")?;
+            if address.port() == 0 || self.gamekit_broadcasts.len() >= 16 {
+                return Err("Invalid GameKit broadcast target or too many targets".into());
+            }
+            self.gamekit_broadcasts.push(address);
+        } else if let Some(value) = arg.strip_prefix("--gamekit-bind=") {
+            self.gamekit_bind = value.parse().map_err(|_| "GameKit bind needs IPv4:port")?;
+        } else if let Some(value) = arg.strip_prefix("--gamekit-player-id=") {
+            let uuid = uuid::Uuid::parse_str(value).map_err(|_| "Invalid GameKit player UUID")?;
+            if uuid.is_nil() {
+                return Err("Zero GameKit identity".into());
+            }
+            self.gamekit_player_id = Some(crate::transport::PlayerId(*uuid.as_bytes()));
+        } else if let Some(value) = arg.strip_prefix("--gamekit-timeout-ms=") {
+            let ms = value
+                .parse::<u64>()
+                .ok()
+                .filter(|v| (100..=300_000).contains(v))
+                .ok_or("GameKit timeout must be 100..300000 ms")?;
+            self.gamekit_timeout = std::time::Duration::from_millis(ms);
         } else if arg == "--no-error-popup" {
             self.popup_errors = false;
         } else if let Some(values) = arg.strip_prefix("--dump=") {
@@ -573,6 +672,75 @@ fn parse_dump_options(options: &str) -> Result<DumpingOptions, String> {
 #[cfg(test)]
 mod controller_mapping_tests {
     use super::{Button, Options};
+
+    #[test]
+    fn local_gamekit_is_explicit_and_never_enables_network_permission() {
+        let mut options = Options::default();
+        assert!(options.gamekit_role.is_none());
+        options
+            .parse_argument("--gamekit-host=127.0.0.1:0")
+            .unwrap();
+        assert!(!options.network_access);
+        assert!(matches!(
+            options.gamekit_role,
+            Some(crate::transport::Role::Host)
+        ));
+        assert!(options
+            .parse_argument("--gamekit-join=127.0.0.1:1234")
+            .is_err());
+        assert!(options.parse_argument("--gamekit-timeout-ms=0").is_err());
+        assert!(options
+            .parse_argument("--gamekit-player-id=00000000000000000000000000000000")
+            .is_err());
+    }
+
+    #[test]
+    fn gamekit_room_modes_are_explicit_and_mutually_exclusive() {
+        let mut options = Options::default();
+        options.parse_argument("--gamekit-discover=auto").unwrap();
+        assert!(!options.network_access);
+        assert!(options.gamekit_role.is_none());
+        assert!(options
+            .parse_argument("--gamekit-host=127.0.0.1:0")
+            .is_err());
+        assert!(options
+            .parse_argument("--gamekit-join=127.0.0.1:42018")
+            .is_err());
+        assert!(options.parse_argument("--gamekit-discover=bad").is_err());
+        assert!(options.parse_argument("--gamekit-room=").is_err());
+        assert!(options
+            .parse_argument("--gamekit-discovery-bind=127.0.0.1:0")
+            .is_err());
+        options
+            .parse_argument("--gamekit-broadcast=127.0.0.1:42019")
+            .unwrap();
+        options.parse_argument("--gamekit-room=Test Room").unwrap();
+        let mut host = Options::default();
+        host.parse_argument("--gamekit-host=127.0.0.1:0").unwrap();
+        assert!(host.parse_argument("--gamekit-discover=auto").is_err());
+    }
+
+    #[test]
+    fn network_trace_is_opt_in_and_independent_from_network_access() {
+        let mut options = Options::default();
+        assert!(!options.network_trace);
+        options.parse_argument("--network-trace").unwrap();
+        assert!(options.network_trace);
+        assert!(!options.network_access);
+        options.parse_argument("--network-trace=off").unwrap();
+        assert!(!options.network_trace);
+        options.parse_argument("--network-trace=on").unwrap();
+        options.parse_argument("--network-trace-limit=7").unwrap();
+        assert_eq!(options.network_trace_limit, 7);
+        for argument in [
+            "--network-trace-limit=0",
+            "--network-trace-limit=-1",
+            "--network-trace-limit=abc",
+            "--network-trace=maybe",
+        ] {
+            assert!(options.parse_argument(argument).is_err());
+        }
+    }
 
     #[test]
     fn gta_gestures_are_opt_in_and_camera_modes_are_exclusive() {

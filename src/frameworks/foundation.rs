@@ -151,6 +151,7 @@ pub struct State {
     ns_thread: ns_thread::State,
     ns_time_zone: ns_time_zone::State,
     ns_user_defaults: ns_user_defaults::State,
+    ns_url_connection: ns_url_connection::State,
 }
 
 #[derive(Default)]

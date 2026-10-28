@@ -1662,14 +1662,16 @@ impl Environment {
                     dyld::Dyld::SVC_LAZY_LINK
                     | dyld::Dyld::SVC_LAZY_LINK_RET_FLAG
                     | dyld::Dyld::SVC_LINKED_FUNCTIONS_BASE.. => {
-                        if let Some(f) = self.dyld.get_svc_handler(
+                        if let Some((symbol, f)) = self.dyld.get_svc_handler(
                             &self.bins,
                             &mut self.mem,
                             &mut self.cpu,
                             svc_pc,
                             svc,
                         ) {
+                            let trace = crate::network_trace::c_begin(self, symbol);
                             f.call_from_guest(self);
+                            crate::network_trace::end(self, trace);
                             // Host functions take much longer than a guest
                             // instruction, but don't use up the thread's
                             // ticks. Count them, so a thread busy-waiting on

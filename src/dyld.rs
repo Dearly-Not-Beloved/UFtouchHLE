@@ -651,7 +651,7 @@ impl Dyld {
         cpu: &mut Cpu,
         svc_pc: u32,
         svc: u32,
-    ) -> Option<HostFunction> {
+    ) -> Option<(&'static str, HostFunction)> {
         match svc {
             Self::SVC_LAZY_LINK | Self::SVC_LAZY_LINK_RET_FLAG => {
                 self.do_lazy_link(bins, mem, cpu, svc_pc)
@@ -666,7 +666,7 @@ impl Dyld {
                     panic!("Unexpected SVC #{svc} at {svc_pc:#x}");
                 };
                 log_dbg!("Call to host function, already linked: {}", symbol);
-                Some(f)
+                Some((symbol, f))
             }
         }
     }
@@ -677,7 +677,7 @@ impl Dyld {
         mem: &mut Mem,
         cpu: &mut Cpu,
         svc_pc: u32,
-    ) -> Option<HostFunction> {
+    ) -> Option<(&'static str, HostFunction)> {
         // Links by restoring the original stub function, then updating
         // __la_symbol_ptr to the appropriate function.
         fn link_by_restoring_stub(
@@ -801,7 +801,7 @@ impl Dyld {
 
             // Return the host function so that we can call it now that we're
             // done.
-            return Some(f);
+            return Some((symbol, f));
         }
 
         for dylib in bins.iter() {

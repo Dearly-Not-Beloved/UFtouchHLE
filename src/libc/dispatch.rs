@@ -46,6 +46,8 @@ pub struct State {
     /// Reference point for `dispatch_time_t` values.
     epoch: Option<Instant>,
     copies: HashMap<MutVoidPtr, u32>,
+    /// Heap-promoted __block cells: one stack owner plus each copied Block.
+    byrefs: HashMap<MutVoidPtr, u32>,
     draining: bool,
 }
 
@@ -110,7 +112,9 @@ pub fn block_invoke_function(env: &Environment, block: ConstVoidPtr) -> GuestFun
 /// Call a block that takes no arguments.
 fn invoke_block(env: &mut Environment, block: ConstVoidPtr) {
     let invoke = GuestFunction::from_addr_with_thumb_bit(block_word(env, block, 3));
+    let trace = crate::network_trace::callback_begin(env, block.to_bits());
     let _: () = invoke.call_from_host(env, (block,));
+    crate::network_trace::end(env, trace);
 }
 
 fn main_queue(env: &mut Environment) -> ConstVoidPtr {
@@ -198,6 +202,7 @@ pub(crate) fn _Block_release(env: &mut Environment, block: MutVoidPtr) {
         return;
     }
     env.libc_state.dispatch.copies.remove(&block);
+    crate::network_trace::release_callback(env, block.to_bits());
     if block_word(env, block.cast_const(), 1) & HAS_COPY_DISPOSE != 0 {
         let descriptor = ConstPtr::<u32>::from_bits(block_word(env, block.cast_const(), 4));
         let helper = GuestFunction::from_addr_with_thumb_bit(env.mem.read(descriptor + 3));
@@ -212,6 +217,12 @@ fn _Block_object_assign(
     object: MutVoidPtr,
     flags: i32,
 ) {
+    // MRC __block object helpers use BYREF_CALLER; ownership of their payload
+    // is unchanged. ARC strong helpers instead use the ordinary object path.
+    if flags & 128 != 0 {
+        env.mem.write(dest, object);
+        return;
+    }
     let object = match flags & 0xf {
         3 => {
             if flags & 16 == 0 {
@@ -220,12 +231,16 @@ fn _Block_object_assign(
             object
         }
         7 => _Block_copy(env, object.cast_const()),
+        8 => copy_byref(env, object),
         _ => unimplemented!("Block capture flags {flags:#x}"),
     };
     env.mem.write(dest, object);
 }
 
 fn _Block_object_dispose(env: &mut Environment, object: MutVoidPtr, flags: i32) {
+    if flags & 128 != 0 {
+        return;
+    }
     match flags & 0xf {
         3 => {
             if flags & 16 == 0 {
@@ -233,16 +248,59 @@ fn _Block_object_dispose(env: &mut Environment, object: MutVoidPtr, flags: i32) 
             }
         }
         7 => _Block_release(env, object),
-        // Preserve the earlier runtime's handling of stack-only __block
-        // variables. Copying by-reference captures is not implemented yet.
-        8 => {
-            log!(
-                "Warning: Ignoring disposal of stack-only __block variable {:?}",
-                object
-            );
-        }
+        8 => release_byref(env, object),
         _ => unimplemented!("Block capture flags {flags:#x}"),
     }
+}
+
+// Clang's 32-bit Block ABI: isa, forwarding, flags, size, optional keep/destroy.
+// The forwarding cell is installed before calling guest helpers (which may
+// recursively capture the same cell). Never keep a State borrow across helpers.
+fn copy_byref(env: &mut Environment, original: MutVoidPtr) -> MutVoidPtr {
+    let words = original.cast::<u32>();
+    let forwarded = MutVoidPtr::from_bits(env.mem.read(words + 1));
+    if let Some(count) = env.libc_state.dispatch.byrefs.get_mut(&forwarded) {
+        *count = count.checked_add(1).unwrap();
+        return forwarded;
+    }
+    let size = env.mem.read(words + 3);
+    let flags = env.mem.read(words + 2);
+    assert!(
+        size >= if flags & HAS_COPY_DISPOSE != 0 {
+            24
+        } else {
+            16
+        }
+    );
+    let copy = env.mem.alloc(size);
+    env.mem.memmove(copy, original.cast_const(), size);
+    env.mem.write(words + 1, copy.to_bits());
+    env.mem.write(copy.cast::<u32>() + 1, copy.to_bits());
+    env.libc_state.dispatch.byrefs.insert(copy, 2);
+    if flags & HAS_COPY_DISPOSE != 0 {
+        let helper = GuestFunction::from_addr_with_thumb_bit(env.mem.read(words + 4));
+        let _: () = helper.call_from_host(env, (copy, original));
+    }
+    copy
+}
+
+fn release_byref(env: &mut Environment, original: MutVoidPtr) {
+    let forwarded = MutVoidPtr::from_bits(env.mem.read(original.cast::<u32>() + 1));
+    let Some(count) = env.libc_state.dispatch.byrefs.get_mut(&forwarded) else {
+        // A stack cell never copied to the heap has no owned allocation.
+        return;
+    };
+    *count -= 1;
+    if *count != 0 {
+        return;
+    }
+    env.libc_state.dispatch.byrefs.remove(&forwarded);
+    let words = forwarded.cast::<u32>();
+    if env.mem.read(words + 2) & HAS_COPY_DISPOSE != 0 {
+        let helper = GuestFunction::from_addr_with_thumb_bit(env.mem.read(words + 5));
+        let _: () = helper.call_from_host(env, (forwarded,));
+    }
+    env.mem.free(forwarded);
 }
 
 fn dispatch_get_global_queue(env: &mut Environment, _identifier: i32, _flags: u32) -> ConstVoidPtr {
@@ -255,6 +313,7 @@ fn dispatch_get_global_queue(env: &mut Environment, _identifier: i32, _flags: u3
 fn dispatch_async(env: &mut Environment, _queue: ConstVoidPtr, block: ConstVoidPtr) {
     let block = _Block_copy(env, block);
     env.libc_state.dispatch.pending.push_back(block);
+    crate::network_trace::scheduled(env, block.to_bits(), "dispatch_async");
 }
 
 fn dispatch_sync(env: &mut Environment, _queue: ConstVoidPtr, block: ConstVoidPtr) {
@@ -272,6 +331,7 @@ fn dispatch_after(
     };
     let block = _Block_copy(env, block);
     env.libc_state.dispatch.delayed.push((when, block));
+    crate::network_trace::scheduled(env, block.to_bits(), "dispatch_after");
 }
 
 /// `dispatch_once_t` is a `long`, which is ~0 once the block has run.
@@ -494,12 +554,16 @@ pub fn drain_main_queue(env: &mut Environment) {
         return;
     }
     env.libc_state.dispatch.draining = true;
+    crate::frameworks::game_kit::pump(env);
+    crate::frameworks::foundation::ns_url_connection::pump(env);
     queue_due_work(env);
     let pending = std::mem::take(&mut env.libc_state.dispatch.pending);
     for block in pending {
         let invoke =
             GuestFunction::from_addr_with_thumb_bit(block_word(env, block.cast_const(), 3));
+        let trace = crate::network_trace::callback_begin(env, block.to_bits());
         let _: () = invoke.call_from_host(env, (block,));
+        crate::network_trace::end(env, trace);
         _Block_release(env, block);
     }
     env.libc_state.dispatch.draining = false;

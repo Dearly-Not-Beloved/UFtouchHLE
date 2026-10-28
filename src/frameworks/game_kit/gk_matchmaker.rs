@@ -5,7 +5,8 @@
  */
 //! `GKMatchRequest` and `GKMatchmaker`.
 //!
-//! There is no Game Center, so matchmaking never finds a match.
+//! Default stubs have no Game Center. An explicit local backend can complete
+//! matchmaking after real peer connections and metadata validation.
 
 use crate::frameworks::foundation::NSUInteger;
 use crate::objc::{id, msg, objc_classes, release, ClassExports, HostObject, NSZonePtr};
@@ -107,19 +108,58 @@ pub const CLASSES: ClassExports = objc_classes! {
 
 - (())findMatchForRequest:(id)request
     withCompletionHandler:(id)_handler { // block
+    if super::local_network::enabled(env) {
+        let spec=snapshot(env,request);
+        super::local_network::request(env,spec,_handler,false,crate::objc::nil);return;
+    }
+    crate::network_trace::callback_not_scheduled(env, "GKMatchmaker.findMatchForRequest", _handler.to_bits());
     // The handler is never called, as if matchmaking never finished.
     log!("TODO: [GKMatchmaker findMatchForRequest:{:?} withCompletionHandler:]: there's no Game Center", request);
 }
 - (())addPlayersToMatch:(id)match_
            matchRequest:(id)request
       completionHandler:(id)_handler { // block
+    if super::local_network::enabled(env) {
+        let spec=snapshot(env,request);
+        super::local_network::request(env,spec,_handler,true,match_);return;
+    }
+    crate::network_trace::callback_not_scheduled(env, "GKMatchmaker.addPlayersToMatch", _handler.to_bits());
     log!("TODO: [GKMatchmaker addPlayersToMatch:{:?} matchRequest:{:?} completionHandler:]: there's no Game Center", match_, request);
 }
 - (())finishMatchmakingForMatch:(id)_match {
+    if super::local_network::enabled(env) {super::local_network::finish(env,_match);}
 }
 - (())cancel {
+    if super::local_network::enabled(env) {super::local_network::cancel(env);}
 }
 
 @end
 
 };
+
+fn snapshot(env: &mut crate::Environment, request: id) -> Option<super::local_network::Spec> {
+    if request == crate::objc::nil {
+        return None;
+    }
+    let class = env.objc.get_known_class("GKMatchRequest", &mut env.mem);
+    let valid: bool = msg![env; request isKindOfClass:class];
+    if !valid {
+        return None;
+    }
+    let object = env.objc.borrow::<GKMatchRequestHostObject>(request);
+    let players = object.players_to_invite;
+    let spec = super::local_network::Spec {
+        min: object.min_players,
+        max: object.max_players,
+        default: object.default_number_of_players,
+        group: object.player_group,
+        attributes: object.player_attributes,
+    };
+    if players != crate::objc::nil {
+        let count: u32 = msg![env; players count];
+        if count != 0 {
+            return None;
+        }
+    }
+    Some(spec)
+}

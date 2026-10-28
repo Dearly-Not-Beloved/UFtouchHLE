@@ -49,6 +49,7 @@ pub mod uikit;
 /// Container for state of various child modules
 #[derive(Default)]
 pub struct State {
+    pub(crate) network_trace: crate::network_trace::State,
     pub(crate) performance: crate::performance::State,
     avfoundation: avfoundation::State,
     audio_toolbox: audio_toolbox::State,

@@ -414,6 +414,38 @@ Other options:
         Enabling this option may solve some rendering issues, but implies
         a performance hit which is undesirable in most of the cases.
 
+    --gamekit-host=IP:PORT / --gamekit-join=IP:PORT
+        Opt in to local-only historical GameKit. Requires --allow-network-access.
+        Host binds TCP and UDP; join connects to that Host.
+    --gamekit-bind=IP:PORT
+        Override the local listener (Client default 0.0.0.0:0).
+    --gamekit-player-id=UUID
+        Stable local identity; otherwise generated for this emulator instance.
+    --gamekit-timeout-ms=N
+        Matchmaking timeout, 100..300000 ms (default 30000).
+
+    --gamekit-room=NAME
+        With --gamekit-host, advertise the actual GameKit room on the LAN
+        while accepting players. No discovery packets are sent by default.
+    --gamekit-discover=auto|ROOM_UUID
+        Find a compatible GameKit room instead of --gamekit-join. Auto waits
+        one second to collect announcements and rejects an ambiguous list.
+        Connection still requires real peers and matching GameKit attributes.
+    --gamekit-discovery-bind=IP:PORT
+        Discovery browser UDP bind (default 0.0.0.0:42019).
+    --gamekit-broadcast=IP:PORT
+        Host advertisement destination; repeat for multiple interfaces or
+        local test browsers. Default 255.255.255.255:42019.
+
+    --network-trace[=on|off]
+        Log observed network API calls and callback activity as [NetworkTrace]
+        JSON records in touchHLE_log.txt. Off by default. Does not enable network
+        access or implement GameKit. Diagnostic logging may slow games down.
+
+    --network-trace-limit=<positive integer>
+        Limit network trace records (default: 50000), followed by one truncation
+        marker. Does not enable tracing by itself.
+
     --allow-network-access
         Allow apps running in touchHLE to access the Internet and the local network.
 

@@ -82,6 +82,15 @@ fn SCNetworkReachabilityCreateWithAddress(
         .objc
         .get_known_class("_touchHLE_SCNetworkReachability", &mut env.mem);
     let address_val = env.mem.read(address);
+    if env.options.network_trace {
+        crate::network_trace::record(
+            env,
+            "reachability_address",
+            serde_json::json!({
+                "address":address_val.to_sockaddr_v4().to_string()
+            }),
+        );
+    }
     let res = env.objc.alloc_object(
         isa,
         Box::new(SCNetworkReachabilityHostObject {
@@ -105,6 +114,16 @@ fn SCNetworkReachabilityGetFlags(
     flags: MutPtr<SCNetworkReachabilityFlags>,
 ) -> bool {
     if !env.options.network_access {
+        if env.options.network_trace {
+            crate::network_trace::record(
+                env,
+                "reachability_result",
+                serde_json::json!({
+                    "target":target.to_bits(), "network_access":false,
+                    "success":false, "flags_written":false
+                }),
+            );
+        }
         log_dbg!(
             "Network access is disabled, SCNetworkReachabilityGetFlags({:?}, {:?}) -> false",
             target,
@@ -120,6 +139,34 @@ fn SCNetworkReachabilityGetFlags(
             .get_known_class("_touchHLE_SCNetworkReachability", &mut env.mem)
     );
     let host_object = env.objc.borrow::<SCNetworkReachabilityHostObject>(target);
+    let local_default = host_object
+        .address
+        .is_some_and(|addr| addr.ip().is_unspecified());
+    // MHP2G queries the default route before it calls GameKit. Keep the old
+    // behavior unless the local backend is explicitly enabled, and report an
+    // actual OS route snapshot rather than treating configuration as success.
+    if local_default {
+        if let Some(reachable) = crate::frameworks::game_kit::local_route(env) {
+            let out_flags = if reachable {
+                kSCNetworkReachabilityFlagsReachable
+            } else {
+                0
+            };
+            env.mem.write(flags, out_flags);
+            if env.options.network_trace {
+                crate::network_trace::record(
+                    env,
+                    "reachability_result",
+                    serde_json::json!({
+                        "target":target.to_bits(),"success":true,"flags_written":true,
+                        "flags":out_flags,"source":"local_gamekit_os_route_no_peer_probe"
+                    }),
+                );
+            }
+            return true;
+        }
+    }
+    let host_object = env.objc.borrow::<SCNetworkReachabilityHostObject>(target);
     if let Some(addr) = host_object.address {
         if addr.ip().is_link_local() {
             log_dbg!(
@@ -133,6 +180,17 @@ fn SCNetworkReachabilityGetFlags(
             let out_flags =
                 kSCNetworkReachabilityFlagsReachable | kSCNetworkReachabilityFlagsIsDirect;
             env.mem.write(flags, out_flags);
+            if env.options.network_trace {
+                crate::network_trace::record(
+                    env,
+                    "reachability_result",
+                    serde_json::json!({
+                        "target":target.to_bits(), "network_access":true,
+                        "success":true, "flags_written":true, "flags":out_flags,
+                        "source":"existing_link_local_shortcut"
+                    }),
+                );
+            }
             return true;
         }
     }
@@ -150,6 +208,11 @@ fn SCNetworkReachabilitySetCallback(
     callout: GuestFunction, // SCNetworkReachabilityCallBack
     context: MutVoidPtr,    // SCNetworkReachabilityContext *
 ) -> bool {
+    crate::network_trace::callback_not_scheduled(
+        env,
+        "SCNetworkReachabilitySetCallback",
+        callout.addr_with_thumb_bit(),
+    );
     let target_class: Class = msg![env; target class];
     assert_eq!(
         target_class,

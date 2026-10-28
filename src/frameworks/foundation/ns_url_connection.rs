@@ -8,7 +8,10 @@
 use super::{ns_string, NSInteger};
 use crate::environment::Environment;
 use crate::mem::MutPtr;
-use crate::objc::{autorelease, id, msg, msg_class, nil, objc_classes, release, ClassExports};
+use crate::objc::{
+    autorelease, id, msg, msg_class, nil, objc_classes, release, retain, ClassExports, HostObject,
+    NSZonePtr,
+};
 use std::borrow::Cow;
 
 const NSURLErrorDomain: &str = "NSURLErrorDomain";
@@ -17,12 +20,58 @@ const NSURLErrorDomain: &str = "NSURLErrorDomain";
 type NSURLErrorCode = NSInteger;
 const NSURLErrorNotConnectedToInternet: NSURLErrorCode = -1009;
 
+#[derive(Default)]
+pub struct State {
+    pending: Vec<id>,
+}
+#[derive(Default)]
+struct Connection {
+    request: id,
+    delegate: id,
+    started: bool,
+    cancelled: bool,
+}
+impl HostObject for Connection {}
+
+/// The local GameKit backend does not provide HTTP. Report a real asynchronous
+/// failure on the main loop instead of returning nil and leaving SDK timers
+/// holding a nonexistent connection. No HTTP request is made.
+pub(crate) fn pump(env: &mut Environment) {
+    let pending = std::mem::take(&mut env.framework_state.foundation.ns_url_connection.pending);
+    for connection in pending {
+        let c = env.objc.borrow::<Connection>(connection);
+        let (delegate, cancelled) = (c.delegate, c.cancelled);
+        if !cancelled && delegate != nil {
+            let selector = env
+                .objc
+                .register_host_selector("connection:didFailWithError:".into(), &mut env.mem);
+            let responds: bool = msg![env; delegate respondsToSelector:selector];
+            if responds {
+                let domain = ns_string::get_static_str(env, NSURLErrorDomain);
+                let error: id = msg_class![env; NSError errorWithDomain:domain code:NSURLErrorNotConnectedToInternet userInfo:nil];
+                retain(env, error);
+                retain(env, delegate);
+                let _: () = msg![env; delegate connection:connection didFailWithError:error];
+                release(env, delegate);
+                release(env, error);
+            }
+        }
+        let c = env.objc.borrow_mut::<Connection>(connection);
+        let delegate = std::mem::replace(&mut c.delegate, nil);
+        release(env, delegate);
+        release(env, connection);
+    }
+}
+
 pub const CLASSES: ClassExports = objc_classes! {
 
 (env, this, _cmd);
 
 @implementation NSURLConnection: NSObject
 
++ (id)allocWithZone:(NSZonePtr)_zone {
+    env.objc.alloc_object(this,Box::<Connection>::default(),&mut env.mem)
+}
 + (id)sendSynchronousRequest:(id)request // NSURLRequest *
            returningResponse:(MutPtr<id>)response // NSURLResponse **
                        error:(MutPtr<id>)out_error { // NSError **
@@ -43,6 +92,13 @@ pub const CLASSES: ClassExports = objc_classes! {
         let error = msg![env; error initWithDomain:domain code:NSURLErrorNotConnectedToInternet userInfo:nil];
         autorelease(env, error);
         env.mem.write(out_error, error);
+        if env.options.network_trace {
+            crate::network_trace::record(env, "network_error", serde_json::json!({
+                "api":"NSURLConnection.sendSynchronousRequest",
+                "error_object":error.to_bits(), "domain":NSURLErrorDomain,
+                "code":NSURLErrorNotConnectedToInternet, "source":"existing_stub"
+            }));
+        }
     }
     nil
 }
@@ -54,6 +110,27 @@ pub const CLASSES: ClassExports = objc_classes! {
     autorelease(env, new)
 }
 
+- (())dealloc {
+    let c=env.objc.borrow::<Connection>(this);
+    let (request,delegate)=(c.request,c.delegate);
+    release(env,request);release(env,delegate);
+    env.objc.dealloc_object(this,&mut env.mem)
+}
+- (())start {
+    let c=env.objc.borrow_mut::<Connection>(this);
+    if c.started || c.cancelled {return;}
+    c.started=true;
+    retain(env,this);
+    env.framework_state.foundation.ns_url_connection.pending.push(this);
+}
+- (())cancel {env.objc.borrow_mut::<Connection>(this).cancelled=true;}
+- (())scheduleInRunLoop:(id)_run_loop forMode:(id)_mode {
+    // This local-only failure backend is drained by the existing main loop.
+}
+- (())unscheduleFromRunLoop:(id)_run_loop forMode:(id)_mode {}
+- (id)originalRequest {env.objc.borrow::<Connection>(this).request}
+- (id)currentRequest {env.objc.borrow::<Connection>(this).request}
+
 - (id)initWithRequest:(id)request // NSURLRequest *
              delegate:(id)delegate {
     msg![env; this initWithRequest:request delegate:delegate startImmediately:true]
@@ -62,6 +139,13 @@ pub const CLASSES: ClassExports = objc_classes! {
 - (id)initWithRequest:(id)request // NSURLRequest *
              delegate:(id)delegate
      startImmediately:(bool)start_immediately {
+    if env.options.network_access && (env.options.gamekit_role.is_some() || env.options.gamekit_discover.is_some()) {
+        retain(env,request);retain(env,delegate);
+        let c=env.objc.borrow_mut::<Connection>(this);
+        c.request=request;c.delegate=delegate;
+        if start_immediately {let _:()=msg![env; this start];}
+        return this;
+    }
     log!(
         "TODO: [(NSURLConnection *){:?} initWithRequest:{:?} ('{}') delegate:{:?} startImmediately:{}] -> nil",
         this,
