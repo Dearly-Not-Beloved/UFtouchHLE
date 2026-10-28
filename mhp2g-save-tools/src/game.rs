@@ -64,7 +64,9 @@ pub const SHIFTED: [(std::ops::Range<usize>, usize); 5] = [
 /// offset), 8 bytes each: the PSP has `u16 a, u16 b, u32 sizes`, iOS packs
 /// the first two as `u32 a | b << 7` (`a` < 0x80; `b` is a hunt count).
 pub const MONSTER_RECORDS: (std::ops::Range<usize>, usize) = (0x64B80..0x64C78, 0x2888);
-/// Name field of the iOS guild card (PSP +0x672B8).
+/// Name field of the guild card (PSP +0x672B8), 8 UTF-16 characters. The
+/// list of hunters at iOS +0x655C0 (PSP +0x67E48, with 0x40-byte instead of
+/// 0x38-byte entries) is rebuilt by the iOS game from the quest histories.
 pub const IOS_GUILD_CARD_NAME: usize = 0x64A34;
 /// Length of the name field at the start of each slot.
 pub const SLOT_NAME_LEN: usize = 0x10;
