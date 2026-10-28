@@ -100,13 +100,27 @@ touchHLE p2g.ipa --allow-network-access --gamekit-discover=auto --network-trace
 
 ## 崩溃与剩余验证
 
-已保留的客户端崩溃：`client/before-expected-count.log` 第 137706 行起，调用 Lobi / HexNakamap UI 时，CALayer 不响应 `setValue:forKeyPath:`。当时用户反馈“有个 APP 崩溃”。目前没有证据证明必须打开该聊天 UI 才能完成原版 GameKit 会话；也没有将它假装修复。若原版多人流程确实强制经过该页，须记录具体 keyPath 与值，再补相应 KVC / Layer 行为，不能全局吞掉未知 selector。
+### 电话 / Lobi 入口回归（2026-10-28）
+
+点击电话会进入 Lobi（HexNakamap / NKChatWebViewController）聊天和在线集会所选择界面。此前每一轮都崩在一个缺失的 API 上，以下均已补齐，崩溃日志归档在 `target/mhp2g-lobby/{host,client}/`：
+
+| 崩溃 | 修正 | 归档日志 |
+| --- | --- | --- |
+| `-[UIViewController navigationItem]` | 新增 UINavigationItem、UIBarButtonItem / UIBarItem、UIToolbar（只存配置；工具栏显示自定义视图） | `client/phone-crash-latest.log` |
+| `-[UIWebView scrollView]` | UIWebView 增加 scrollView、delegate、request、isLoading、stopLoading、stringByEvaluatingJavaScriptFromString:（无网页引擎，页面空白） | `{host,client}/webview-scrollview-crash.log` |
+| `-[NSURL host]` | NSURL 按 RFC 3986 拆分：scheme、host、path（解码）、query、fragment、pathExtension；非 http absoluteString 不再断言；`file:` 字符串转为文件 URL | `{host,client}/nsurl-host-crash.log` |
+| `CFURLCreateStringByAddingPercentEscapes` | 同时实现它与 `CFURLCreateStringByReplacingPercentEscapesUsingEncoding`（CF 的合法字符与 NULL 语义） | `{host,client}/cfurl-escape-crash.log` |
+| `CGGradientCreateWithColorComponents` | 新增 CGGradient（线性 / 径向）、CGContext 路径（MoveTo / LineTo / ArcToPoint / Rect / ClosePath）、非零环绕裁剪、填充和抗锯齿描边、描边颜色与线宽 | `host/cggradient-crash.log` |
+
+游戏自己的输入栏确认键 `hxGradationButton` 用圆角路径裁剪加渐变绘制。第一版只按包围盒处理路径，结果显示成绿色方块（`{host,client}/green-block.log`）；改为真实路径后，用户确认显示正常。
+
+Lobi 聊天本身是 nakamap.com 在线网页，模拟器没有网页引擎，界面弹出（`presentModalViewController`）也未实现，所以点击后看不到内容。这一步验收的是不崩溃，与局域网联机无关。
 
 当前仍需真实双实例完成：
 
 1. 已通过：最新计数时序下，两端完成原版匹配并进入同一大厅，游戏不再因完成时计数清零立即重新匹配。
 2. 已通过：双方名单与不同角色的视觉核对，日志也记录到双方发送及接收 delegate；不由计数单独推断人物同步。
-3. 从集会所退出 / 断开后用同一实例重新连接；合成客体测试不能代替游戏状态恢复。
+3. 已通过（2026-10-28）：Client 从集会所退出后用同一实例重新加入，双方再次互相看见（用户视觉确认）。`{host,client}/regress-1.log` 中两端都有游戏安装的 match，Host 发出 5 次、Client 发出 3 次匹配请求；Host 收到 198 条、Client 收到 270 条数据，无 panic。日志里的 `Local matchmaking cancelled` 是游戏退出时自行取消搜索。
 4. 新发现模式的真实游戏复测，再做物理 LAN 双机。
 
 没有做任务接取、入图、战斗或狩猎结算的联机验收。

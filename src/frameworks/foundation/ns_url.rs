@@ -98,8 +98,15 @@ pub const CLASSES: ClassExports = objc_classes! {
         return nil;
     }
 
-    // FIXME: this should parse the URL
-    assert!(!to_rust_string(env, url).starts_with("file:")); // TODO
+    let url_str = to_rust_string(env, url);
+    let parts = split_url(&url_str);
+    if parts.scheme.is_some_and(|scheme| scheme.eq_ignore_ascii_case("file")) {
+        let path = percent_decode(parts.path);
+        let path = from_rust_string(env, path);
+        let this: id = msg![env; this initFileURLWithPath:path];
+        release(env, path);
+        return this;
+    }
     let url: id = msg![env; url copy];
     *env.objc.borrow_mut(this) = NSURLHostObject::OtherURL { ns_string: url };
     this
@@ -144,24 +151,64 @@ pub const CLASSES: ClassExports = objc_classes! {
     match *env.objc.borrow(this) {
         NSURLHostObject::FileURL { ns_string, .. } => ns_string,
         NSURLHostObject::OtherURL { ns_string } => {
-            // TODO: Support full URLs, not only ones that are just a path.
-            // FIXME: This should do unescaping.
-            // TODO: Avoid copy.
-            assert!(to_rust_string(env, ns_string).starts_with('/'));
-            ns_string
+            let url = to_rust_string(env, ns_string);
+            let path = percent_decode(split_url(&url).path);
+            let path = from_rust_string(env, path);
+            autorelease(env, path)
         },
     }
+}
+
+- (id)pathExtension {
+    let path: id = msg![env; this path];
+    msg![env; path pathExtension]
+}
+
+- (id)scheme {
+    let ns_string = match *env.objc.borrow(this) {
+        NSURLHostObject::FileURL { .. } => return get_static_str(env, "file"),
+        NSURLHostObject::OtherURL { ns_string } => ns_string,
+    };
+    let url = to_rust_string(env, ns_string);
+    let scheme = split_url(&url).scheme.map(str::to_string);
+    url_component(env, scheme)
+}
+
+- (id)host {
+    let &NSURLHostObject::OtherURL { ns_string } = env.objc.borrow(this) else {
+        return nil;
+    };
+    let url = to_rust_string(env, ns_string);
+    let host = split_url(&url).host().map(percent_decode);
+    url_component(env, host)
+}
+
+// Unlike path, the query and fragment aren't unescaped.
+- (id)query {
+    let &NSURLHostObject::OtherURL { ns_string } = env.objc.borrow(this) else {
+        return nil;
+    };
+    let url = to_rust_string(env, ns_string);
+    let query = split_url(&url).query.map(str::to_string);
+    url_component(env, query)
+}
+
+- (id)fragment {
+    let &NSURLHostObject::OtherURL { ns_string } = env.objc.borrow(this) else {
+        return nil;
+    };
+    let url = to_rust_string(env, ns_string);
+    let fragment = split_url(&url).fragment.map(str::to_string);
+    url_component(env, fragment)
 }
 
 - (id)absoluteString {
     match *env.objc.borrow(this) {
         // FIXME: don't assume URL is already absolute
         NSURLHostObject::FileURL { ns_string, .. } => ns_string,
-        NSURLHostObject::OtherURL { ns_string } => {
-            // TODO: full RFC 1808 resolution
-            assert!(to_rust_string(env, ns_string).starts_with("http"));
-            ns_string
-        },
+        // FIXME: relative URLs (with a base URL) aren't supported, so every
+        // other URL is its own absolute string.
+        NSURLHostObject::OtherURL { ns_string } => ns_string,
     }
 }
 
@@ -224,5 +271,130 @@ pub fn to_rust_path(env: &mut Environment, url: id) -> Cow<'static, GuestPath> {
     match to_rust_string(env, path_string) {
         Cow::Borrowed(path) => Cow::Borrowed(path.as_ref()),
         Cow::Owned(path_buf) => Cow::Owned(path_buf.into()),
+    }
+}
+
+/// The parts of a URL string, as split by RFC 3986's regular expression
+/// (appendix B). The parts aren't unescaped.
+struct UrlParts<'a> {
+    scheme: Option<&'a str>,
+    authority: Option<&'a str>,
+    path: &'a str,
+    query: Option<&'a str>,
+    fragment: Option<&'a str>,
+}
+impl<'a> UrlParts<'a> {
+    /// The host in the authority, without user info or port.
+    fn host(&self) -> Option<&'a str> {
+        let authority = self.authority?;
+        let host = authority
+            .rsplit_once('@')
+            .map_or(authority, |(_, host)| host);
+        let host = if let Some(rest) = host.strip_prefix('[') {
+            // IPv6 address literal (the brackets aren't part of the host).
+            rest.split_once(']').map_or(rest, |(host, _)| host)
+        } else {
+            host.split_once(':').map_or(host, |(host, _)| host)
+        };
+        Some(host)
+    }
+}
+
+fn split_url(url: &str) -> UrlParts<'_> {
+    let (rest, fragment) = match url.split_once('#') {
+        Some((rest, fragment)) => (rest, Some(fragment)),
+        None => (url, None),
+    };
+    let (rest, query) = match rest.split_once('?') {
+        Some((rest, query)) => (rest, Some(query)),
+        None => (rest, None),
+    };
+    let (scheme, rest) = match rest.split_once(':') {
+        Some((scheme, rest)) if !scheme.is_empty() && !scheme.contains('/') => (Some(scheme), rest),
+        _ => (None, rest),
+    };
+    let (authority, path) = match rest.strip_prefix("//") {
+        Some(rest) => {
+            let end = rest.find('/').unwrap_or(rest.len());
+            (Some(&rest[..end]), &rest[end..])
+        }
+        None => (None, rest),
+    };
+    UrlParts {
+        scheme,
+        authority,
+        path,
+        query,
+        fragment,
+    }
+}
+
+/// Replaces `%XX` escapes. Escapes that aren't valid UTF-8 are kept as they
+/// are.
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = bytes
+            .get(i + 1..i + 3)
+            .and_then(|hex| u8::from_str_radix(std::str::from_utf8(hex).ok()?, 16).ok());
+        match (bytes[i], hex) {
+            (b'%', Some(byte)) => {
+                decoded.push(byte);
+                i += 3;
+            }
+            (byte, _) => {
+                decoded.push(byte);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8(decoded).unwrap_or_else(|_| s.to_string())
+}
+
+/// An autoreleased `NSString*` for a URL component, or `nil` if the URL
+/// doesn't have it.
+fn url_component(env: &mut Environment, component: Option<String>) -> id {
+    match component {
+        Some(component) => {
+            let ns_string = from_rust_string(env, component);
+            autorelease(env, ns_string)
+        }
+        None => nil,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_split_url() {
+        let parts = split_url("https://user@example.com:8080/a%20b/c.html?x=1&y=2#top");
+        assert_eq!(parts.scheme, Some("https"));
+        assert_eq!(parts.host(), Some("example.com"));
+        assert_eq!(parts.path, "/a%20b/c.html");
+        assert_eq!(percent_decode(parts.path), "/a b/c.html");
+        assert_eq!(parts.query, Some("x=1&y=2"));
+        assert_eq!(parts.fragment, Some("top"));
+
+        let parts = split_url("nakamap://chat");
+        assert_eq!(parts.scheme, Some("nakamap"));
+        assert_eq!(parts.host(), Some("chat"));
+        assert_eq!(parts.path, "");
+        assert_eq!(parts.query, None);
+
+        let parts = split_url("about:blank");
+        assert_eq!(parts.scheme, Some("about"));
+        assert_eq!(parts.host(), None);
+        assert_eq!(parts.path, "blank");
+
+        let parts = split_url("/just/a/path");
+        assert_eq!(parts.scheme, None);
+        assert_eq!(parts.host(), None);
+        assert_eq!(parts.path, "/just/a/path");
+
+        assert_eq!(split_url("http://[::1]:80/").host(), Some("::1"));
     }
 }

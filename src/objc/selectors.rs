@@ -67,6 +67,9 @@ impl SEL {
     pub fn is_null(self) -> bool {
         self.0.is_null()
     }
+    pub fn null() -> Self {
+        SEL(ConstPtr::null())
+    }
 }
 
 unsafe impl SafeRead for SEL {}

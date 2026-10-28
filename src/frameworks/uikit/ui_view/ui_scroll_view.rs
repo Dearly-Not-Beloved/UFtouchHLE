@@ -6,7 +6,7 @@
 //! `UIScrollView`.
 
 pub mod ui_text_view;
-use crate::frameworks::core_graphics::{CGPoint, CGRect, CGSize};
+use crate::frameworks::core_graphics::{CGFloat, CGPoint, CGRect, CGSize};
 use crate::frameworks::foundation::NSInteger;
 use crate::objc::{
     id, impl_HostObject_with_superclass, msg, nil, objc_classes, todo_objc_setter, ClassExports,
@@ -92,6 +92,11 @@ pub const CLASSES: ClassExports = objc_classes! {
 
 - (())setScrollsToTop:(bool)value {
     todo_objc_setter!(this, value);
+}
+
+- (())setDecelerationRate:(CGFloat)rate {
+    // Scrolling doesn't decelerate yet.
+    todo_objc_setter!(this, rate);
 }
 
 - (CGPoint)contentOffset {

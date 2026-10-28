@@ -41,6 +41,7 @@ const CONSTANTS: ConstantExports = &[
 pub mod ui_accelerometer;
 pub mod ui_activity_indicator_view;
 pub mod ui_application;
+pub mod ui_bar_button_item;
 pub mod ui_bezier_path;
 pub mod ui_color;
 pub mod ui_device;
@@ -51,6 +52,7 @@ pub mod ui_graphics;
 pub mod ui_image;
 pub mod ui_image_picker_controller;
 pub mod ui_local_notification;
+pub mod ui_navigation_item;
 pub mod ui_nib;
 pub mod ui_pasteboard;
 pub mod ui_responder;
@@ -66,6 +68,7 @@ pub const DYLIB: crate::dyld::HostDylib = crate::dyld::HostDylib {
         ui_accelerometer::CLASSES,
         ui_activity_indicator_view::CLASSES,
         ui_application::CLASSES,
+        ui_bar_button_item::CLASSES,
         ui_bezier_path::CLASSES,
         ui_color::CLASSES,
         ui_device::CLASSES,
@@ -74,6 +77,7 @@ pub const DYLIB: crate::dyld::HostDylib = crate::dyld::HostDylib {
         ui_image::CLASSES,
         ui_image_picker_controller::CLASSES,
         ui_local_notification::CLASSES,
+        ui_navigation_item::CLASSES,
         ui_nib::CLASSES,
         ui_pasteboard::CLASSES,
         ui_responder::CLASSES,
@@ -93,6 +97,7 @@ pub const DYLIB: crate::dyld::HostDylib = crate::dyld::HostDylib {
         ui_view::ui_picker_view::CLASSES,
         ui_view::ui_scroll_view::CLASSES,
         ui_view::ui_scroll_view::ui_text_view::CLASSES,
+        ui_view::ui_toolbar::CLASSES,
         ui_view::ui_web_view::CLASSES,
         ui_view::ui_window::CLASSES,
         ui_view_controller::CLASSES,

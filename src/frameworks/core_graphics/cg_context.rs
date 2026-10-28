@@ -17,7 +17,9 @@ use super::cg_font::{
     self as cg_font, CGFontHostObject, CGFontRef, CGFontRelease, CGFontRetain, CGGlyph,
 };
 use super::cg_geometry::CGPointZero;
+use super::cg_gradient::{CGGradientDrawingOptions, CGGradientRef};
 use super::cg_image::CGImageRef;
+use super::cg_path::{self, Path};
 use super::{cg_bitmap_context, cg_color, CGFloat, CGPoint, CGRect, CGSize};
 use crate::dyld::{export_c_func, FunctionExports};
 use crate::font::Font;
@@ -75,6 +77,9 @@ type ContextState = (
     CGFontRef,                            // font
     CGFloat,                              // font size
     CGBlendMode,                          // blend mode
+    Vec<Path>,                            // clip paths
+    (CGFloat, CGFloat, CGFloat, CGFloat), // RGB stroke color
+    CGFloat,                              // line width
 );
 
 pub(super) struct CGContextHostObject {
@@ -89,6 +94,13 @@ pub(super) struct CGContextHostObject {
     pub(super) text_transform: Option<CGAffineTransform>,
     pub(super) text_drawing_mode: CGTextDrawingMode,
     pub(super) state_stack: Vec<ContextState>,
+    /// The current path, in device space.
+    pub(super) path: Path,
+    /// Paths that clip drawing, in device space: only what's inside all of
+    /// them is drawn. So far this only applies to gradients and paths.
+    pub(super) clip: Vec<Path>,
+    pub(super) rgb_stroke_color: (CGFloat, CGFloat, CGFloat, CGFloat),
+    pub(super) line_width: CGFloat,
 }
 impl HostObject for CGContextHostObject {}
 
@@ -159,34 +171,26 @@ fn CGContextSetGrayFillColor(
 }
 
 fn CGContextSetGrayStrokeColor(
-    _env: &mut Environment,
+    env: &mut Environment,
     context: CGContextRef,
     gray: CGFloat,
     alpha: CGFloat,
 ) {
-    log!(
-        "TODO: CGContextSetGrayStrokeColor({:?}, {}, {})",
-        context,
-        gray,
-        alpha,
-    );
+    env.objc
+        .borrow_mut::<CGContextHostObject>(context)
+        .rgb_stroke_color = (gray, gray, gray, alpha);
 }
 fn CGContextSetRGBStrokeColor(
-    _env: &mut Environment,
+    env: &mut Environment,
     context: CGContextRef,
     r: CGFloat,
     g: CGFloat,
     b: CGFloat,
     a: CGFloat,
 ) {
-    log!(
-        "TODO: CGContextSetRGBStrokeColor({:?}, {}, {}, {}, {})",
-        context,
-        r,
-        g,
-        b,
-        a
-    );
+    env.objc
+        .borrow_mut::<CGContextHostObject>(context)
+        .rgb_stroke_color = (r, g, b, a);
 }
 
 fn CGContextSetShadowWithColor(
@@ -285,6 +289,9 @@ fn CGContextSaveGState(env: &mut Environment, context: CGContextRef) {
         host_obj.font,
         host_obj.font_size,
         host_obj.blend_mode,
+        host_obj.clip.clone(),
+        host_obj.rgb_stroke_color,
+        host_obj.line_width,
     ));
     CGFontRetain(env, env.objc.borrow::<CGContextHostObject>(context).font);
 }
@@ -303,6 +310,9 @@ fn CGContextRestoreGState(env: &mut Environment, context: CGContextRef) {
     host_obj.font = state.2;
     host_obj.font_size = state.3;
     host_obj.blend_mode = state.4;
+    host_obj.clip = state.5;
+    host_obj.rgb_stroke_color = state.6;
+    host_obj.line_width = state.7;
 }
 
 fn CGContextSetInterpolationQuality(
@@ -557,6 +567,210 @@ fn CGContextShowGlyphsAtPositions(
     }
 }
 
+type CGPathDrawingMode = i32;
+
+const kCGPathFill: CGPathDrawingMode = 0;
+const kCGPathEOFill: CGPathDrawingMode = 1;
+const kCGPathStroke: CGPathDrawingMode = 2;
+const kCGPathFillStroke: CGPathDrawingMode = 3;
+const kCGPathEOFillStroke: CGPathDrawingMode = 4;
+
+fn current_point(env: &mut Environment, context: CGContextRef) -> Option<CGPoint> {
+    env.objc
+        .borrow::<CGContextHostObject>(context)
+        .path
+        .current_point()
+}
+
+fn device_point(env: &mut Environment, context: CGContextRef, point: CGPoint) -> CGPoint {
+    let host_obj = env.objc.borrow::<CGContextHostObject>(context);
+    host_obj.transform.apply_to_point(point)
+}
+
+fn CGContextBeginPath(env: &mut Environment, context: CGContextRef) {
+    env.objc.borrow_mut::<CGContextHostObject>(context).path = Path::default();
+}
+
+fn CGContextMoveToPoint(env: &mut Environment, context: CGContextRef, x: CGFloat, y: CGFloat) {
+    let point = device_point(env, context, CGPoint { x, y });
+    env.objc
+        .borrow_mut::<CGContextHostObject>(context)
+        .path
+        .move_to(point);
+}
+
+fn CGContextAddLineToPoint(env: &mut Environment, context: CGContextRef, x: CGFloat, y: CGFloat) {
+    let point = device_point(env, context, CGPoint { x, y });
+    env.objc
+        .borrow_mut::<CGContextHostObject>(context)
+        .path
+        .line_to(point);
+}
+
+fn CGContextClosePath(env: &mut Environment, context: CGContextRef) {
+    env.objc
+        .borrow_mut::<CGContextHostObject>(context)
+        .path
+        .close();
+}
+
+fn CGContextAddArcToPoint(
+    env: &mut Environment,
+    context: CGContextRef,
+    x1: CGFloat,
+    y1: CGFloat,
+    x2: CGFloat,
+    y2: CGFloat,
+    radius: CGFloat,
+) {
+    let p1 = device_point(env, context, CGPoint { x: x1, y: y1 });
+    let p2 = device_point(env, context, CGPoint { x: x2, y: y2 });
+    let Some(p0) = current_point(env, context) else {
+        CGContextMoveToPoint(env, context, x1, y1);
+        return;
+    };
+    // The radius is scaled like the points. This assumes the transform
+    // scales both axes equally.
+    let host_obj = env.objc.borrow_mut::<CGContextHostObject>(context);
+    let t = host_obj.transform;
+    let scale = (t.a * t.d - t.b * t.c).abs().sqrt();
+    for point in cg_path::arc_to_point(p0, p1, p2, radius * scale) {
+        host_obj.path.line_to(point);
+    }
+}
+
+fn CGContextAddRect(env: &mut Environment, context: CGContextRef, rect: CGRect) {
+    let (x0, y0) = (rect.origin.x, rect.origin.y);
+    let (x1, y1) = (x0 + rect.size.width, y0 + rect.size.height);
+    CGContextMoveToPoint(env, context, x0, y0);
+    CGContextAddLineToPoint(env, context, x1, y0);
+    CGContextAddLineToPoint(env, context, x1, y1);
+    CGContextAddLineToPoint(env, context, x0, y1);
+    CGContextClosePath(env, context);
+}
+
+fn CGContextAddPath(_env: &mut Environment, context: CGContextRef, path: CFTypeRef) {
+    // UIBezierPath's CGPath is nil for now, so there's nothing to add.
+    if !path.is_null() {
+        log!("TODO: CGContextAddPath({:?}, {:?})", context, path);
+    }
+}
+
+fn CGContextClip(env: &mut Environment, context: CGContextRef) {
+    let host_obj = env.objc.borrow_mut::<CGContextHostObject>(context);
+    // An empty path clips everything away, which an empty clip path does.
+    let path = std::mem::take(&mut host_obj.path);
+    host_obj.clip.push(path);
+}
+
+fn CGContextDrawPath(env: &mut Environment, context: CGContextRef, mode: CGPathDrawingMode) {
+    let path = std::mem::take(&mut env.objc.borrow_mut::<CGContextHostObject>(context).path);
+    let (fill, even_odd, stroke) = match mode {
+        kCGPathFill => (true, false, false),
+        kCGPathEOFill => (true, true, false),
+        kCGPathStroke => (false, false, true),
+        kCGPathFillStroke => (true, false, true),
+        kCGPathEOFillStroke => (true, true, true),
+        _ => unimplemented!("CGContextDrawPath mode {}", mode),
+    };
+    if fill {
+        cg_bitmap_context::fill_path(env, context, &path, even_odd);
+    }
+    if stroke {
+        cg_bitmap_context::stroke_path(env, context, &path);
+    }
+}
+
+fn CGContextFillPath(env: &mut Environment, context: CGContextRef) {
+    CGContextDrawPath(env, context, kCGPathFill);
+}
+
+fn CGContextStrokePath(env: &mut Environment, context: CGContextRef) {
+    CGContextDrawPath(env, context, kCGPathStroke);
+}
+
+fn CGContextSetLineWidth(env: &mut Environment, context: CGContextRef, width: CGFloat) {
+    env.objc
+        .borrow_mut::<CGContextHostObject>(context)
+        .line_width = width;
+}
+
+fn CGContextSetShouldAntialias(_env: &mut Environment, _context: CGContextRef, _antialias: bool) {
+    // Nothing is anti-aliased yet.
+}
+
+fn CGContextDrawLinearGradient(
+    env: &mut Environment,
+    context: CGContextRef,
+    gradient: CGGradientRef,
+    start: CGPoint,
+    end: CGPoint,
+    options: CGGradientDrawingOptions,
+) {
+    let (dx, dy) = (end.x - start.x, end.y - start.y);
+    let length_squared = dx * dx + dy * dy;
+    cg_bitmap_context::draw_gradient(env, context, gradient, options, |p| {
+        if length_squared == 0.0 {
+            return None;
+        }
+        Some(((p.x - start.x) * dx + (p.y - start.y) * dy) / length_squared)
+    });
+}
+
+fn CGContextDrawRadialGradient(
+    env: &mut Environment,
+    context: CGContextRef,
+    gradient: CGGradientRef,
+    start_center: CGPoint,
+    start_radius: CGFloat,
+    end_center: CGPoint,
+    end_radius: CGFloat,
+    options: CGGradientDrawingOptions,
+) {
+    cg_bitmap_context::draw_gradient(env, context, gradient, options, |p| {
+        radial_gradient_t(p, start_center, start_radius, end_center, end_radius)
+    });
+}
+
+/// The largest `t` for which `p` is on the circle interpolated between the
+/// start and end circles with a non-negative radius, if any.
+fn radial_gradient_t(
+    p: CGPoint,
+    c0: CGPoint,
+    r0: CGFloat,
+    c1: CGPoint,
+    r1: CGFloat,
+) -> Option<CGFloat> {
+    let (dcx, dcy, dr) = (c1.x - c0.x, c1.y - c0.y, r1 - r0);
+    let (pdx, pdy) = (p.x - c0.x, p.y - c0.y);
+    // |pd - t*dc|^2 = (r0 + t*dr)^2, as a*t^2 + b*t + c = 0.
+    let a = dcx * dcx + dcy * dcy - dr * dr;
+    let b = -2.0 * (pdx * dcx + pdy * dcy + r0 * dr);
+    let c = pdx * pdx + pdy * pdy - r0 * r0;
+    let valid = |t: CGFloat| r0 + t * dr >= 0.0;
+    if a.abs() < 1e-6 {
+        if b == 0.0 {
+            return None;
+        }
+        let t = -c / b;
+        return valid(t).then_some(t);
+    }
+    let discriminant = b * b - 4.0 * a * c;
+    if discriminant < 0.0 {
+        return None;
+    }
+    let root = discriminant.sqrt();
+    let (t0, t1) = ((-b + root) / (2.0 * a), (-b - root) / (2.0 * a));
+    let (larger, smaller) = (t0.max(t1), t0.min(t1));
+    if valid(larger) {
+        Some(larger)
+    } else if valid(smaller) {
+        Some(smaller)
+    } else {
+        None
+    }
+}
+
 pub const FUNCTIONS: FunctionExports = &[
     export_c_func!(CGContextRetain(_)),
     export_c_func!(CGContextRelease(_)),
@@ -578,6 +792,21 @@ pub const FUNCTIONS: FunctionExports = &[
     export_c_func!(CGContextTranslateCTM(_, _, _)),
     export_c_func!(CGContextDrawImage(_, _, _)),
     export_c_func!(CGContextSaveGState(_)),
+    export_c_func!(CGContextBeginPath(_)),
+    export_c_func!(CGContextMoveToPoint(_, _, _)),
+    export_c_func!(CGContextAddLineToPoint(_, _, _)),
+    export_c_func!(CGContextClosePath(_)),
+    export_c_func!(CGContextAddRect(_, _)),
+    export_c_func!(CGContextFillPath(_)),
+    export_c_func!(CGContextStrokePath(_)),
+    export_c_func!(CGContextAddArcToPoint(_, _, _, _, _, _)),
+    export_c_func!(CGContextAddPath(_, _)),
+    export_c_func!(CGContextClip(_)),
+    export_c_func!(CGContextDrawPath(_, _)),
+    export_c_func!(CGContextSetLineWidth(_, _)),
+    export_c_func!(CGContextSetShouldAntialias(_, _)),
+    export_c_func!(CGContextDrawLinearGradient(_, _, _, _, _)),
+    export_c_func!(CGContextDrawRadialGradient(_, _, _, _, _, _, _)),
     export_c_func!(CGContextRestoreGState(_)),
     export_c_func!(CGContextSetInterpolationQuality(_, _)),
     export_c_func!(CGContextSetAllowsAntialiasing(_, _)),

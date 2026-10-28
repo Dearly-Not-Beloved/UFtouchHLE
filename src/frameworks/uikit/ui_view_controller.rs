@@ -38,6 +38,9 @@ struct UIViewControllerHostObject {
     /// of the nib by name, may be nil.
     /// `NSBundle*`
     bundle: id,
+    /// Created on first use.
+    /// `UINavigationItem*`
+    navigation_item: id,
 }
 
 /// Establish a decoded root view's runtime size before awakeFromNib.
@@ -97,7 +100,7 @@ pub const CLASSES: ClassExports = objc_classes! {
 }
 
 - (())dealloc {
-    let &UIViewControllerHostObject { view, nib_name, bundle } = env.objc.borrow(this);
+    let &UIViewControllerHostObject { view, nib_name, bundle, navigation_item } = env.objc.borrow(this);
 
     if view != nil {
         set_view_controller(env, view, nil);
@@ -105,6 +108,7 @@ pub const CLASSES: ClassExports = objc_classes! {
     release(env, view);
     release(env, nib_name);
     release(env, bundle);
+    release(env, navigation_item);
 
     env.objc.dealloc_object(this, &mut env.mem);
 }
@@ -244,6 +248,17 @@ pub const CLASSES: ClassExports = objc_classes! {
 - (id)modalViewController {
     nil
 }
+- (id)navigationItem {
+    let item = env.objc.borrow::<UIViewControllerHostObject>(this).navigation_item;
+    if item != nil {
+        return item;
+    }
+    let item: id = msg_class![env; UINavigationItem alloc];
+    let item: id = msg![env; item init];
+    env.objc.borrow_mut::<UIViewControllerHostObject>(this).navigation_item = item;
+    item
+}
+
 - (id)navigationController {
     nil
 }

@@ -14,6 +14,10 @@ use super::cg_context::{
     kCGBlendModeNormal, kCGBlendModeScreen, CGBlendMode, CGContextHostObject, CGContextRef,
     CGContextSubclass,
 };
+use super::cg_gradient::{
+    kCGGradientDrawsAfterEndLocation, kCGGradientDrawsBeforeStartLocation,
+    CGGradientDrawingOptions, CGGradientHostObject, CGGradientRef,
+};
 use super::cg_image::{
     self, kCGBitmapAlphaInfoMask, kCGBitmapByteOrderMask, kCGImageAlphaFirst, kCGImageAlphaLast,
     kCGImageAlphaNone, kCGImageAlphaNoneSkipFirst, kCGImageAlphaNoneSkipLast, kCGImageAlphaOnly,
@@ -21,7 +25,8 @@ use super::cg_image::{
     kCGImageByteOrder32Little, kCGImageByteOrderDefault, CGBitmapInfo, CGImageAlphaInfo,
     CGImageRef,
 };
-use super::{CGFloat, CGPoint, CGRect};
+use super::cg_path::{self, Path};
+use super::{CGFloat, CGPoint, CGRect, CGSize};
 use crate::dyld::{export_c_func, FunctionExports};
 use crate::image::{gamma_decode, gamma_decode_u8, gamma_encode, Image};
 use crate::mem::{GuestUSize, Mem, MutVoidPtr, Ptr};
@@ -111,6 +116,11 @@ pub fn CGBitmapContextCreate(
         text_transform: None,
         text_drawing_mode: super::cg_context::kCGTextFill,
         state_stack: Vec::new(),
+        path: Path::default(),
+        clip: Vec::new(),
+        // TODO: is this the correct default?
+        rgb_stroke_color: (0.0, 0.0, 0.0, 1.0),
+        line_width: 1.0,
     };
     let isa = env
         .objc
@@ -976,6 +986,157 @@ pub(super) fn fill_ellipse(env: &mut Environment, context: CGContextRef, rect: C
         if du * du + dv * dv <= 0.25 {
             drawer.put_pixel((x, y), color, /* blend: */ true)
         }
+    }
+}
+
+/// Visits the device pixels inside `area` (in device space) and the context's
+/// clip, with each pixel's center. `coverage` gives how much of the pixel to
+/// draw at that point (0 to 1), and the color to draw it with, which is
+/// non-premultiplied sRGB.
+fn draw_area(
+    env: &mut Environment,
+    context: CGContextRef,
+    area: Option<CGRect>,
+    coverage: impl Fn(CGPoint) -> Option<(CGFloat, (CGFloat, CGFloat, CGFloat, CGFloat))>,
+) {
+    let clip = env.objc.borrow::<CGContextHostObject>(context).clip.clone();
+    let mut drawer = CGBitmapContextDrawer::new(&env.objc, &mut env.mem, context);
+    let premultiply = matches!(
+        drawer.bitmap_info.alpha_info,
+        kCGImageAlphaPremultipliedLast | kCGImageAlphaPremultipliedFirst
+    );
+    let mut bounds = CGRect {
+        origin: CGPoint { x: 0.0, y: 0.0 },
+        size: CGSize {
+            width: drawer.width() as f32,
+            height: drawer.height() as f32,
+        },
+    };
+    for rect in area.into_iter().chain(clip.iter().map(|path| {
+        path.bounds().unwrap_or(CGRect {
+            origin: CGPoint { x: 0.0, y: 0.0 },
+            size: CGSize {
+                width: 0.0,
+                height: 0.0,
+            },
+        })
+    })) {
+        bounds = intersect_device_rect(bounds, rect);
+    }
+    let x_start = bounds.origin.x.floor().max(0.0) as i32;
+    let y_start = bounds.origin.y.floor().max(0.0) as i32;
+    let x_end = (bounds.origin.x + bounds.size.width).ceil() as i32;
+    let y_end = (bounds.origin.y + bounds.size.height).ceil() as i32;
+    for y in y_start..y_end {
+        for x in x_start..x_end {
+            let center = CGPoint {
+                x: x as f32 + 0.5,
+                y: y as f32 + 0.5,
+            };
+            if !clip.iter().all(|path| path.contains(center, false)) {
+                continue;
+            }
+            let Some((coverage, (r, g, b, a))) = coverage(center) else {
+                continue;
+            };
+            let a = a * coverage.clamp(0.0, 1.0);
+            if a <= 0.0 {
+                continue;
+            }
+            let m = if premultiply { a } else { 1.0 };
+            let color = (
+                gamma_decode(r * m),
+                gamma_decode(g * m),
+                gamma_decode(b * m),
+                a,
+            );
+            drawer.put_pixel((x, y), color, /* blend: */ true);
+        }
+    }
+}
+
+/// Shared implementation of `CGContextDrawLinearGradient` and
+/// `CGContextDrawRadialGradient`. `t_at` gives the gradient position at a
+/// point in user space, if the gradient covers it.
+pub(super) fn draw_gradient(
+    env: &mut Environment,
+    context: CGContextRef,
+    gradient: CGGradientRef,
+    options: CGGradientDrawingOptions,
+    t_at: impl Fn(CGPoint) -> Option<CGFloat>,
+) {
+    let inverse_transform = env
+        .objc
+        .borrow::<CGContextHostObject>(context)
+        .transform
+        .invert();
+    let stops = env.objc.borrow::<CGGradientHostObject>(gradient).clone();
+    // Gradients fill the whole clip area.
+    draw_area(env, context, None, |center| {
+        let t = t_at(inverse_transform.apply_to_point(center))?;
+        if (t < 0.0 && options & kCGGradientDrawsBeforeStartLocation == 0)
+            || (t > 1.0 && options & kCGGradientDrawsAfterEndLocation == 0)
+        {
+            return None;
+        }
+        Some((1.0, stops.color_at(t.clamp(0.0, 1.0))))
+    });
+}
+
+/// Implementation of `CGContextFillPath` and similar for `CGBitmapContext`.
+pub(super) fn fill_path(env: &mut Environment, context: CGContextRef, path: &Path, even_odd: bool) {
+    let color = env
+        .objc
+        .borrow::<CGContextHostObject>(context)
+        .rgb_fill_color;
+    // TODO: anti-aliasing
+    draw_area(env, context, path.bounds(), |center| {
+        path.contains(center, even_odd).then_some((1.0, color))
+    });
+}
+
+/// Implementation of `CGContextStrokePath` and similar for `CGBitmapContext`.
+/// Joins and caps are round.
+pub(super) fn stroke_path(env: &mut Environment, context: CGContextRef, path: &Path) {
+    let host_obj = env.objc.borrow::<CGContextHostObject>(context);
+    let color = host_obj.rgb_stroke_color;
+    let t = host_obj.transform;
+    let half_width = host_obj.line_width * (t.a * t.d - t.b * t.c).abs().sqrt() / 2.0;
+    let Some(bounds) = path.bounds() else { return };
+    let margin = half_width + 1.0;
+    let area = CGRect {
+        origin: CGPoint {
+            x: bounds.origin.x - margin,
+            y: bounds.origin.y - margin,
+        },
+        size: CGSize {
+            width: bounds.size.width + margin * 2.0,
+            height: bounds.size.height + margin * 2.0,
+        },
+    };
+    let segments: Vec<_> = path.stroke_segments().collect();
+    draw_area(env, context, Some(area), |center| {
+        let distance = segments
+            .iter()
+            .map(|&(a, b)| cg_path::distance_to_segment(center, a, b))
+            .fold(f32::INFINITY, f32::min);
+        // Coverage falls off over one pixel at the edge of the line.
+        let coverage = (half_width + 0.5 - distance).clamp(0.0, 1.0);
+        (coverage > 0.0).then_some((coverage, color))
+    });
+}
+
+fn intersect_device_rect(a: CGRect, b: CGRect) -> CGRect {
+    let x0 = a.origin.x.max(b.origin.x);
+    let y0 = a.origin.y.max(b.origin.y);
+    let x1 = (a.origin.x + a.size.width).min(b.origin.x + b.size.width);
+    let y1 = (a.origin.y + a.size.height).min(b.origin.y + b.size.height);
+    CGRect {
+        origin: CGPoint { x: x0, y: y0 },
+        size: CGSize {
+            width: (x1 - x0).max(0.0),
+            height: (y1 - y0).max(0.0),
+        },
     }
 }
 

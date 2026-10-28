@@ -12,11 +12,11 @@ use super::cf_allocator::{kCFAllocatorDefault, CFAllocatorRef};
 use super::CFIndex;
 use crate::dyld::{export_c_func, FunctionExports};
 use crate::frameworks::core_foundation::cf_string::{
-    kCFStringEncodingASCII, CFStringConvertEncodingToNSStringEncoding, CFStringEncoding,
-    CFStringRef,
+    kCFStringEncodingASCII, kCFStringEncodingUTF8, CFStringConvertEncodingToNSStringEncoding,
+    CFStringEncoding, CFStringRef,
 };
 use crate::frameworks::foundation::ns_string::{
-    get_static_str, to_rust_string, NSUTF8StringEncoding,
+    from_rust_string, get_static_str, to_rust_string, NSUTF8StringEncoding,
 };
 use crate::frameworks::foundation::NSUInteger;
 use crate::mem::{ConstPtr, MutPtr, Ptr};
@@ -231,6 +231,103 @@ fn CFURLCreateDataAndPropertiesFromResource(
     success || resource_data.is_null()
 }
 
+/// Characters that may appear in a URL as they are: RFC 2396's unreserved and
+/// reserved characters, plus `%` and `#`, which CF also leaves alone.
+fn is_legal_url_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || "-_.~!*'();:@&=+$,/?%#".contains(c)
+}
+
+fn add_percent_escapes(string: &str, leave_unescaped: &str, to_escape: &str) -> String {
+    let mut escaped = String::with_capacity(string.len());
+    for c in string.chars() {
+        let escape = if is_legal_url_char(c) {
+            to_escape.contains(c)
+        } else {
+            !leave_unescaped.contains(c)
+        };
+        if escape {
+            let mut utf8 = [0u8; 4];
+            for byte in c.encode_utf8(&mut utf8).bytes() {
+                escaped.push_str(&format!("%{:02X}", byte));
+            }
+        } else {
+            escaped.push(c);
+        }
+    }
+    escaped
+}
+
+/// Replaces percent escapes, except those of the characters in
+/// `leave_escaped`. Returns [None] for a malformed escape, or if the escapes
+/// don't decode to UTF-8.
+fn replace_percent_escapes(string: &str, leave_escaped: &str) -> Option<String> {
+    let bytes = string.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'%' {
+            decoded.push(bytes[i]);
+            i += 1;
+            continue;
+        }
+        let hex = std::str::from_utf8(bytes.get(i + 1..i + 3)?).ok()?;
+        let byte = u8::from_str_radix(hex, 16).ok()?;
+        if byte.is_ascii() && leave_escaped.contains(byte as char) {
+            decoded.extend_from_slice(&bytes[i..i + 3]);
+        } else {
+            decoded.push(byte);
+        }
+        i += 3;
+    }
+    String::from_utf8(decoded).ok()
+}
+
+fn optional_rust_string(env: &mut Environment, string: CFStringRef) -> Option<String> {
+    (!string.is_null()).then(|| to_rust_string(env, string).into_owned())
+}
+
+fn CFURLCreateStringByAddingPercentEscapes(
+    env: &mut Environment,
+    allocator: CFAllocatorRef,
+    original_string: CFStringRef,
+    characters_to_leave_unescaped: CFStringRef,
+    legal_url_characters_to_be_escaped: CFStringRef,
+    encoding: CFStringEncoding,
+) -> CFStringRef {
+    assert!(allocator == kCFAllocatorDefault || env.mem.read(allocator).is_system_default()); // unimplemented
+    assert!(encoding == kCFStringEncodingUTF8 || encoding == kCFStringEncodingASCII); // TODO
+    let original = to_rust_string(env, original_string).into_owned();
+    let leave_unescaped = optional_rust_string(env, characters_to_leave_unescaped);
+    let to_escape = optional_rust_string(env, legal_url_characters_to_be_escaped);
+    let escaped = add_percent_escapes(
+        &original,
+        leave_unescaped.as_deref().unwrap_or(""),
+        to_escape.as_deref().unwrap_or(""),
+    );
+    from_rust_string(env, escaped)
+}
+
+fn CFURLCreateStringByReplacingPercentEscapesUsingEncoding(
+    env: &mut Environment,
+    allocator: CFAllocatorRef,
+    original_string: CFStringRef,
+    characters_to_leave_escaped: CFStringRef,
+    encoding: CFStringEncoding,
+) -> CFStringRef {
+    assert!(allocator == kCFAllocatorDefault || env.mem.read(allocator).is_system_default()); // unimplemented
+    assert!(encoding == kCFStringEncodingUTF8 || encoding == kCFStringEncodingASCII); // TODO
+
+    // NULL means that no escapes are replaced.
+    let Some(leave_escaped) = optional_rust_string(env, characters_to_leave_escaped) else {
+        return msg![env; original_string copy];
+    };
+    let original = to_rust_string(env, original_string).into_owned();
+    match replace_percent_escapes(&original, &leave_escaped) {
+        Some(replaced) => from_rust_string(env, replaced),
+        None => Ptr::null(),
+    }
+}
+
 pub const FUNCTIONS: FunctionExports = &[
     export_c_func!(CFURLGetFileSystemRepresentation(_, _, _, _)),
     export_c_func!(CFURLCreateFromFileSystemRepresentation(_, _, _, _)),
@@ -243,4 +340,34 @@ pub const FUNCTIONS: FunctionExports = &[
     export_c_func!(CFURLCreateCopyDeletingLastPathComponent(_, _)),
     export_c_func!(CFURLHasDirectoryPath(_)),
     export_c_func!(CFURLCreateDataAndPropertiesFromResource(_, _, _, _, _, _)),
+    export_c_func!(CFURLCreateStringByAddingPercentEscapes(_, _, _, _, _)),
+    export_c_func!(CFURLCreateStringByReplacingPercentEscapesUsingEncoding(
+        _,
+        _,
+        _,
+        _
+    )),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_percent_escapes() {
+        assert_eq!(
+            add_percent_escapes("a b/é?x=1#f", "", ""),
+            "a%20b/%C3%A9?x=1#f"
+        );
+        assert_eq!(add_percent_escapes("a b&c=d", " ", "&="), "a b%26c%3Dd");
+        assert_eq!(
+            replace_percent_escapes("a%20b%2Fc%C3%A9", "").as_deref(),
+            Some("a b/cé")
+        );
+        assert_eq!(
+            replace_percent_escapes("a%20b%2Fc", "/").as_deref(),
+            Some("a b%2Fc")
+        );
+        assert_eq!(replace_percent_escapes("100%", ""), None);
+    }
+}
