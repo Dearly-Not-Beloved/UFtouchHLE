@@ -1061,7 +1061,7 @@ unsafe fn present_renderbuffer_inner(
     // SDL2's documentation warns 0 should be bound to the draw framebuffer
     // when swapping the window, so this is the perfect moment.
     if swap {
-        env.window.as_ref().unwrap().swap_window();
+        env.window.as_mut().unwrap().swap_window();
     }
 
     let mut gles_boxed = gles_ctx.make_current(env.window.as_mut().unwrap());

@@ -215,6 +215,7 @@ pub fn handle_events(env: &mut Environment) -> Option<Instant> {
                     }
                 }
             }
+            Event::Noop => (),
         }
     }
 

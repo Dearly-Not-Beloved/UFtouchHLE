@@ -324,6 +324,9 @@ pub enum Event {
     /// User pressed F12, requesting that execution be paused and the debugger
     /// take over.
     EnterDebugger,
+    /// Internal no-op event, used for events that are handled inside
+    /// [Window::poll_for_events] and shouldn't be forwarded.
+    Noop,
     TextInput(TextInputEvent),
 }
 
@@ -506,6 +509,7 @@ pub struct Window {
     fullscreen: bool,
     scale_hack: NonZeroU32,
     internal_gl_ins: Option<Box<dyn GLESContext>>,
+    screenshot_requested: std::cell::Cell<bool>,
     splash_image: Option<Image>,
     device_family: DeviceFamily,
     portrait_size: (u32, u32),
@@ -824,6 +828,7 @@ impl Window {
             keep_screen_on: options.keep_screen_on,
             scale_hack,
             internal_gl_ins: None,
+            screenshot_requested: std::cell::Cell::new(false),
             splash_image: launch_image,
             device_family,
             portrait_size,
@@ -1455,6 +1460,14 @@ impl Window {
                     Event::EnterDebugger
                 }
                 E::KeyDown {
+                    keycode: Some(sdl2::keyboard::Keycode::F11),
+                    ..
+                } => {
+                    self.screenshot_requested.set(true);
+                    log!("F11 pressed, screenshot requested.");
+                    Event::Noop
+                }
+                E::KeyDown {
                     keycode: Some(sdl2::keyboard::Keycode::Backspace),
                     ..
                 } => {
@@ -2052,11 +2065,41 @@ impl Window {
 
     /// Swap front-buffer and back-buffer so the result of OpenGL rendering is
     /// presented.
-    pub fn swap_window(&self) {
+    pub fn swap_window(&mut self) {
         if self.minimized {
             return;
         }
         self.window.gl_swap_window();
+
+        if self.screenshot_requested.replace(false) {
+            if let Some(gl_ins) = self.internal_gl_ins.as_mut() {
+                unsafe {
+                    let mut ctx = gl_ins.make_current_unchecked_for_window(
+                        &mut |gl_ctx| make_current_or_warn(&self.window, gl_ctx),
+                        &mut |s| self.video_ctx.gl_get_proc_address(s) as *const _,
+                    );
+                    use crate::gles::gles11_raw as gles11;
+                    let mut vp = [0i32; 4];
+                    ctx.GetIntegerv(gles11::VIEWPORT, vp.as_mut_ptr());
+                    let (w, h) = (vp[2] as usize, vp[3] as usize);
+                    if w > 0 && h > 0 {
+                        let mut buf = vec![0u8; w * h * 4];
+                        ctx.ReadPixels(
+                            0,
+                            0,
+                            vp[2],
+                            vp[3],
+                            gles11::RGBA,
+                            gles11::UNSIGNED_BYTE,
+                            buf.as_mut_ptr().cast(),
+                        );
+                        std::fs::write("/tmp/touchhle_shot.raw", &buf).unwrap();
+                        std::fs::write("/tmp/touchhle_shot.dim", format!("{} {}", w, h)).unwrap();
+                        log!("[SHOT] saved screenshot {}x{}", w, h);
+                    }
+                }
+            }
+        }
     }
 
     /// Consider the emulated device to be rotated to a particular orientation.
