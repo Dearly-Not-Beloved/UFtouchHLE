@@ -15,7 +15,7 @@ env:
 jobs:
   build-osx:
 
-    runs-on: macos-15
+    runs-on: macos-13
 
     steps:
       # actions/checkout really doesn't work well with git-describe for some
