@@ -1,5 +1,13 @@
 # PSP_IOS_FORMAT_COMPARISON.md - PSP vs iOS MHP2G save format comparison
 
+> **Correction (2026-10-28, later):** checksum F is solved and several
+> conclusions below are wrong. The iOS save uses exactly the PSP scheme:
+> SHA-1(plain[0:0x16A0DC] + "3Nc94Hq1zOLh8d62Sb69") at 0x16A0E8, and the
+> XOR-stream seed is the last 4 bytes (stored through the table twice), not a
+> per-save beta "recovered from 0xDFC00". The game does call CC_SHA1. Re-encrypted
+> saves failed only because the old converter didn't store the seed. See
+> README.md and NEXT_STEPS.md; this file is kept as a research log.
+
 > Status: 2026-10-28 — both platforms' crypto FULLY solved; iOS inner = PSP-homologous table perm + LCG (table differs). Remaining blocker: iOS save checksum F (see NEXT_STEPS.md). Field mapping table is incomplete by design - only facts with evidence are listed.
 
 ---
