@@ -44,13 +44,27 @@ pub const NAME_LEN: usize = 0x20;
 pub const SLOT_OFF: usize = 0x1000;
 pub const SLOT_LEN: usize = 0x6B100;
 pub const SLOTS: usize = 3;
-/// Part of each slot (relative to the slot) that holds the character's own
-/// guild card (equipment record, quest records, medals, counters). The two
-/// platforms lay it out differently: the PSP at +0x672B8..+0x680C2, iOS at
-/// +0x64A34..+0x6803C, with other field encodings. Everything else in the
-/// slots lines up, as far as the samples show.
-pub const GUILD_CARD: std::ops::Range<usize> = 0x64A00..0x68100;
-/// Name field of the iOS guild card. The game doesn't fill it in itself.
+/// The end of each slot (relative to the slot), from the character's own
+/// guild card on, is where the platforms differ: the PSP has 0x28F8 bytes
+/// more in it, inserted in a few places, and packs a few fields differently.
+pub const IOS_TAIL: std::ops::Range<usize> = 0x649A0..SLOT_LEN;
+/// The tail in parts: (iOS range, PSP offset - iOS offset). They hold the
+/// character's own guild card (name, equipment, comment, records, quest
+/// history), the money (iOS +0x66960), a list of 0x70-byte records, and the
+/// tables, flags and counters at the end of the character data. Everything
+/// but [MONSTER_RECORDS] has the same encoding on both platforms.
+pub const SHIFTED: [(std::ops::Range<usize>, usize); 5] = [
+    (0x649A0..0x64B78, 0x2884),
+    (0x64B78..0x64B80, 0x2888),
+    (0x64C78..0x65900, 0x2888),
+    (0x65900..0x67420, 0x28F0),
+    (0x67420..0x6803C, 0x28F8),
+];
+/// Guild card list of 31 monster records (iOS range, PSP offset - iOS
+/// offset), 8 bytes each: the PSP has `u16 a, u16 b, u32 sizes`, iOS packs
+/// the first two as `u32 a | b << 7` (`a` < 0x80; `b` is a hunt count).
+pub const MONSTER_RECORDS: (std::ops::Range<usize>, usize) = (0x64B80..0x64C78, 0x2888);
+/// Name field of the iOS guild card (PSP +0x672B8).
 pub const IOS_GUILD_CARD_NAME: usize = 0x64A34;
 /// Length of the name field at the start of each slot.
 pub const SLOT_NAME_LEN: usize = 0x10;

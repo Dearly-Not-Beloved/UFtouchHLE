@@ -20,8 +20,8 @@ pub mod psp;
 
 pub use game::Platform;
 use game::{
-    BODY_LEN, GUILD_CARD, HASH_OFF, HEADER_LEN, IOS_GUILD_CARD_NAME, SEED_OFF, SLOTS, SLOT_LEN,
-    SLOT_NAME_LEN, SLOT_OFF,
+    BODY_LEN, HASH_OFF, HEADER_LEN, IOS_GUILD_CARD_NAME, IOS_TAIL, MONSTER_RECORDS, SEED_OFF,
+    SHIFTED, SLOTS, SLOT_LEN, SLOT_NAME_LEN, SLOT_OFF,
 };
 use std::fmt;
 
@@ -157,10 +157,9 @@ pub fn complete_plain(raw: &[u8], platform: Platform) -> Result<Vec<u8>, Error> 
 /// Move a plaintext to another platform. The settings block comes from
 /// `template` (a plaintext of the target platform) or the default one.
 ///
-/// The characters' own guild cards are laid out differently on the two
-/// platforms, so they are cleared (the target game would misread them); on
-/// iOS the card gets the character's name. Their statistics are lost.
-/// Areas only the PSP uses are kept: iOS leaves them alone.
+/// The end of each character slot is laid out differently on the two
+/// platforms: its parts are moved, and the guild card's monster records are
+/// repacked. An iOS guild card without a name gets the character's.
 pub fn convert(plain: &[u8], from: Platform, to: Platform, template: Option<&[u8]>) -> Vec<u8> {
     let mut out = plain.to_vec();
     if from != to {
@@ -168,8 +167,40 @@ pub fn convert(plain: &[u8], from: Platform, to: Platform, template: Option<&[u8
         out[..HEADER_LEN].copy_from_slice(template.map_or(&header[..], |t| &t[..HEADER_LEN]));
         for slot in 0..SLOTS {
             let base = SLOT_OFF + slot * SLOT_LEN;
-            out[base + GUILD_CARD.start..base + GUILD_CARD.end].fill(0);
-            if to == Platform::Ios {
+            out[base + IOS_TAIL.start..base + IOS_TAIL.end].fill(0);
+            let (records, delta) = MONSTER_RECORDS;
+            for (ios, delta) in SHIFTED.into_iter().chain([(records.clone(), delta)]) {
+                let psp = ios.start + delta..ios.end + delta;
+                let (src, dst) = if to == Platform::Ios {
+                    (psp, ios)
+                } else {
+                    (ios, psp)
+                };
+                out[base + dst.start..base + dst.end]
+                    .copy_from_slice(&plain[base + src.start..base + src.end]);
+            }
+            let start = base
+                + if to == Platform::Ios {
+                    records.start
+                } else {
+                    records.start + delta
+                };
+            for record in out[start..start + records.len()].as_chunks_mut::<8>().0 {
+                let ab: [u8; 4] = record[..4].try_into().unwrap();
+                let packed = if to == Platform::Ios {
+                    let (a, b) = (
+                        u16::from_le_bytes([ab[0], ab[1]]),
+                        u16::from_le_bytes([ab[2], ab[3]]),
+                    );
+                    u32::from(a & 0x7F) | u32::from(b) << 7
+                } else {
+                    let v = u32::from_le_bytes(ab);
+                    (v & 0x7F) | (v >> 7 & 0xFFFF) << 16
+                };
+                record[..4].copy_from_slice(&packed.to_le_bytes());
+            }
+            let card_name = base + IOS_GUILD_CARD_NAME;
+            if to == Platform::Ios && out[card_name] == 0 && out[card_name + 1] == 0 {
                 // The UTF-16 name, up to its terminator.
                 let len = (0..SLOT_NAME_LEN)
                     .step_by(2)
@@ -265,34 +296,62 @@ mod tests {
     #[test]
     fn convert_both_ways() {
         let mut psp = synthetic_plain(Platform::Psp);
-        // Something in a guild card, and in an area only the PSP uses.
-        let card = SLOT_OFF + SLOT_LEN + 0x672B8;
-        let psp_only = SLOT_OFF + SLOT_LEN + 0x69230;
-        psp[card] = 0x67;
-        psp[psp_only] = 0x42;
+        let slot = SLOT_OFF + SLOT_LEN; // The second character.
+                                        // Money (PSP +0x69250, iOS +0x66960), a flag table entry (PSP
+                                        // +0x6A14C, iOS +0x67854), the guild card comment (not converted),
+                                        // and the global area after the slots (PSP only, kept).
+        psp[slot + 0x69250..slot + 0x69254].copy_from_slice(&1174809u32.to_le_bytes());
+        psp[slot + 0x6A14C] = 0x11;
+        psp[slot + 0x672EE] = 0x38; // The guild card comment.
+        psp[slot + 0x672B8] = b'G'; // The guild card name.
+                                    // A monster record, as in a real save.
+        psp[slot + 0x67408 + 8..slot + 0x67408 + 16]
+            .copy_from_slice(&[0x03, 0x00, 0x15, 0x00, 0xae, 0x20, 0x42, 0x1e]);
+        let global = SLOT_OFF + SLOTS * SLOT_LEN + 0x100;
+        psp[global] = 0x42;
         game::seal(&mut psp, Platform::Psp, 1);
 
         let ios = convert(&psp, Platform::Psp, Platform::Ios, None);
         assert_eq!(ios[..HEADER_LEN], Platform::Ios.default_header());
         assert!(game::hash_ok(&ios, Platform::Ios));
-        assert_eq!(ios[card], 0);
-        assert_eq!(ios[psp_only], 0x42);
+        assert_eq!(
+            ios[slot + 0x66960..slot + 0x66964],
+            1174809u32.to_le_bytes()
+        );
+        assert_eq!(ios[slot + 0x67854], 0x11);
+        assert!(ios[slot + 0x6803C..slot + SLOT_LEN].iter().all(|&b| b == 0));
+        assert_eq!(ios[slot + 0x64A68 + 2], 0x38);
+        assert_eq!(ios[slot + IOS_GUILD_CARD_NAME], b'G');
+        assert_eq!(
+            ios[slot + 0x64B88..slot + 0x64B90],
+            [0x83, 0x0a, 0x00, 0x00, 0xae, 0x20, 0x42, 0x1e]
+        );
+        assert_eq!(ios[global], 0x42);
         let name = SLOT_OFF + IOS_GUILD_CARD_NAME;
         assert_eq!(game::character_name(&ios[name - NAME_OFF..]), "テスト");
         assert_eq!(ios[name + 6..name + SLOT_NAME_LEN], [0; SLOT_NAME_LEN - 6]);
-        let changed: Vec<usize> = (HEADER_LEN..HASH_OFF)
-            .filter(|&i| ios[i] != psp[i])
-            .collect();
-        assert!(changed
-            .iter()
-            .all(|&i| (i - SLOT_OFF) % SLOT_LEN >= GUILD_CARD.start
-                && (i - SLOT_OFF) % SLOT_LEN < GUILD_CARD.end));
+        // Before the tails, nothing moves.
+        assert_eq!(ios[HEADER_LEN..SLOT_OFF], psp[HEADER_LEN..SLOT_OFF]);
+        for k in 0..SLOTS {
+            let front = SLOT_OFF + k * SLOT_LEN..SLOT_OFF + k * SLOT_LEN + IOS_TAIL.start;
+            assert_eq!(ios[front.clone()], psp[front]);
+        }
 
         let back = convert(&ios, Platform::Ios, Platform::Psp, None);
         assert_eq!(back[..HEADER_LEN], psp[..HEADER_LEN]);
-        assert_eq!(back[name], 0);
-        assert_eq!(back[psp_only], 0x42);
         assert!(game::hash_ok(&back, Platform::Psp));
+        assert_eq!(
+            back[slot + 0x69250..slot + 0x69254],
+            1174809u32.to_le_bytes()
+        );
+        assert_eq!(back[slot + 0x6A14C], 0x11);
+        // The guild card, back where it was.
+        assert_eq!(
+            back[slot + 0x64A00..slot + SLOT_LEN],
+            psp[slot + 0x64A00..slot + SLOT_LEN]
+        );
+        assert_eq!(back[name], 0); // No iOS guild card name on the PSP.
+        assert_eq!(back[global], 0x42);
 
         let mut template = synthetic_plain(Platform::Ios);
         template[..HEADER_LEN].fill(0x5A);
