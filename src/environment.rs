@@ -307,6 +307,7 @@ impl Environment {
         app_args: Vec<String>,
     ) -> Result<Environment, String> {
         let startup_time = Instant::now();
+        crate::save_research::set_enabled(options.mhp2g_save_research);
 
         // Enforces the one (real) Environment limit. See `with_yielder` for
         // why this is needed.

@@ -508,18 +508,12 @@ impl Mem {
         // staging area (0x313f6000). CPU writes are already traced elsewhere;
         // this catches framework/native writes via mem::write.
         let waddr = ptr.to_bits();
-        if waddr >= 0x313f0000 && waddr < 0x31570000 {
-            std::fs::create_dir_all("/tmp/touchhle_dump").unwrap();
-            use std::io::Write;
-            if let Ok(mut f) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open("/tmp/touchhle_dump/mem_write_313f.log")
-            {
-                let _ = writeln!(f, "addr={waddr:x} size={}", std::mem::size_of::<T>());
-                let bt = std::backtrace::Backtrace::force_capture();
-                let _ = writeln!(f, "{bt}");
-            }
+        if crate::save_research::enabled() && waddr >= 0x313f0000 && waddr < 0x31570000 {
+            let bt = std::backtrace::Backtrace::force_capture();
+            crate::save_research::append(
+                "mem_write_313f.log",
+                format!("addr={waddr:x} size={}\n{bt}\n", std::mem::size_of::<T>()).as_bytes(),
+            );
         }
         let size = guest_size_of::<T>();
         assert!(size > 0);

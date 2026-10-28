@@ -152,6 +152,7 @@ pub struct Options {
     pub network_access: bool,
     pub network_trace: bool,
     pub network_trace_limit: u64,
+    pub mhp2g_save_research: bool,
     pub gamekit_role: Option<crate::transport::Role>,
     pub gamekit_bind: std::net::SocketAddrV4,
     pub gamekit_player_id: Option<crate::transport::PlayerId>,
@@ -213,6 +214,7 @@ impl Default for Options {
             network_access: false,
             network_trace: false,
             network_trace_limit: 50_000,
+            mhp2g_save_research: false,
             gamekit_role: None,
             gamekit_bind: "0.0.0.0:0".parse().unwrap(),
             gamekit_player_id: None,
@@ -497,6 +499,8 @@ impl Options {
             }
         } else if arg == "--force-composition" {
             self.force_composition = true;
+        } else if arg == "--mhp2g-save-research" {
+            self.mhp2g_save_research = true;
         } else if arg == "--network-trace" || arg == "--network-trace=on" {
             self.network_trace = true;
         } else if arg == "--network-trace=off" {

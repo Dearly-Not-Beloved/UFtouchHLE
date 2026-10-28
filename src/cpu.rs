@@ -59,7 +59,8 @@ fn touchHLE_cpu_read_impl<T: SafeRead + Default>(
         error.write(res.is_err());
     }
     let value = res.unwrap_or_default();
-    if addr >= RTARGET_LO && addr < RTARGET_HI {
+    let research = crate::save_research::enabled();
+    if research && addr >= RTARGET_LO && addr < RTARGET_HI {
         unsafe {
             let mut log = MHP2G_RLOG.lock().unwrap();
             if log.len() < 2000000 {
@@ -74,7 +75,7 @@ fn touchHLE_cpu_read_impl<T: SafeRead + Default>(
                 log.push((addr, v32));
             }
         }
-    } else if addr >= 0x313f0000 && addr < 0x31570000 {
+    } else if research && addr >= 0x313f0000 && addr < 0x31570000 {
         unsafe {
             let mut log = MHP2G_RLOG_C.lock().unwrap();
             if log.len() < 3000000 {
@@ -105,7 +106,7 @@ fn touchHLE_cpu_write_impl<T: SafeWrite>(mem: *mut touchHLE_Mem, addr: VAddr, va
             break;
         }
     }
-    if hit {
+    if hit && crate::save_research::enabled() {
         unsafe {
             // Split logs: main plaintext buffer writes vs ciphertext staging.
             let main = addr >= 0x345dae0 && addr < 0x3560a20;
@@ -395,31 +396,37 @@ pub fn clear_mhp2g_logs() {
 /// MHP2G save-analysis helper: dump the captured inner-cipher read/write
 /// logs to files. Called from the save-write path after CCCrypt.
 pub fn dump_mhp2g_write_log() {
-    let dump = |path: &str, log: &Vec<(u32, u32)>| {
+    if !crate::save_research::enabled() {
+        return;
+    }
+    let dump = |name: &str, log: &Vec<(u32, u32)>| {
         let mut out = String::new();
         for (i, (a, v)) in log.iter().enumerate() {
             out.push_str(&format!("{i} {a:x} {v:08x}\n"));
         }
-        let _ = std::fs::write(path, out);
+        crate::save_research::write(name, out.as_bytes());
     };
     {
         let wlog = MHP2G_WLOG.lock().unwrap();
-        dump("/tmp/touchhle_dump/inner_cipher_writes.txt", &wlog);
-        log!("[WRITEHOOK] dumped {} main-buffer write entries", wlog.len());
+        dump("inner_cipher_writes.txt", &wlog);
+        log!(
+            "[WRITEHOOK] dumped {} main-buffer write entries",
+            wlog.len()
+        );
     }
     {
         let rlog = MHP2G_RLOG.lock().unwrap();
-        dump("/tmp/touchhle_dump/inner_cipher_reads.txt", &rlog);
+        dump("inner_cipher_reads.txt", &rlog);
         log!("[WRITEHOOK] dumped {} main-buffer read entries", rlog.len());
     }
     {
         let wlog = MHP2G_WLOG_C.lock().unwrap();
-        dump("/tmp/touchhle_dump/inner_cipher_writes_313f.txt", &wlog);
+        dump("inner_cipher_writes_313f.txt", &wlog);
         log!("[WRITEHOOK] dumped {} 0x313f write entries", wlog.len());
     }
     {
         let rlog = MHP2G_RLOG_C.lock().unwrap();
-        dump("/tmp/touchhle_dump/inner_cipher_reads_313f.txt", &rlog);
+        dump("inner_cipher_reads_313f.txt", &rlog);
         log!("[WRITEHOOK] dumped {} 0x313f read entries", rlog.len());
     }
 }

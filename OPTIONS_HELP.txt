@@ -442,6 +442,11 @@ Other options:
         JSON records in touchHLE_log.txt. Off by default. Does not enable network
         access or implement GameKit. Diagnostic logging may slow games down.
 
+    --mhp2g-save-research
+        For researching MHP2G's save format: dump the save data, the buffers
+        around its encryption and accesses to them to /tmp/touchhle_dump. Off by
+        default. Slows down every app, and does nothing useful on Android.
+
     --network-trace-limit=<positive integer>
         Limit network trace records (default: 50000), followed by one truncation
         marker. Does not enable tracing by itself.

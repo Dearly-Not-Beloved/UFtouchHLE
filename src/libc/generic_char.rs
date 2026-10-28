@@ -51,42 +51,38 @@ impl<T: Copy + Default + Eq + Ord + SafeRead + Debug> GenericChar<T> {
         // MHP2G save-analysis hook: log all large memcpys, and dump buffers
         // for those writing into the inner-cipher staging (0x313f6000) or
         // the main save buffer (0x345dae0..0x3560a20).
-        if size >= 1024 {
+        if size >= 1024 && crate::save_research::enabled() {
             let d: u32 = dest.to_bits();
             let s: u32 = src.to_bits();
-            std::fs::create_dir_all("/tmp/touchhle_dump").unwrap();
-            use std::io::Write;
-            if let Ok(mut f) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open("/tmp/touchhle_dump/all_memcpy.log")
-            {
-                let _ = writeln!(f, "{d:x} {s:x} {size}");
-            }
+            crate::save_research::append(
+                "all_memcpy.log",
+                format!("{d:x} {s:x} {size}\n").as_bytes(),
+            );
             if (d >= 0x313f0000 && d < 0x31570000) || (d >= 0x345dae0 && d < 0x3560a20) {
-                log!(
-                    "[MEMCPYHOOK] dst={:#x} src={:#x} size={}",
-                    d, s, size
-                );
-                std::fs::create_dir_all("/tmp/touchhle_dump").unwrap();
+                log!("[MEMCPYHOOK] dst={:#x} src={:#x} size={}", d, s, size);
                 // Clear the CPU read/write capture logs right before the
                 // inner-encryption window (this memcpy is the last step
                 // before the cipher runs).
                 crate::cpu::clear_mhp2g_logs();
                 // Dump the full inner-cipher buffer (plaintext state before
                 // the second memcpy overwrites part of it).
-                if let Some(full) = env.mem.get_bytes_fallible(Ptr::from_bits(0x345dae0), 0x16a100) {
-                    let _ = std::fs::write("/tmp/touchhle_dump/plain_full.bin", &full.to_vec());
+                if let Some(full) = env
+                    .mem
+                    .get_bytes_fallible(Ptr::from_bits(0x345dae0), 0x16a100)
+                {
+                    crate::save_research::write("plain_full.bin", full);
                     log!("[MEMCPYHOOK] dumped plain_full {}B", full.len());
                 }
-                let _ = std::fs::write(
-                    "/tmp/touchhle_dump/memcpy_dst.bin",
-                    &env.mem.get_bytes_fallible(Ptr::from_bits(d), size).unwrap_or(&[]),
+                crate::save_research::write(
+                    "memcpy_dst.bin",
+                    env.mem
+                        .get_bytes_fallible(Ptr::from_bits(d), size)
+                        .unwrap_or(&[]),
                 );
                 // freeze src buffer ± 4MB
                 let s_lo = s.saturating_sub(0x400000) & !0xfff;
                 if let Some(region) = env.mem.get_bytes_fallible(Ptr::from_bits(s_lo), 0x800000) {
-                    let _ = std::fs::write("/tmp/touchhle_dump/memcpy_src_around.bin", &region.to_vec());
+                    crate::save_research::write("memcpy_src_around.bin", region);
                 }
             }
         }
@@ -107,27 +103,24 @@ impl<T: Copy + Default + Eq + Ord + SafeRead + Debug> GenericChar<T> {
         }
         // MHP2G save-analysis hook: log large memmoves that write into the
         // inner-cipher staging (0x313f6000) or main save buffer.
-        if size >= 1024 {
+        if size >= 1024 && crate::save_research::enabled() {
             let d: u32 = dest.to_bits();
             let s: u32 = src.to_bits();
-            std::fs::create_dir_all("/tmp/touchhle_dump").unwrap();
-            use std::io::Write;
-            if let Ok(mut f) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open("/tmp/touchhle_dump/all_memmove.log")
-            {
-                let _ = writeln!(f, "{d:x} {s:x} {size}");
-            }
+            crate::save_research::append(
+                "all_memmove.log",
+                format!("{d:x} {s:x} {size}\n").as_bytes(),
+            );
             if (d >= 0x313f0000 && d < 0x31570000) || (d >= 0x345dae0 && d < 0x3560a20) {
                 log!("[MEMMOVEHOOK] dst={:#x} src={:#x} size={}", d, s, size);
                 let s_lo = s.saturating_sub(0x400000) & !0xfff;
                 if let Some(region) = env.mem.get_bytes_fallible(Ptr::from_bits(s_lo), 0x800000) {
-                    let _ = std::fs::write("/tmp/touchhle_dump/memmove_src_around.bin", &region.to_vec());
+                    crate::save_research::write("memmove_src_around.bin", region);
                 }
-                let _ = std::fs::write(
-                    "/tmp/touchhle_dump/memmove_dst.bin",
-                    &env.mem.get_bytes_fallible(Ptr::from_bits(d), size).unwrap_or(&[]),
+                crate::save_research::write(
+                    "memmove_dst.bin",
+                    env.mem
+                        .get_bytes_fallible(Ptr::from_bits(d), size)
+                        .unwrap_or(&[]),
                 );
             }
         }

@@ -52,20 +52,20 @@ pub const CLASSES: ClassExports = objc_classes! {
     // MHP2G save-analysis: when the game shows a save-load alert (e.g.
     // "游戏存档已损坏"), dump the captured CPU read/write logs so we can
     // recover which beta stream the game used to decrypt the inner layer.
-    crate::cpu::dump_mhp2g_write_log();
-    // Also snapshot the main save buffers (plaintext region 0x345dae0 and
-    // ciphertext staging 0x31561000) at alert time.
-    let _ = std::fs::create_dir_all("/tmp/touchhle_dump");
-    let grab = |addr: u32| -> Vec<u8> {
-        match env.mem.get_bytes_fallible(crate::mem::Ptr::from_bits(addr), 0x170000) {
-            Some(s) => s.to_vec(),
-            None => Vec::new(),
-        }
-    };
-    let _ = std::fs::write("/tmp/touchhle_dump/alert_plain_345dae0.bin", grab(0x345dae0));
-    let _ = std::fs::write("/tmp/touchhle_dump/alert_cipher_31561000.bin", grab(0x31561000));
-    let _ = std::fs::write("/tmp/touchhle_dump/alert_cipher_313f6000.bin", grab(0x313f6000));
-    log!("[MHP2G] alert-time buffer snapshot dumped");
+    if crate::save_research::enabled() {
+        crate::cpu::dump_mhp2g_write_log();
+        // Also snapshot the main save buffers (plaintext region 0x345dae0 and
+        // ciphertext staging 0x31561000) at alert time.
+        let grab = |addr: u32| -> &[u8] {
+            env.mem
+                .get_bytes_fallible(crate::mem::Ptr::from_bits(addr), 0x170000)
+                .unwrap_or(&[])
+        };
+        crate::save_research::write("alert_plain_345dae0.bin", grab(0x345dae0));
+        crate::save_research::write("alert_cipher_31561000.bin", grab(0x31561000));
+        crate::save_research::write("alert_cipher_313f6000.bin", grab(0x313f6000));
+        log!("[MHP2G] alert-time buffer snapshot dumped");
+    }
 
     let mut button_count = 0;
     if cancelButtonTitle != nil {

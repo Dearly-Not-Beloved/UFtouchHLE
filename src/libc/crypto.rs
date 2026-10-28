@@ -194,40 +194,58 @@ fn CCCrypt(
         return kCCParamError;
     }
     // ---- MHP2G save analysis instrumentation ----
-    if data_in_length >= 1_000_000 || key_length >= 8 {
+    if crate::save_research::enabled() && (data_in_length >= 1_000_000 || key_length >= 8) {
         log!("[CCCrypt] op={} alg={} options={} keyLen={} iv={:#x} dataIn={:#x} dataInLen={} dataOut={:#x} dataOutAvail={}",
              op, alg, options, key_length, iv.to_bits(), data_in.to_bits(), data_in_length, data_out.to_bits(), data_out_available);
         let klen: GuestUSize = key_length.min(64).try_into().unwrap();
         log!("[CCCrypt] key={:02x?}", env.mem.bytes_at(key.cast(), klen));
         if !iv.is_null() {
-            log!("[CCCrypt] iv={:02x?}", env.mem.bytes_at(iv.cast(), AES_BLOCK as GuestUSize));
+            log!(
+                "[CCCrypt] iv={:02x?}",
+                env.mem.bytes_at(iv.cast(), AES_BLOCK as GuestUSize)
+            );
         }
         if data_in_length >= 1_000_000 {
-            std::fs::create_dir_all("/tmp/touchhle_dump").unwrap();
             let plain = env.mem.bytes_at(data_in.cast(), data_in_length).to_vec();
-            let _ = std::fs::write("/tmp/touchhle_dump/cccrypt_plain.bin", &plain);
+            crate::save_research::write("cccrypt_plain.bin", &plain);
             log!("[CCCrypt] plaintext dumped {} bytes", plain.len());
             // dump ±4MB around data_in to find the plaintext source buffer
             const AROUND: u32 = 4 * 1024 * 1024;
             let start = data_in.to_bits().saturating_sub(AROUND);
             let len = (AROUND * 2) as GuestUSize;
-            let region = env.mem.bytes_at(ConstVoidPtr::from_bits(start).cast(), len).to_vec();
-            let _ = std::fs::write("/tmp/touchhle_dump/cccrypt_around.bin", &region);
-            log!("[CCCrypt] around dump {} bytes @ {:#x}", region.len(), start);
+            let region = env
+                .mem
+                .bytes_at(ConstVoidPtr::from_bits(start).cast(), len)
+                .to_vec();
+            crate::save_research::write("cccrypt_around.bin", &region);
+            log!(
+                "[CCCrypt] around dump {} bytes @ {:#x}",
+                region.len(),
+                start
+            );
             // dump the HaXe heap region 0x02000000..0x05000000 (plaintext ByteArray candidate)
-            let heap = env.mem.bytes_at(ConstVoidPtr::from_bits(0x02000000).cast(), 0x03000000).to_vec();
-            let _ = std::fs::write("/tmp/touchhle_dump/cccrypt_heap.bin", &heap);
+            let heap = env
+                .mem
+                .bytes_at(ConstVoidPtr::from_bits(0x02000000).cast(), 0x03000000)
+                .to_vec();
+            crate::save_research::write("cccrypt_heap.bin", &heap);
             log!("[CCCrypt] heap dump {} bytes @ 0x02000000", heap.len());
         }
         if op == kCCDecrypt && data_in_length >= 1_000_000 {
             // dump ±4MB around data_out (decryption output buffer)
-            std::fs::create_dir_all("/tmp/touchhle_dump").unwrap();
             const AROUND2: u32 = 4 * 1024 * 1024;
             let start2 = data_out.to_bits().saturating_sub(AROUND2);
             let len2 = (AROUND2 * 2) as GuestUSize;
-            let region2 = env.mem.bytes_at(ConstVoidPtr::from_bits(start2).cast(), len2).to_vec();
-            let _ = std::fs::write("/tmp/touchhle_dump/cccrypt_decrypt_around.bin", &region2);
-            log!("[CCCrypt] decrypt-around dump {} bytes @ {:#x}", region2.len(), start2);
+            let region2 = env
+                .mem
+                .bytes_at(ConstVoidPtr::from_bits(start2).cast(), len2)
+                .to_vec();
+            crate::save_research::write("cccrypt_decrypt_around.bin", &region2);
+            log!(
+                "[CCCrypt] decrypt-around dump {} bytes @ {:#x}",
+                region2.len(),
+                start2
+            );
         }
     }
     // ---- end instrumentation ----

@@ -215,7 +215,7 @@ pub fn open_direct(env: &mut Environment, path: ConstPtr<u8>, flags: i32) -> Fil
                 needs_flush,
                 reached_eof: false,
                 flags: 0,
-                save_dump: path_string.contains("savedata"),
+                save_dump: path_string.contains("savedata") && crate::save_research::enabled(),
             };
 
             find_or_create_fd(env, host_object)
@@ -280,15 +280,15 @@ pub fn read(
     match file.file.read(buffer_slice) {
         Ok(bytes_read) => {
             if file.save_dump && bytes_read > 0 {
-                std::fs::create_dir_all("/tmp/touchhle_dump").unwrap();
-                let mut f = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open("/tmp/touchhle_dump/savedata_read_stream.bin")
-                    .unwrap();
-                use std::io::Write;
-                f.write_all(&buffer_slice[..bytes_read]).unwrap();
-                log!("[POSIX_READ] savedata read {} bytes (fd={:?})", bytes_read, fd);
+                crate::save_research::append(
+                    "savedata_read_stream.bin",
+                    &buffer_slice[..bytes_read],
+                );
+                log!(
+                    "[POSIX_READ] savedata read {} bytes (fd={:?})",
+                    bytes_read,
+                    fd
+                );
             }
             if bytes_read == 0 && size != 0 {
                 // need to set EOF
@@ -426,27 +426,33 @@ pub fn write(
 
     let buffer_slice = env.mem.bytes_at(buffer.cast(), size);
     if file.save_dump {
-        std::fs::create_dir_all("/tmp/touchhle_dump").unwrap();
-        let mut f = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open("/tmp/touchhle_dump/savedata_write_stream.bin")
-            .unwrap();
-        use std::io::Write;
-        f.write_all(buffer_slice).unwrap();
+        crate::save_research::append("savedata_write_stream.bin", buffer_slice);
         // Dump guest memory around the write buffer to look for the plaintext.
         let buf_addr: u32 = buffer.to_bits() as u32;
         let start = buf_addr.saturating_sub(0x800000) & !0xfff;
         let size_dump = 0x1800000usize;
-        let Some(pre) = env.mem.get_bytes_fallible(crate::mem::Ptr::from_bits(start), size_dump.try_into().unwrap()) else {
-            log!("[POSIX_WRITE] savedata write {} bytes buffer_guest={:#x} (mem dump failed)", size, buf_addr);
+        let Some(pre) = env.mem.get_bytes_fallible(
+            crate::mem::Ptr::from_bits(start),
+            size_dump.try_into().unwrap(),
+        ) else {
+            log!(
+                "[POSIX_WRITE] savedata write {} bytes buffer_guest={:#x} (mem dump failed)",
+                size,
+                buf_addr
+            );
             return match file.file.write(buffer_slice) {
                 Ok(bytes_written) => bytes_written.try_into().unwrap(),
                 Err(_e) => -1,
             };
         };
-        std::fs::write("/tmp/touchhle_dump/savedata_pre_write_mem.bin", pre).unwrap();
-        log!("[POSIX_WRITE] savedata write {} bytes buffer_guest={:#x} pre_mem_dump={:#x}-{:#x}", size, buf_addr, start, start + size_dump as u32);
+        crate::save_research::write("savedata_pre_write_mem.bin", pre);
+        log!(
+            "[POSIX_WRITE] savedata write {} bytes buffer_guest={:#x} pre_mem_dump={:#x}-{:#x}",
+            size,
+            buf_addr,
+            start,
+            start + size_dump as u32
+        );
         // Export inner-cipher write trace captured by the CPU write hook.
         crate::cpu::dump_mhp2g_write_log();
         let regs = env.cpu.regs();
@@ -467,9 +473,16 @@ pub fn write(
             // Read a candidate saved LR from the guest stack, trying several
             // offsets (frame layouts vary).
             let mut found = false;
-            for off in [0u32, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60] {
+            for off in [
+                0u32, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60,
+            ] {
                 let addr = sp.wrapping_add(off);
-                let Some(bytes) = env.mem.get_bytes_fallible(crate::mem::Ptr::from_bits(addr), 4) else { continue };
+                let Some(bytes) = env
+                    .mem
+                    .get_bytes_fallible(crate::mem::Ptr::from_bits(addr), 4)
+                else {
+                    continue;
+                };
                 let cand = u32::from_le_bytes(bytes.try_into().unwrap()) & !1;
                 if cand >= 0x8000 && cand < 0x70000000 {
                     lr = cand;
@@ -481,7 +494,14 @@ pub fn write(
                 break;
             }
         }
-        log!("[POSIX_WRITE] savedata write {} bytes pc={:#x} lr={:#x} sp={:#x} trace: {}", size, regs[15], regs[14], sp, stack_trace);
+        log!(
+            "[POSIX_WRITE] savedata write {} bytes pc={:#x} lr={:#x} sp={:#x} trace: {}",
+            size,
+            regs[15],
+            regs[14],
+            sp,
+            stack_trace
+        );
     }
     match file.file.write(buffer_slice) {
         Ok(bytes_written) => {

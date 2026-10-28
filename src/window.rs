@@ -2093,9 +2093,18 @@ impl Window {
                             gles11::UNSIGNED_BYTE,
                             buf.as_mut_ptr().cast(),
                         );
-                        std::fs::write("/tmp/touchhle_shot.raw", &buf).unwrap();
-                        std::fs::write("/tmp/touchhle_shot.dim", format!("{} {}", w, h)).unwrap();
-                        log!("[SHOT] saved screenshot {}x{}", w, h);
+                        let result =
+                            std::fs::write("/tmp/touchhle_shot.raw", &buf).and_then(|_| {
+                                std::fs::write("/tmp/touchhle_shot.dim", format!("{} {}", w, h))
+                            });
+                        match result {
+                            Ok(()) => {
+                                log!("[SHOT] saved screenshot {}x{}", w, h);
+                            }
+                            Err(e) => {
+                                log!("[SHOT] couldn't save screenshot: {}", e);
+                            }
+                        }
                     }
                 }
             }
