@@ -1,6 +1,6 @@
 # NEXT_STEPS.md - MHP2G PSP <-> iOS save converter status
 
-> Updated 2026-10-28 (late). See README.md for usage, the format and what
+> Updated 2026-10-28 (late; converter rewritten in Rust). See README.md for usage, the format and what
 > was verified. This supersedes the earlier "checksum F" analysis.
 
 ## Status: the converter works for PSP -> iOS
@@ -34,16 +34,15 @@ new hash is rejected.
 
 ## Remaining work (ranked)
 
-1. PSP system layer: works with Apollo's `endecrypter` and the JP game key
-   (both directions, round trip verified on the k73 save). The earlier
-   "SHA-1 doesn't match" came from using mhef's byte table, which isn't
-   MHP2G JP's: the PSP game uses the same tables as iOS. A built-in
-   implementation would remove the external tool (check licences: mhef,
-   Apollo and PPSSPP are GPL).
+1. ~~PSP system layer~~: done. `mhp2g_save` (Rust, GPL-3.0-or-later)
+   implements sceChnnlsv/KIRK and the PARAM.SFO hashes; it reproduces a
+   PSP-written save byte for byte. The SAVEDATA_PARAMS hash of mode 6 needs
+   the console's fuse ID and uses 0 (see README.md).
 2. Check iOS -> PSP output on PPSSPP or a PSP.
 3. In-game write-back test: load a converted save, save in game, and check
-   the result with `mhp2g_save.py inspect`.
+   the result with `mhp2g-save inspect`.
 4. Field map of the settings block 0x00..0x24 and anything else that might
    be platform-specific (e.g. PSP-only download quests).
-5. touchHLE integration: import/export of PSP saves from the launcher, with
-   automatic backups.
+5. touchHLE integration (Android first): import/export of PSP saves from
+   the launcher via the system file picker, using the `mhp2g_save` crate,
+   with automatic backups.

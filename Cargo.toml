@@ -2,6 +2,8 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 [workspace]
+# mhp2g-save-tools is GPL-3.0-or-later, unlike the rest (see its Cargo.toml).
+members = ["mhp2g-save-tools"]
 
 [workspace.package]
 version = "0.3.0"

@@ -1,30 +1,42 @@
 # MHP2G 存档转换器（PSP ↔ iOS）
 
-`mhp2g_save.py` 在 PSP 版和 iOS 版《怪物猎人 携带版 2nd G》（MHP2G，iOS bundle id `jp.co.capcom.mhp2gjp`）之间转换存档。只需要 Python 3 标准库，不依赖 pycryptodome 等第三方包。
+`mhp2g-save` 在 PSP 版和 iOS 版《怪物猎人 携带版 2nd G》（MHP2G，PSP ULJM-05500，iOS bundle id `jp.co.capcom.mhp2gjp`）之间转换存档。它是 UFtouchHLE 工作区里的一个 Rust crate（`mhp2g_save`，库 + 命令行），PSP 的系统层（KIRK）加解密已内置，不需要外部工具。以后 UFtouchHLE 本体（比如安卓的导入功能）可以直接依赖这个库。
+
+## 许可证
+
+**这个目录是 GPL-3.0-or-later**（见 `COPYING`），和 UFtouchHLE 其余部分（MPL-2.0）不同。原因是 `src/psp.rs` 移植自 GPL-3.0-or-later 的代码：jpcsp、kirk-engine，以及 psp-savedata-endecrypter / Apollo Save Tool。原作者的版权声明保留在该文件开头。MPL-2.0 允许和 GPL 代码组合，以 GPL 分发；UFtouchHLE 的发布包本来就附带 GPL-3.0（`dev-scripts/prepare-release.sh`）。
 
 ## 用法
 
 ```bash
-# 查看存档：平台、角色名、校验和、种子
-python3 mhp2g-save-tools/mhp2g_save.py inspect savedata.dat
-
-# PSP → iOS（输入是去掉系统层加密的 PSP 存档，见下文）
-python3 mhp2g-save-tools/mhp2g_save.py convert --to ios MHP2NDG.BIN savedata.dat
-
-# iOS → PSP（输出是 PSP 游戏层文件，还需要加上系统层才能给 PSP/PPSSPP 用）
-python3 mhp2g-save-tools/mhp2g_save.py convert --to psp savedata.dat MHP2NDG.BIN
-
-# 研究用：导出明文（0x16A100 字节）/ 修改后重新加密（自动重算 SHA-1 和种子）
-python3 mhp2g-save-tools/mhp2g_save.py decrypt savedata.dat plain.bin
-python3 mhp2g-save-tools/mhp2g_save.py encrypt --platform ios plain.bin savedata.dat
+cargo build -p mhp2g_save --release    # 生成 target/release/mhp2g-save
 ```
 
-- 输入格式自动识别：iOS `savedata.dat`（0x16A110 字节）、PSP 游戏层文件（0x16A100 字节），或明文（0x16A0FC / 0x16A100 字节）。校验和不对的文件会被拒绝。
-- `convert` 默认不覆盖已有文件，要覆盖请加 `--force`。写出前会按游戏的方式重新读一遍结果并校验。
-- `--template 某个目标平台的存档`：从这个存档取开头的平台设置块（0x00–0x24），不加时用内置的默认值（来自所有已有样本）。
+```bash
+# 查看存档：平台、格式、角色名、校验和、种子
+mhp2g-save inspect savedata.dat
+mhp2g-save inspect PSP/SAVEDATA/ULJM05500
+
+# PSP → iOS：输入直接用 PSP/PPSSPP 的存档目录（或其中的 MHP2NDG.BIN）
+mhp2g-save convert --to ios PSP/SAVEDATA/ULJM05500 savedata.dat
+
+# iOS → PSP：需要一份现有 MHP2G PSP 存档的 PARAM.SFO 作为模板；
+# 输出目录里是 MHP2NDG.BIN、更新过的 PARAM.SFO 和模板目录里的图标
+mhp2g-save convert --to psp savedata.dat ULJM05500 --psp-sfo 旧存档/ULJM05500/PARAM.SFO
+
+# 研究用：导出明文（0x16A100 字节）/ 修改后重新加密（自动重算 SHA-1 和种子）
+mhp2g-save decrypt savedata.dat plain.bin
+mhp2g-save encrypt --platform ios plain.bin savedata.dat
+```
+
+- 输入格式自动识别：iOS `savedata.dat`、带系统层的 PSP `MHP2NDG.BIN`（同目录有 `PARAM.SFO` 时从中读取加密模式，没有时按 MHP2G 的模式 5）、不带系统层的 PSP 游戏层文件，或明文。SHA-1 不对的文件会被拒绝。
+- 默认不覆盖已有文件，要覆盖请加 `--force`。写 PSP 存档前，会先把结果按读档流程解一遍，确认无误后才写出。模板 `PARAM.SFO` 本身不会被修改。
+- `--template 某个目标平台的存档`：从这个存档取开头的平台设置块（0x00–0x24）；不加时用内置默认值，取自所有已有样本。
+- `--game-layer`：只写不带系统层的 PSP 文件。
 - iOS 存档位置：`touchHLE_sandbox/jp.co.capcom.mhp2gjp/Documents/savedata.dat`。替换前先备份原文件。
-- 一次转换要几秒钟（AES 是纯 Python 实现的）。
-- 测试：`python3 mhp2g-save-tools/test_mhp2g_save.py`（只用合成数据，不需要游戏文件）。
+- 测试：
+  - `cargo test -p mhp2g_save` 只用合成数据，包括 AES-CBC（SP 800-38A）和 AES-CMAC（RFC 4493）的标准测试向量。
+  - `tests/real_saves.rs` 用真实存档核对。设置环境变量后才会运行，用法见该文件开头。
 
 ## 存档格式
 
@@ -42,35 +54,30 @@ Capcom 游戏层加密：对除种子外的每个 32 位小端字，`查表 → 
 
 | | PSP（ULJM-05500） | iOS |
 |---|---|---|
-| 字节表 | 相同：iOS 二进制 VA 0x5F67D0（加密）/ 0x5F68D0（解密）处的表。**不是** mhef / mhtools 里那张 `A6 21 22 …` 表 | 同左 |
+| 字节表 | 两个平台相同：iOS 二进制 VA 0x5F67D0（加密）/ 0x5F68D0（解密）处的表。**不是** mhef / mhtools 里那张 `A6 21 22 …` 表 | 同左 |
 | 盐 | `S)R?Bf8xW3#5h9lGU8wR` | `3Nc94Hq1zOLh8d62Sb69`（与 PSP 美/欧版 MHFU 相同） |
-| 外层 | PSP 系统存档加密（sceChnnlsv/KIRK AES-128-CBC），日版游戏 key `cd1f2059ae70ef68dca24513b45adb0a`，0x16A110 字节 | AES-128-CBC + PKCS#7（CCCrypt），key `ls6([f$]=~I(nf28`，iv `;lknc(;f_wnX98<i`，0x16A110 字节 |
+| 外层 | PSP 存档加密 sceChnnlsv（KIRK），模式 5，日版游戏 key `cd1f2059ae70ef68dca24513b45adb0a`；16 字节文件头 + 数据，共 0x16A110 字节 | AES-128-CBC + PKCS#7（CCCrypt），key `ls6([f$]=~I(nf28`，iv `;lknc(;f_wnX98<i`，0x16A110 字节 |
+| 签名 | `PARAM.SFO`：`SAVEDATA_FILE_LIST` 里的文件哈希，加上 `SAVEDATA_PARAMS` 的三个签名（都是 AES-CMAC） | 无 |
 
 iOS 版的逻辑来自游戏二进制：`0x322704`（读档：解密 + 校验 SHA-1）、`0x322868`（游戏层加解密）、`0x322AF4`（写档：算 SHA-1、换种子、加密）。
 
+PSP 系统层：数据和一个密钥流做 XOR。密钥流是对一串编号块做 CBC 解密得到的，编号块由文件头和游戏 key 推出。文件哈希是“文件头 + 密文”的 AES-CMAC，再经游戏 key 加密一次。
+
 ## 验证情况
 
-- iOS：4 份真实存档全部能解密、SHA-1 吻合；用原种子重新加密后与原文件**逐字节一致**。
-- PSP：真实的 k73 `MHP2NDG.BIN` 用 Apollo 的 `endecrypter` 加日版 key 解掉系统层后，本工具能读出来，SHA-1 吻合。反方向：本工具写出的 PSP 游戏层文件用 `endecrypter` 加回系统层，再解开，与原文件逐字节一致。
-- 在 UFtouchHLE（macOS release 版）里用 P2G 实际读档：
+- **iOS**：4 份真实存档全部能解密、SHA-1 吻合；用原种子重新加密后与原文件逐字节一致。
+- **PSP，真机存档**：k73 的 `MHP2NDG.BIN`（PSP 写出的）能直接解开，SHA-1 吻合。用原文件头重新加密，得到的文件与原文件**逐字节一致**，`SAVEDATA_FILE_LIST` 里的文件哈希也与 PSP 写的相同。`SAVEDATA_PARAMS` 里不依赖主机的两个签名（0x10、0x70）也能复现。
+- **PSP，与 Apollo `endecrypter` 对照**：同样的输入和文件头下，`MHP2NDG.BIN` 逐字节一致；`PARAM.SFO` 除了 `SAVEDATA_PARAMS` 的签名以外逐字节一致，那几个签名的差别见“限制”。本工具写出的 PSP 存档 `endecrypter` 也能解开。
+- **在 UFtouchHLE（macOS release 版）里用 P2G 实际读档**：
   - 原始存档：正常读取（对照组）
-  - 同一存档换新种子重新加密：正常读取（旧版转换器正是这一步失败）
-  - k73 的 PSP 存档转成 iOS：正常读取，角色选择界面显示 PSP 存档里的角色「君仔」（15:51，男性）和「无双君仔」（54:31）
+  - 同一存档换新种子重新加密：正常读取
+  - k73 的 PSP 存档转成 iOS：正常读取，角色选择界面显示 PSP 存档里的角色「君仔」（15:51，男性）和「无双君仔」（54:31）。Rust 版的输出与这次显示出角色的那份明文完全相同，也在游戏里读档通过。
   - 改 1 字节但不重算 SHA-1：两次报「游戏存档已损坏」（反向对照，说明检测有效）
 
 ## 限制
 
-- **不内置 PSP 系统层加密。** 真机或 PPSSPP 的 `MHP2NDG.BIN` 带系统层，要用外部工具处理。已验证可用的是 Apollo Save Tool 的 `endecrypter`（`key.bin` 是 16 字节的日版游戏 key）：
-
-  ```bash
-  # 解密：MHP2NDG.BIN → 游戏层文件，再交给本工具
-  endecrypter MHP2NDG.BIN key.bin > game.bin
-  # 加密：本工具输出的 PSP 游戏层文件 → MHP2NDG.BIN（会更新同目录存档的 PARAM.SFO，先备份）
-  endecrypter game.bin key.bin PARAM.SFO > MHP2NDG.BIN
-  ```
-
-  mhef 的 `PSPSavedataCipher` 也能解系统层，但它的 `SavedataCipher` 用的是另一张字节表，读不了日版 MHP2G 的游戏层。
-- **iOS → PSP 没有在 PSP/PPSSPP 上实际读档验证过**，只验证了系统层能加回去再解开。
+- **iOS → PSP 没有在 PSP/PPSSPP 上实际读档验证过。**
+- **`SAVEDATA_PARAMS` 0x20 处的签名（模式 6）无法和真机一致**：它用到写档主机的熔丝 ID（KIRK 命令 5）。本工具用熔丝 ID 0，和其他 PC 工具一样是编的值。0x70、0x10 两个签名覆盖了它，所以也会跟着不同。Apollo 的源码注释说 PSP 能接受这样的存档；PPSSPP 据我所知不检查这些签名，但都还没有实测。
 - **只验证了读档。** 没有在游戏里进入任务后再存档，确认转换来的存档能正常回写。
-- 平台设置块（0x00–0x24）的含义没有逐字段确认，转换时整体换成目标平台的值；其他字段假定两平台相同（依据：两个平台样本在 0x24–0x1000 完全一致，角色数据结构对得上，游戏能读出角色）。PSP 独有的内容（例如 PSP 下载任务）在 iOS 上的表现未测试。
-- 只支持日版 MHP2G（ULJM-05500）和这个 iOS 版。美/欧版 MHFU 的 PSP 存档盐和 iOS 相同，但没有测试。
+- 平台设置块（0x00–0x24）的含义没有逐字段确认，转换时整体换成目标平台的值。其他字段假定两平台相同，依据是：两个平台的样本在 0x24–0x1000 完全一致，角色数据结构对得上，游戏能读出角色。PSP 独有的内容（例如下载任务）在 iOS 上的表现未测试。
+- 只支持日版 MHP2G（ULJM-05500）和这个 iOS 版，只测试过一份 PSP 存档（k73）。
