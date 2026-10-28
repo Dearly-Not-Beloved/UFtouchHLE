@@ -186,6 +186,10 @@ jobs:
     # Why isn't there a command for this?
     - name: Generate local.properties file
       run: echo 'sdk.dir='$ANDROID_SDK_ROOT > android/local.properties
+    # Linting builds SDL before Gradle would patch it for NDK r28 (see
+    # patchSdlForNdk28 in android/app/build.gradle.kts), so patch it here too.
+    - name: Patch SDL for NDK r28
+      run: cargo fetch && bash dev-scripts/patch-sdl-ndk28.sh
     - name: Lint
       run: dev-scripts/lint.sh ndk -t arm64-v8a
       env:
