@@ -215,6 +215,52 @@ pub fn convert(plain: &[u8], from: Platform, to: Platform, template: Option<&[u8
     out
 }
 
+/// The result of [import_psp].
+pub struct Import {
+    /// The new iOS `savedata.dat`.
+    pub file: Vec<u8>,
+    /// The names of the characters in it, in slot order (empty slots left out).
+    pub characters: Vec<String>,
+}
+
+/// Convert a PSP save for the iOS version, as an import into an app does.
+/// `file` is `MHP2NDG.BIN` (with or without the system layer), `sfo` the
+/// `PARAM.SFO` next to it if there is one, and `current` the iOS
+/// `savedata.dat` it replaces, if any, whose settings block is kept.
+pub fn import_psp(
+    file: &[u8],
+    sfo: Option<&[u8]>,
+    current: Option<&[u8]>,
+) -> Result<Import, Error> {
+    let params = match sfo {
+        Some(sfo) => Some(psp::Sfo::parse(sfo.to_vec())?.params()?),
+        None => None,
+    };
+    let save = load(file, params)?;
+    if save.platform != Platform::Psp {
+        return Err(Error::new("this is an iOS save, not a PSP one"));
+    }
+    // A broken current save just means the default settings are used.
+    let template = current
+        .and_then(|current| load(current, None).ok())
+        .filter(|current| current.platform == Platform::Ios)
+        .map(|current| current.plain);
+    let plain = convert(
+        &save.plain,
+        Platform::Psp,
+        Platform::Ios,
+        template.as_deref(),
+    );
+    let characters = (0..SLOTS)
+        .map(|slot| game::character_name(&plain[SLOT_OFF + slot * SLOT_LEN - game::NAME_OFF..]))
+        .filter(|name| !name.is_empty())
+        .collect();
+    Ok(Import {
+        file: ios_file(&plain),
+        characters,
+    })
+}
+
 /// Plaintext -> iOS `savedata.dat`.
 pub fn ios_file(plain: &[u8]) -> Vec<u8> {
     ios::encrypt(&game::encrypt(plain))
@@ -284,6 +330,32 @@ mod tests {
             (Platform::Psp, Format::Plaintext)
         );
         assert_eq!(save.plain[..SEED_OFF], psp[..SEED_OFF]);
+    }
+
+    #[test]
+    fn import_psp_save() {
+        let psp = synthetic_plain(Platform::Psp);
+        let mut sfo = psp::Sfo::parse(psp::tests::synthetic_sfo()).unwrap();
+        let file = psp_file(&psp, &mut sfo).unwrap();
+
+        let mut current = synthetic_plain(Platform::Ios);
+        current[..HEADER_LEN].fill(0x5A);
+        game::seal(&mut current, Platform::Ios, 1);
+        let current = ios_file(&current);
+        let import = import_psp(&file, Some(&sfo.0), Some(&current)).unwrap();
+        assert_eq!(import.characters, ["テスト"]);
+        let save = load(&import.file, None).unwrap();
+        assert_eq!(save.format, Format::IosFile);
+        assert_eq!(save.plain[..HEADER_LEN], [0x5A; HEADER_LEN]);
+        assert_eq!(save.plain[HEADER_LEN..SLOT_OFF], psp[HEADER_LEN..SLOT_OFF]);
+
+        // Without PARAM.SFO or a current save.
+        let import = import_psp(&file, None, None).unwrap();
+        let save = load(&import.file, None).unwrap();
+        assert_eq!(save.plain[..HEADER_LEN], Platform::Ios.default_header());
+
+        assert!(import_psp(&current, None, None).is_err());
+        assert!(import_psp(&[0; 16], None, None).is_err());
     }
 
     #[test]

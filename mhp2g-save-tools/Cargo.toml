@@ -7,6 +7,13 @@ name = "mhp2g_save"
 version = "0.1.0"
 edition = "2021"
 license = "GPL-3.0-or-later"
+authors = [
+    "UFtouchHLE contributors",
+    "jpcsp team (CryptoEngine by hykem)",
+    "draan, proxima and contributors (kirk-engine)",
+    "popsdeco (psp-savedata-endecrypter)",
+    "bucanero (Apollo Save Tool)",
+]
 description = "Monster Hunter Portable 2nd G save converter (PSP <-> iOS)"
 
 [lib]

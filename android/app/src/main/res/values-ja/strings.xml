@@ -154,6 +154,15 @@
         <item quantity="other">「%1$s」のセーブを読み込みました（%2$d 個のファイル）。</item>
     </plurals>
     <string name="import_save_failed">セーブを読み込めませんでした（%1$s中）：%2$s\n元のセーブは touchHLE フォルダーの %3$s にあります。</string>
+    <string name="menu_import_psp_save">PSPのセーブを読み込む</string>
+    <string name="import_psp_save_title">PSPのセーブを「%1$s」に読み込みますか？</string>
+    <string name="import_psp_save_message">PSPのセーブフォルダー ULJM05500（PSP/SAVEDATA の中。PPSSPP では memstick フォルダーの中）か、その中の MHP2NDG.BIN と PARAM.SFO を選んでください。セーブはこのバージョン用に変換されます。今のセーブは touchHLE フォルダーの %1$s にバックアップしてから置き換えます。\n\n読み込む前にこのゲームを終了してください。</string>
+    <string name="choose_folder">フォルダーを選択</string>
+    <string name="choose_files">ファイルを選択</string>
+    <string name="psp_save_not_found">選んだフォルダーに MHP2NDG.BIN がありません。</string>
+    <string name="import_psp_save_failed">PSPのセーブを読み込めませんでした：%1$s</string>
+    <string name="imported_psp_save">PSPのセーブを読み込みました（キャラクター：%1$s）。</string>
+    <string name="imported_psp_save_backup">PSPのセーブを読み込みました（キャラクター：%1$s）。元のセーブは touchHLE フォルダーの %2$s にあります。</string>
     <string name="cant_move_old_save">古いセーブ %1$s を移動できませんでした</string>
 
     <string name="update_banner">新しいバージョン %1$s があります。ここをタップして更新</string>

@@ -208,6 +208,54 @@ pub unsafe extern "system" fn Java_org_touchhle_android_LauncherActivity_nativeV
     new_byte_array(env, crate::VERSION.as_bytes())
 }
 
+/// Copies a Java `byte[]`, which may be null.
+unsafe fn get_byte_array(env: *mut JNIEnv, array: jbyteArray) -> Option<Vec<u8>> {
+    if array.is_null() {
+        return None;
+    }
+    let len = ((**env).GetArrayLength.unwrap())(env, array);
+    let mut bytes = vec![0u8; len.try_into().unwrap()];
+    ((**env).GetByteArrayRegion.unwrap())(env, array, 0, len, bytes.as_mut_ptr().cast());
+    Some(bytes)
+}
+
+/// Converts a Monster Hunter Portable 2nd G save from the PSP for the iOS
+/// version (see `mhp2g-save-tools/`). `file` is `MHP2NDG.BIN`, `sfo` the
+/// `PARAM.SFO` next to it (or null) and `current` the app's current
+/// `savedata.dat` (or null), whose settings are kept.
+///
+/// On success, returns 0, the length of the next part as a little-endian
+/// u32, the names of the characters in the save (UTF-8, one per line) and the
+/// new `savedata.dat`. On failure, returns 1 and an error message (UTF-8).
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_touchhle_android_LauncherActivity_nativeImportPspSave(
+    env: *mut JNIEnv,
+    _class: jclass,
+    file: jbyteArray,
+    sfo: jbyteArray,
+    current: jbyteArray,
+) -> jbyteArray {
+    let file = get_byte_array(env, file).unwrap_or_default();
+    let sfo = get_byte_array(env, sfo);
+    let current = get_byte_array(env, current);
+    let result = std::panic::catch_unwind(|| {
+        mhp2g_save::import_psp(&file, sfo.as_deref(), current.as_deref()).map_err(|e| e.to_string())
+    })
+    .unwrap_or_else(|_| Err("internal error".to_string()));
+    let out = match result {
+        Ok(import) => {
+            let names = import.characters.join("\n");
+            let mut out = vec![0];
+            out.extend_from_slice(&u32::try_from(names.len()).unwrap().to_le_bytes());
+            out.extend_from_slice(names.as_bytes());
+            out.extend_from_slice(&import.file);
+            out
+        }
+        Err(message) => [&[1], message.as_bytes()].concat(),
+    };
+    new_byte_array(env, &out)
+}
+
 /// Request an audio snapshot from the game's UI thread without accessing
 /// emulated state or OpenAL from JNI.
 #[no_mangle]
