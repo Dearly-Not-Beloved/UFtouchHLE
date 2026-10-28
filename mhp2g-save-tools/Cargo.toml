@@ -1,0 +1,21 @@
+# This file is part of mhp2g_save, which is licensed under the GNU General
+# Public License, version 3 or later; see COPYING. Unlike the rest of
+# UFtouchHLE (MPL-2.0), this crate is GPL because its PSP savedata code is
+# derived from GPL projects (jpcsp, kirk-engine, psp-savedata-endecrypter).
+[package]
+name = "mhp2g_save"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+description = "Monster Hunter Portable 2nd G save converter (PSP <-> iOS)"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "mhp2g-save"
+path = "src/main.rs"
+
+[dependencies]
+aes = "0.8"
+sha1 = "0.10.6"

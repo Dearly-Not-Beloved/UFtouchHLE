@@ -1,92 +1,153 @@
-# PSP_IOS_FORMAT_COMPARISON.md - PSP vs iOS MHP2G save format comparison
+# MHP2G 存档格式分析与 PSP ↔ iOS 字段映射
 
-> Status: 2026-10-28 — both platforms' crypto FULLY solved; iOS inner = PSP-homologous table perm + LCG (table differs). Remaining blocker: iOS save checksum F (see NEXT_STEPS.md). Field mapping table is incomplete by design - only facts with evidence are listed.
+> 2026-10-28 重写。加解密细节见 DECRYPTION_PROCESS.md，转换器用法见 README.md。
+> 置信度：**已验证** = 有字节级证据（差分、已知界面数值或游戏实测）；**推断** = 结构上很像，但没有直接证据；**未知** = 还没分析。
 
----
+## 0. 样本
 
-## 1. Overview
-
-| Aspect | PSP (MHP2G JP) | iOS (MHP2G JP, touchHLE) |
-|---|---|---|
-| Sample | k73.com save | touchHLE sandbox savedata.dat |
-| File | ULUS10391/PARAM.SFO + save data | single savedata.dat |
-| File size | 1,483,004B (decrypted) | 1,483,024B (outer ciphertext) / 1,483,008B (inner) |
-| Outer crypto | KIRK AES-128-CBC (system layer) | CCCrypt AES-128-CBC (key/iv fixed, see IOS_SAVE_DYNAMIC_ANALYSIS.md) |
-| Inner crypto | Capcom table perm + LCG | **same scheme; params identical, table differs** (iOS T1[0]=0x3a vs PSP TABLE[0]=0xa6) |
-| Checksum | tail 20B = SHA1(data[:-12] + salt "S)R?Bf8xW3#5h9lGU8wR") | tail 30B = 8B | 20B | 2B; checksum algorithm F UNKNOWN (blocker) |
-| Version header | 00 03 07 07 | 00 01 04 04 |
-| Zero ratio | 98.44% | 99.94% |
-
----
-
-## 2. Crypto layers (verified facts)
-
-### PSP (fully solved)
-- System layer: KIRK AES-128-CBC; game key JP = cd1f2059ae70ef68dca24513b45adb0a
-- Game layer: table permutation + LCG
-  - encrypt: c[i] = T1[ T1[p[i]] XOR beta[i] ]
-  - decrypt: p[i] = T2[ T2[c[i]] XOR beta[i] ]
-  - beta[i] = lower[i] + (upper[i] << 16)
-  - lower = (lower * 0x215F) % 0xFF8F
-  - upper = (upper * 0xDFA3) % 0xFFEF
-  - seed = last 4B, permuted twice through T2 table
-- SHA1 over data[:-12] + salt, stored in last 20B
-- Verified: k73 save SHA1 exactly matches; 370751/370751 blocks decrypt correctly; zero ratio 98.44%
-
-### iOS (fully solved 2026-10-28)
-- Outer: CCCrypt AES-128-CBC, key = ls6([f$]=~I(nf28 (hex 6c7336285b66245d3d7e49286e663238), iv = ;lknc(;f_wnX98<i (hex 3b6c6b6e63283b665f776e5839383c69)
-- Outer verified: encrypt(cccrypt_plain.bin) == savedata_write_stream.bin
-- Inner ciphertext = 1,483,008B; inner plaintext 99.94% zero
-- Inner = same Capcom scheme as PSP: `p=T2[T2[c]^beta]` / `c=T1[T1[p]^beta]`, beta=lower+(upper<<16), LCG lower*0x215F %0xFF8F, upper*0xDFA3 %0xFFEF; **T1/T2 are the iOS tables (file 0x5f27d0/0x5f28d0), NOT the PSP table**
-- Closed loop verified: decrypt(encrypt(x))==x, 0-byte diff, on all 4 real saves
-- beta[0] is per-save random (NOT derived from tail u32; tail u32 is NOT the seed — changing it leaves game beta unchanged)
-- **Game load-decrypt**: recovers beta from ciphertext @0xDFC00, runs LCG backward 229120 steps to block-0 beta, decrypts whole save; simulated decrypt matches real plaintext 100.00%
-- **Original male save loads in touchHLE; any re-encrypted save is rejected** => checksum F over inner ciphertext body; F UNKNOWN (no standard-hash constants in binary)
-- Two 16B ASCII strings `f09qfkn#olsp9fkn` / `b#hl-*pa-lspzm ` sit after the key/iv strings (candidate salts / second key pair; SHA1 tests negative)
-
----
-
-## 3. Structural comparison (confirmed fields only)
-
-| Field | PSP offset (k73) | iOS offset | Status |
+| 样本 | 平台 | 内容 | 用途 |
 |---|---|---|---|
-| version header | 0x0000: 00 03 07 07 | 0x0000: 00 01 04 04 | CONFIRMED different |
-| character name | present (UTF-16, found in plaintext) | 0x1000: UTF-16 "111" | CONFIRMED location on iOS, PSP offset TBD |
-| quest name ref | m60038.mib @ 0x148b00 | not found in same layout | PSP-specific |
-| tail seed (4B) | last 4B (permuted via T2) | **NOT a seed** — changing it leaves the game's beta unchanged (verified) | CONFIRMED not seed on iOS |
-| checksum tail | SHA1(data[:-12]+salt), 20B | iOS tail 30B = 8B | 20B | 2B (last byte always 0x77); algorithm F UNKNOWN | iOS checksum = blocker |
+| k73 `ULJM05500/` | PSP（PPSSPP 导出，k73.com 下载） | 3 个角色：「君仔」29:51、「无双君仔」54:31、「Bravo」0:26 | 唯一的 PSP 样本 |
+| male（= s1 = 测试机原档） | iOS | 「殲滅のレウス」116:52、「Ł」、「Master」 | |
+| s2、s3 | iOS | male 继续玩之后的两次存档 | 差分 |
+| female | iOS | 「unknown」、「ラギア」、「Master」，游戏时间为 0 | |
+| Downloads `savedata.dat` | iOS | 只有一个角色「111」，玩了 7 分钟 | 接近新角色的默认值 |
+| k73 转 iOS 后的两组回写前/后 | iOS | 用户的操作已知（用掉一个道具、玩了几分钟） | 差分 |
+
+本机和测试机上都没有 PPSSPP，所以没有用户自己的 PSP 存档。
 
 ---
 
-## 4. Known differences (do NOT copy fields blindly)
+## 1. PSP 存档
 
-1. **Size and layout**: PSP 1,483,004B vs iOS inner 1,483,008B - different offsets for the same logical fields are expected; byte-copy is invalid.
-2. **Version header** differs (00 03 07 07 vs 00 01 04 04): the game likely switches serialization layout by version.
-3. **Zero regions** differ (98.44% vs 99.94%): iOS plaintext is sparser; the iOS plaintext is built from a template (memcpy 2 from HaXe heap 426,044B onto offset 0x1000).
-4. **Seed handling**: PSP seed = tail 4B permuted via table; **iOS tail u32 is NOT a seed** (changing it leaves game beta unchanged; beta[0] is per-save random, recovered by the game from ciphertext @0xDFC00).
-5. **Checksum**: PSP SHA1+salt verified; iOS tail 20B checksum F over the inner ciphertext — UNKNOWN algorithm (no standard-hash constants in binary; any re-encryption is rejected in-game). Must be cracked before converter output is loadable.
+### 1.1 目录与文件
+
+- 目录：`PSP/SAVEDATA/ULJM05500/`（日版游戏编号；PPSSPP 在 `memstick/PSP/SAVEDATA/` 下）。
+- 文件：`MHP2NDG.BIN`（主存档，0x16A110 字节）、`PARAM.SFO`、`ICON0.PNG`、`PIC1.PNG`。
+- `PARAM.SFO`（已验证，k73）：
+
+  | 键 | 值 |
+  |---|---|
+  | `CATEGORY` | `MS` |
+  | `SAVEDATA_DIRECTORY` | `ULJM05500` |
+  | `TITLE` / `SAVEDATA_TITLE` | 「モンスターハンターポータブル２ｎｄＧ」/「ゲームデータ」 |
+  | `SAVEDATA_FILE_LIST` | `MHP2NDG.BIN` + 16 字节文件哈希 |
+  | `SAVEDATA_PARAMS` | 首字节 `0x41`（加密模式 5，带模式 1 签名）+ 3 个签名 |
+
+### 1.2 加密、校验与签名（已验证）
+
+- **第一层，系统层**：sceChnnlsv（KIRK），加密模式 5，日版游戏 key `cd1f2059ae70ef68dca24513b45adb0a`。文件开头 16 字节是文件头，后面是密文。
+- **第二层，游戏层**：Capcom 表置换 + 双 LCG（两个平台相同）。
+- **校验**：`SHA-1(明文[0:0x16A0DC] + "S)R?Bf8xW3#5h9lGU8wR")`，存在 `0x16A0E8`。
+- **签名**：`PARAM.SFO` 里有文件哈希和 3 个 AES-CMAC 签名。其中模式 6 签名依赖主机的熔丝 ID，无法跨机复现。
+- **验证结果**：k73 存档能直接解开；按原文件头重新加密，与原文件逐字节一致，文件哈希也和 PSP 写的相同。
+
+### 1.3 区域版本
+
+| 版本 | 编号 | 游戏 key | 盐 | 字节表 | 状态 |
+|---|---|---|---|---|---|
+| 日版 MHP2G | ULJM-05500 | `cd1f2059…` | `S)R?Bf8xW3#5h9lGU8wR` | iOS 同款 | **已验证**（k73） |
+| 美版 MHFU | ULUS-10391 | 与日版不同（`/tmp/ulus10391.key`，来源未核实） | `3Nc94Hq1zOLh8d62Sb69`（mhef） | 未知：mhef 用 `A6 21 22…` 表，这张表对日版是错的 | **未验证**，需要样本 |
+| 欧版 MHFU | ULES-01213 | 未知 | 同美版（mhef） | 未知 | **未验证** |
+| iOS 版 | `jp.co.capcom.mhp2gjp` | 无系统层（AES 外层） | `3Nc94Hq1zOLh8d62Sb69`（与 MHFU 相同） | 与日版 PSP 相同 | **已验证** |
+
+iOS 版用的是日版的字节表、美版的盐。美/欧版 MHFU 的存档主体布局（英文版物品编号等）可能与日版不同，目前完全没有验证过。
 
 ---
 
-## 5. Field mapping table (to be completed)
+## 2. iOS 存档
 
-To be completed only with evidence from controlled 3-sample diff (see IOS_SAVE_DIFF_REPORT.md):
-- character: name, gender, appearance
-- playtime, zenny, resources
-- inventory (bag), box (warehouse)
-- equipment + upgrade states
-- skills
-- completed quests, unlock states
-- hunter rank progress
-- guild card
-- game settings
-
-Current blocker: **iOS save checksum F (over inner ciphertext) is not cracked** — until F is known, no re-encrypted save loads in-game, so no field offset can yet be verified in-game. Once F is cracked, controlled single-value-change saves become possible and the mapping can be completed.
+- **位置**：沙盒 `Documents/savedata.dat`。UFtouchHLE 里是 `touchHLE_sandbox/jp.co.capcom.mhp2gjp/Documents/savedata.dat`，安卓上是 `/sdcard/Android/data/org.touchhleuf.android/files/` 下的同一路径。二进制里还有 `Documents/_savedata` 这个字符串（作用待查）。
+- **容器**：单个文件，0x16A110 字节，无压缩。
+- **加密**：
+  - 外层：AES-128-CBC + PKCS#7（CCCrypt），key `ls6([f$]=~I(nf28`，iv `;lknc(;f_wnX98<i`。
+  - 内层：Capcom 游戏层。
+- **校验**：`SHA-1(明文[0:0x16A0DC] + "3Nc94Hq1zOLh8d62Sb69")`。
+- 以上都已验证：4 份 iOS 存档逐字节复现，游戏能读入改过的存档。
 
 ---
 
-## 6. Risks
+## 3. 明文布局（两个平台）
 
-- Mapping by assumption (same layout as PSP) is explicitly rejected per task rules; all differences above prove layouts differ.
-- Unknown-field loss: converting unknown iOS fields to PSP (or vice versa) must produce a migration report, not silent truncation.
-- Version mismatch: PSP saves from non-JP regions (ULUS10391 uses a different KIRK key, already archived at /tmp/ulus10391.key) may use different game-layer tables - verify region before converting.
+### 3.1 整体
+
+| 偏移 | 内容 | 两平台关系 | 置信度 |
+|---|---|---|---|
+| 0x000000–0x000024 | 设置块（PSP `00 03 07 07…`，iOS `00 01 04 04…`） | 不同，转换时替换 | 已验证（所有样本各自一致） |
+| 0x000024–0x001000 | 全零 | 相同 | 已验证 |
+| 0x001000 + k×0x6B100 | 角色槽 k（k = 0, 1, 2） | 见 3.2 | 已验证（槽内名字位置、3 个角色与选择界面一致） |
+| 0x142300–0x16A0DC | 全局区：PSP 有数据（疑似内含下载任务 `m60038.mib`、一份角色头副本、一份道具表）；iOS 全零 | **仅 PSP 使用**；iOS 读档和存档都不碰 | 已验证（iOS 回写后一字节未变） |
+| 0x16A0DC–0x16A0E8 | 元数据，不参与哈希（疑似日期/时间与存档次数） | 照搬 | 推断 |
+| 0x16A0E8–0x16A0FC | SHA-1 | 平台各自计算 | 已验证 |
+| 0x16A0FC–0x16A100 | XOR 流种子 | 每次存档换新 | 已验证 |
+
+### 3.2 角色槽（相对槽起点）
+
+| 偏移 | 内容 | 两平台关系 | 置信度 |
+|---|---|---|---|
+| +0x0000 | 角色名，UTF-16LE，最多 8 字符，以 0 结尾 | 相同 | 已验证 |
+| +0x0013 | 性别？（0 = 男，1 = 女） | 相同 | 推断：PSP 两个男性角色为 0，female 样本为 1 |
+| +0x001C | 4 字节，像 RGBA 颜色（PSP `ff0000ff`，iOS `e4b570ff`），疑似肤色/发色 | 相同 | 推断 |
+| +0x0010–0x0060 | 角色外观、等级等若干字段 | 相同布局 | 推断（各字段含义未知） |
+| 约 +0x0060–0x2C00 | 装备箱：每条 12 字节（`类别 u8, 子类 u8, ID u16, 8 字节强化/镶嵌`） | 相同 | 推断：两平台格式一致；起止位置还没确定 |
+| +0x2F88–0x3F28 | 道具箱：1000 条 `(u16 道具 ID, u16 数量)` | 相同 | 已验证（所有样本在同一位置） |
+| +0x3F28–0x3F88 | 随身道具：24 条，格式同上 | 相同 | 已验证（用户用掉一个道具后，第 1 条 `0xB1` 数量 9→8） |
+| +0x3F88–0x3FC4、+0x3FCC–0x3FE0 | 位图，疑似解锁标志 | 相同 | 推断（修改过的存档全 1，新角色全 0） |
+| +0x3FC8 | 游戏时间，u32 秒 | 相同 | 已验证（「无双君仔」196300 秒 = 54:31:40，与界面一致；回写后按实际游玩时间增加） |
+| +0x4000–0x8000 | 其他角色数据 | 两平台都有，对齐度高（+0x3000 段 0.99） | 推断 |
+| +0x8000–0x649A0 | iOS 存档里大量带他人名字（hana、NAOKI…）和任务名的记录，疑似收到的公会卡 | k73 这里全空，**无法比对**；PSP 版这部分可能更长（见下） | 未知 |
+| **+0x649A0–槽尾** | **后半段**：自己的公会卡、金钱、记录数组、标志表、计数器（见 3.3） | **整体平移**，PSP 比 iOS 多 0x28F8 字节，分几处插入；有一处打包格式不同 | 已验证 |
+
+iOS 存档时，会把游戏内存里一个 0x6803C 字节的结构体原样拷回槽的 `+0x0..0x6803C`，槽里其余字节和全局区保留读档时的内容。所以 PSP 存档原样放进 iOS 时，PSP 结构体多出来的尾部会被 iOS 原封不动地带着走。
+
+### 3.3 槽的后半段（平移，局部格式不同）
+
+PSP 每个角色的数据结构长 0x6A92C，iOS 长 0x6803C（iOS 存档时，会把游戏内存里这个结构体原样拷回槽的 `+0x0..0x6803C`）。多出来的 0x28F8 字节有一部分插在槽的后半段里，所以后半段各部分在两个平台上的偏移差不同：
+
+| iOS 范围（相对槽） | PSP = iOS + | 内容 | 证据 |
+|---|---|---|---|
+| +0x649A0–0x64B78 | 0x2884 | 自己的公会卡：名字 +0x64A34、装备记录 +0x64A46、**任务完成数（8 个 u16）+0x64A54，其中第 5 个 +0x64A5C 是训练所**、自我介绍 +0x64A68、最佳时间 +0x64ADC | 字段逐个对齐；转换后游戏显示 PSP 的公会卡名；差分：完成一次训练后 +0x64A5C 17→18，与公会卡一致 |
+| +0x64B78–0x64B80 | 0x2888 | 下一列表的表头 | |
+| +0x64B80–0x64C78 | 0x2888 | 31 条怪物记录，每条 8 字节，**格式不同**：PSP `u16 a, u16 b, u32 大小`，iOS `u32 a\|b<<7, u32 大小`（`b` 推测为讨伐数） | 转换器的打包结果与游戏自己重建的完全一致；讨伐数在游戏里显示正确 |
+| +0x64C78–0x65900 | 0x2888 | **任务履历**（+0x65068 起，每条 0x88 字节，最新的在最前：日 u8、月 u8、年 u16，任务名 UTF-8 在日期后 +0x5A）、带名字的记录 | 日期、任务名逐字节对齐；差分：完成训练后整个列表下移一格，最前面插入 2026-10-28「基础训练…」 |
+| +0x65900–0x67420 | 0x28F0 | **金钱**（iOS +0x66960，u32）、一串 0x70 字节的记录（含名字；完成任务后被改写，疑似任务结果日志） | 差分：卖道具后 2→377，训练报酬 +150；k73 金钱 1,174,809 转换后在游戏里显示正确 |
+| +0x67420–0x6803C | 0x28F8 | 逐任务 nibble 表 +0x67854、位图（+0x677A9 疑似训练任务完成标志）、5 字节列表、u32 计数器（含武器使用次数） | 结构逐段对齐；武器使用次数在游戏里显示正确；差分：完成训练后 +0x677A9 置了 1 位 |
+
+已知的小差异：
+- **公会卡名**：可以和角色名不同。k73 第 1 个角色是「g z j」（可能是 PSP 系统昵称）；iOS 原生存档里也有卡名「ラギア」、角色名「Ł」的例子。转换时原样保留，只有为空时才填入角色名（iOS 版不会自己填）。两个方向的往返都逐字节不变。
+- **iOS +0x655C0 的猎人列表**（每条 0x38 字节；PSP 在 +0x67E48，每条 0x40 字节）：iOS 版每次读档或存档时都会根据任务履历重新生成。所以列表第一条可能是历史记录里的旧名字（k73 是「g z j」），转换器不需要也无法修改它。任务履历里的猎人名字是历史记录，保持原样。
+- 最佳时间的“无记录”标记：PSP 用 999999，iOS 样本里用 `0x7fffffff` 或 0。k73 没有训练所记录，转换后显示为空，符合预期。
+- 中段（收到的公会卡）里很可能也插着 PSP 多出来的部分字节，具体位置还没找到（需要样本，见 §5）。
+
+---
+
+## 4. 字段映射汇总
+
+| 内容 | PSP | iOS | 转换 |
+|---|---|---|---|
+| 设置块 | 0x00–0x24 | 0x00–0x24（内容不同） | 换成目标平台默认值或模板 |
+| 角色名、外观、装备箱、道具箱、随身道具、游戏时间、解锁位图 | 槽 +0x0–约 0x8000 | 同偏移 | 原样复制 |
+| 收到的公会卡（推断） | 槽 +0x8000–? | 槽 +0x8000–0x649A0 | 原样复制，**未验证** |
+| 自己的公会卡、金钱、记录、标志表、计数器 | 槽 +0x67224–0x6A92C | 槽 +0x649A0–0x6803C | 按 3.3 逐段搬移，怪物记录重新打包 |
+| 全局区 | 0x142300– | 不用 | 保留 |
+| 元数据 | 0x16A0DC | 0x16A0DC | 照搬 |
+| 任务完成数（8 个 u16：村长下位、集会所下位、集会所上位、财富、训练所、村长上位、集会所 G 级、未用） | 槽 +0x672D8 | 槽 +0x64A54 | 按 3.3 搬移（与游戏公会卡逐项一致，已验证） |
+| 任务履历 | 槽 +0x678F0 | 槽 +0x65068 | 按 3.3 搬移 |
+| HR、村/集会所星级、各任务完成标志 | 未定位 | 未定位 | 原样复制（不论在前半段还是后半段，都已按对应关系处理） |
+
+---
+
+## 5. 需要用户提供的样本
+
+差分分析最可靠。每一项都需要“只做一件事”前后各存一次档，前后两份都要：
+
+**iOS（在 UFtouchHLE 里操作，存档在手机上，我可以直接拉取）**
+1. ~~买或卖一个道具~~：已完成，金钱已定位。
+2. ~~完成一个任务~~：已用训练所任务完成，定位了任务完成数、任务履历和疑似完成标志。还可以补做一个村任务和一个集会所任务（用固定武器），来确认另外 7 个任务完成数各对应哪个类别，以及武器使用次数的位置。
+3. 获得一枚勋章（如果方便），用来确认勋章位图。
+4. 在公会卡上改一下自我介绍（如果游戏允许），用来定位公会卡文字字段。
+
+**PSP**
+5. 一份打过联机、收过公会卡的 MHP2G 日版存档（整个 `ULJM05500` 目录），用来验证“收到的公会卡”区域是否对齐。
+6. 一份带完整公会卡统计的 PSP 存档。这份可以和上一份是同一份，再配上它在游戏里公会卡的截图，用来翻译公会卡字段。
+7. 如果需要支持美/欧版：一份 MHFU（ULUS-10391 或 ULES-01213）存档目录，用来确认 key、字节表和布局。
