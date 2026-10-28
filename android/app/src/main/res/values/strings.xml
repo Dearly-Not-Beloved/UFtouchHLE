@@ -1,0 +1,186 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, You can obtain one at https://mozilla.org/MPL/2.0/. -->
+
+<!-- The Android launcher's text. English is the fallback for languages that
+   - have no translation. app_name is defined by app/build.gradle.kts. -->
+<resources>
+    <!-- Main screen -->
+    <string name="launcher_hint">Tap an icon to start a game · Long-press to manage it</string>
+    <string name="import_games">Import games</string>
+    <string name="settings">Settings</string>
+    <string name="last_run_crashed">The game crashed last time. Tap here to see the log.</string>
+    <string name="loading_games">Loading games…</string>
+    <string name="no_games">No games yet\n\nTap “Import games” and choose an .ipa file.</string>
+    <string name="importing">Importing…</string>
+    <string name="list_separator">", "</string>
+
+    <!-- Common buttons -->
+    <string name="cancel">Cancel</string>
+    <string name="close">Close</string>
+    <string name="done">Done</string>
+    <string name="share">Share</string>
+    <string name="delete">Delete</string>
+    <string name="clear">Clear</string>
+    <string name="no_share_app">No app can share this.</string>
+    <string name="no_file_picker">Couldn’t open the system’s file picker.</string>
+
+    <!-- Game menu (long press) -->
+    <string name="menu_import_save">Import saves</string>
+    <string name="menu_export_save">Export saves</string>
+    <string name="menu_delete_game">Delete game</string>
+    <string name="menu_device_profile">Device: %1$s</string>
+    <string name="menu_performance_tests">Performance comparison tests</string>
+    <string name="menu_audio_tests">Sound comparison tests</string>
+    <string name="menu_p2g_layout">Screen and button layout</string>
+    <string name="unknown_game_saves">This game can’t be identified, so its saves can’t be handled.</string>
+
+    <string name="p2g_layout_title">P2G screen and button layout</string>
+    <string name="p2g_standard">Standard view</string>
+    <string name="p2g_wide">Wider view · buttons keep the central 16:9 layout</string>
+
+    <!-- Vice City test modes -->
+    <string name="perf_title">Vice City performance comparison</string>
+    <string name="perf_description">Each option starts the game. Play for at least 30 seconds from the same save and place, then quit the game and try the next one.\nResults are added up and saved every 5 seconds; restarting the game doesn’t overwrite them. All tests use the iPhone 4S, 1× rendering and filters of the same smoothness.\nStarting the game normally doesn’t run a test.</string>
+    <string name="perf_choice_a">A · HD (960×640)</string>
+    <string name="perf_choice_b">B · Low resolution (480×320)</string>
+    <string name="perf_choice_c">C · HD + less logging</string>
+    <string name="perf_choice_d">D · Low resolution + less logging</string>
+    <string name="perf_view_reports">View/share all test reports</string>
+    <string name="perf_clear_reports">Clear test reports</string>
+    <string name="perf_clear_title">Clear the performance test reports?</string>
+    <string name="perf_clear_message">Only the test results are removed. Games and saves are kept.</string>
+    <string name="reports_cleared">Test reports cleared.</string>
+    <string name="clear_failed">Couldn’t clear them.</string>
+
+    <string name="audio_title">Vice City sound comparison</string>
+    <string name="audio_description">Each option starts the game. Pick up the same kind of item in the same place and compare the pop.\nSmoothing is experimental and may soften the start of short sounds. Music streams are left as they are.\nAs soon as you hear a noise, tap “%1$s” at the top of the screen, keep playing for a few seconds, then quit and share the report.\nA mark saves the state of nearby sound sources and a little recent sound data. It doesn’t record the microphone or turn on performance timing. Starting the game normally restores the original sound.</string>
+    <string name="audio_original">Original sound (for reference)</string>
+    <string name="audio_smooth_edges">Smooth the start and end of short sounds</string>
+    <string name="audio_lower_volume">Halve the volume of short sounds</string>
+    <string name="audio_view_report">View/share test report</string>
+    <string name="no_test_results">No test results yet. Choose a test setting to start the game first.</string>
+    <string name="test_report_title">Test report (last 64 KB)</string>
+    <string name="share_test_report">Share test report</string>
+
+    <!-- In the game (MainActivity) -->
+    <string name="mark_noise">Mark noise</string>
+    <string name="noise_marked">Marked. Keep playing for a few seconds before quitting and sharing the report.</string>
+    <string name="back_again_to_exit">Press back again to quit the game and return to the launcher</string>
+
+    <!-- Deleting, logs, copyright -->
+    <string name="delete_title">Delete “%1$s”?</string>
+    <string name="delete_message">The game’s files are deleted. Its saves are kept.</string>
+    <string name="deleted">Deleted.</string>
+    <string name="delete_failed">Couldn’t delete it.</string>
+    <string name="log_title">Log (%1$s)</string>
+    <string name="share_log">Share log</string>
+    <string name="copyright">Copyright</string>
+
+    <!-- Settings -->
+    <string name="device_profile_title">Emulated device</string>
+    <string name="device_profile_global">Global: %1$s</string>
+    <string name="device_profile_this_game">This game: %1$s</string>
+    <string name="device_profile_use_global">Use the global setting (%1$s)</string>
+    <string name="device_profile_hint">Automatic picks by screen shape. Games that don’t support that screen use a compatible size.</string>
+    <string-array name="device_profile_labels">
+        <item>Automatic</item>
+        <item>iPhone 3GS (480×320)</item>
+        <item>iPhone 4 (960×640)</item>
+        <item>iPhone 4S (960×640)</item>
+        <item>iPhone 5 (1136×640)</item>
+        <item>iPhone 5s (1136×640)</item>
+        <item>iPhone 6 (1334×750)</item>
+        <item>iPhone 6 Plus (2208×1242)</item>
+        <item>iPad 2 (1024×768)</item>
+        <item>iPad Retina (2048×1536)</item>
+    </string-array>
+    <string name="option_filter">Filter</string>
+    <string-array name="option_filter_choices">
+        <item>Smooth</item>
+        <item>Sharp</item>
+        <item>Pixel</item>
+        <item>HD</item>
+    </string-array>
+    <string name="option_aspect">Aspect ratio</string>
+    <string-array name="option_aspect_choices">
+        <item>Original</item>
+        <item>Stretch</item>
+        <item>Fill</item>
+        <item>Integer</item>
+    </string-array>
+    <string name="option_orientation">Orientation</string>
+    <string-array name="option_orientation_choices">
+        <item>Default</item>
+        <item>Landscape ←</item>
+        <item>Landscape →</item>
+        <item>Upside down</item>
+    </string-array>
+    <string name="option_scale">Upscaled rendering (experimental)</string>
+    <string-array name="option_scale_choices">
+        <item>Default</item>
+        <item>Off</item>
+        <item>2×</item>
+        <item>3×</item>
+        <item>4×</item>
+    </string-array>
+    <string name="option_keep_screen_on">Keep the screen on while playing</string>
+    <string name="option_tilt_controls">Use the stick for tilt controls</string>
+    <string name="option_network">Allow games to use the network</string>
+    <string name="option_check_updates">Check for updates automatically</string>
+    <string name="language">Language: %1$s</string>
+    <string name="language_title">Language</string>
+    <string name="language_system">System default</string>
+
+    <!-- Importing games -->
+    <plurals name="imported_games">
+        <item quantity="one">Imported %1$d game.</item>
+        <item quantity="other">Imported %1$d games.</item>
+    </plurals>
+    <string name="skipped_not_ipa">Skipped, not .ipa files: %1$s</string>
+    <string name="import_failed">Couldn’t import: %1$s</string>
+
+    <!-- Saves -->
+    <string name="no_saves_yet">“%1$s” has no saves yet.</string>
+    <string name="export_save_failed">Couldn’t export the saves: %1$s</string>
+    <plurals name="exported_saves">
+        <item quantity="one">Exported the saves of “%1$s” (%2$d file).</item>
+        <item quantity="other">Exported the saves of “%1$s” (%2$d files).</item>
+    </plurals>
+    <plurals name="unreadable_files_skipped">
+        <item quantity="one">%1$d file couldn’t be read and was skipped.</item>
+        <item quantity="other">%1$d files couldn’t be read and were skipped.</item>
+    </plurals>
+    <string name="saved_in_folder">Saved in the touchHLE folder: %1$s</string>
+    <string name="import_save_title">Import saves for “%1$s”?</string>
+    <string name="import_save_message">Choose an exported save zip. The current saves are first backed up to %1$s in the touchHLE folder, then replaced.\n\nQuit this game before importing.</string>
+    <string name="choose_file">Choose file</string>
+    <string name="zip_has_no_saves">This zip has no saves in it.</string>
+    <string name="zip_unreadable">Couldn’t read this file. Is it a save zip?</string>
+    <string name="save_mismatch_title">The save doesn’t match the game</string>
+    <string name="save_mismatch_message">This save is from another game (%1$s), not “%2$s” (%3$s). Import it anyway?</string>
+    <string name="import_anyway">Import anyway</string>
+    <string name="step_move_old_saves">moving the old saves</string>
+    <string name="step_write_new_saves">writing the new saves</string>
+    <plurals name="imported_saves">
+        <item quantity="one">Imported the saves of “%1$s” (%2$d file).</item>
+        <item quantity="other">Imported the saves of “%1$s” (%2$d files).</item>
+    </plurals>
+    <string name="import_save_failed">Couldn’t import the saves (while %1$s): %2$s\nThe old saves are in %3$s in the touchHLE folder.</string>
+    <string name="cant_move_old_save">Couldn’t move the old save %1$s</string>
+
+    <!-- Updates -->
+    <string name="update_banner">Version %1$s is available. Tap here to update.</string>
+    <string name="update_title">New version %1$s</string>
+    <string name="download_apk">Download</string>
+    <string name="later">Later</string>
+    <string name="ignore_version">Skip this version</string>
+    <string name="no_browser">No browser can open the download link.</string>
+
+    <!-- Files app, background notification -->
+    <string name="file_manager_failed">Couldn’t open a file manager. In the system’s Files app, open “%1$s” from the sidebar.</string>
+    <string name="keep_alive_channel">Keep the game in the background</string>
+    <string name="keep_alive_channel_description">Makes Android less likely to close a running game while it’s in the background, so progress isn’t lost.</string>
+    <string name="keep_alive_running">Running. In the background, the game is paused and keeps its progress.</string>
+</resources>

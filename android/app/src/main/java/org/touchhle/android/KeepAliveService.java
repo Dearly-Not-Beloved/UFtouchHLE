@@ -10,6 +10,7 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.content.Context;
 import android.content.Intent;
 import android.os.Build;
 import android.os.IBinder;
@@ -36,6 +37,11 @@ public class KeepAliveService extends Service {
     }
 
     @Override
+    protected void attachBaseContext(Context base) {
+        super.attachBaseContext(Languages.wrap(base));
+    }
+
+    @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         try {
             startForeground(NOTIFICATION_ID, buildNotification());
@@ -52,8 +58,9 @@ public class KeepAliveService extends Service {
         Notification.Builder builder;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel channel = new NotificationChannel(
-                CHANNEL_ID, "后台保留游戏", NotificationManager.IMPORTANCE_LOW);
-            channel.setDescription("切到后台时，让系统不容易关闭正在运行的游戏，以免丢失进度。");
+                CHANNEL_ID, getString(R.string.keep_alive_channel),
+                NotificationManager.IMPORTANCE_LOW);
+            channel.setDescription(getString(R.string.keep_alive_channel_description));
             channel.setShowBadge(false);
             NotificationManager manager =
                 (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
@@ -77,7 +84,7 @@ public class KeepAliveService extends Service {
         return builder
             .setSmallIcon(getApplicationInfo().icon)
             .setContentTitle(getString(R.string.app_name))
-            .setContentText("运行中。切到后台时游戏会暂停并保留进度。")
+            .setContentText(getString(R.string.keep_alive_running))
             .setContentIntent(pendingIntent)
             .setOngoing(true)
             .build();

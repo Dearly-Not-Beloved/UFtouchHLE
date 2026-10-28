@@ -8,6 +8,7 @@
  */
 package org.touchhle.android;
 
+import android.content.Context;
 import android.content.Intent;
 import android.os.Build;
 import android.os.Bundle;
@@ -48,6 +49,11 @@ public class MainActivity extends SDLActivity {
     }
 
     @Override
+    protected void attachBaseContext(Context base) {
+        super.attachBaseContext(Languages.wrap(base));
+    }
+
+    @Override
     protected void onCreate(Bundle savedInstanceState) {
         // Use the whole screen, including the area beside a display cutout
         // (e.g. a front camera). Otherwise Android leaves that area empty in
@@ -83,7 +89,7 @@ public class MainActivity extends SDLActivity {
         }
         final float density = getResources().getDisplayMetrics().density;
         TextView marker = new TextView(this);
-        marker.setText("记录噪音");
+        marker.setText(R.string.mark_noise);
         marker.setTextColor(Color.WHITE);
         marker.setTextSize(12);
         marker.setTypeface(Typeface.DEFAULT_BOLD);
@@ -98,7 +104,7 @@ public class MainActivity extends SDLActivity {
         marker.setBackground(background);
         marker.setOnClickListener(v -> {
             nativeMarkAudioNoise();
-            Toast.makeText(this, "已标记，请继续游戏几秒后再退出分享报告。", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, R.string.noise_marked, Toast.LENGTH_LONG).show();
         });
         RelativeLayout.LayoutParams params = new RelativeLayout.LayoutParams(-2, -2);
         params.addRule(RelativeLayout.ALIGN_PARENT_TOP);
@@ -250,7 +256,7 @@ public class MainActivity extends SDLActivity {
             finish();
         } else {
             lastBackPressTime = now;
-            Toast.makeText(this, "再返回一次退出游戏，回到主页面", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, R.string.back_again_to_exit, Toast.LENGTH_SHORT).show();
         }
     }
 

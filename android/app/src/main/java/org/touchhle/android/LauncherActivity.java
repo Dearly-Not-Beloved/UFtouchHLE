@@ -32,7 +32,6 @@ import android.graphics.drawable.RippleDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
-import android.os.LocaleList;
 import android.provider.OpenableColumns;
 import android.text.TextUtils;
 import android.util.TypedValue;
@@ -127,14 +126,6 @@ public class LauncherActivity extends Activity {
         "auto", "iPhone2,1", "iPhone3,1", "iPhone4,1", "iPhone5,1", "iPhone6,1",
         "iPhone7,2", "iPhone7,1", "iPad2,1", "iPad3,1",
     };
-    private static final String[] DEVICE_PROFILE_LABELS = {
-        "自动", "iPhone 3GS（480×320）", "iPhone 4（960×640）", "iPhone 4S（960×640）",
-        "iPhone 5（1136×640）", "iPhone 5s（1136×640）", "iPhone 6（1334×750）",
-        "iPhone 6 Plus（2208×1242）", "iPad 2（1024×768）",
-        "iPad Retina（2048×1536）",
-    };
-    private static final String DEVICE_PROFILE_HINT =
-        "自动按屏幕比例选择；不支持该屏幕的游戏会使用兼容尺寸";
 
     private static final int TEXT = Color.WHITE;
     private static final int TEXT_DIM = 0xB3FFFFFF;
@@ -175,6 +166,11 @@ public class LauncherActivity extends Activity {
     private View importBigButton;
 
     // ---- Lifecycle ----
+
+    @Override
+    protected void attachBaseContext(android.content.Context base) {
+        super.attachBaseContext(Languages.wrap(base));
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -266,22 +262,6 @@ public class LauncherActivity extends Activity {
         return new File(getBaseDir(), APPS_DIR);
     }
 
-    private static String languages() {
-        StringBuilder result = new StringBuilder();
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            LocaleList locales = LocaleList.getDefault();
-            for (int i = 0; i < locales.size(); i++) {
-                if (result.length() > 0) {
-                    result.append(',');
-                }
-                result.append(locales.get(i).getLanguage());
-            }
-        } else {
-            result.append(Locale.getDefault().getLanguage());
-        }
-        return result.toString();
-    }
-
     private void rescan() {
         loading = true;
         updateStatus();
@@ -294,7 +274,7 @@ public class LauncherActivity extends Activity {
                 }
             }
             String result = new String(
-                nativeScanApps(getAppsDir().getPath(), iconsDir.getPath(), languages()),
+                nativeScanApps(getAppsDir().getPath(), iconsDir.getPath(), Languages.preferred(this)),
                 StandardCharsets.UTF_8);
             final List<App> found = new ArrayList<>();
             for (String line : result.split("\n")) {
@@ -491,7 +471,7 @@ public class LauncherActivity extends Activity {
         titles.setOrientation(LinearLayout.VERTICAL);
         titles.setPadding(dp(12), 0, dp(12), 0);
         titles.addView(makeText(BuildConfig.APP_NAME, 22, TEXT, true));
-        titles.addView(makeText("点击图标启动游戏 · 长按可管理", 13, TEXT_DIM, false));
+        titles.addView(makeText(getString(R.string.launcher_hint), 13, TEXT_DIM, false));
         header.addView(titles, new LinearLayout.LayoutParams(0, -2, 1));
         content.addView(header, new LinearLayout.LayoutParams(-1, -2));
 
@@ -499,7 +479,7 @@ public class LauncherActivity extends Activity {
         actions.setOrientation(LinearLayout.HORIZONTAL);
         actions.setGravity(Gravity.CENTER_VERTICAL);
         int buttonHeight = isLandscape() ? dp(44) : dp(46);
-        actions.addView(makeButton("导入游戏", true, v -> startImport()), isLandscape()
+        actions.addView(makeButton(getString(R.string.import_games), true, v -> startImport()), isLandscape()
             ? new LinearLayout.LayoutParams(-2, buttonHeight)
             : new LinearLayout.LayoutParams(0, buttonHeight, 1));
         ImageView settings = new ImageView(this);
@@ -508,7 +488,7 @@ public class LauncherActivity extends Activity {
         int iconPadding = (buttonHeight - dp(24)) / 2;
         settings.setPadding(iconPadding, iconPadding, iconPadding, iconPadding);
         settings.setBackground(buttonBackground(0x2EFFFFFF, buttonHeight / 2f));
-        settings.setContentDescription("设置");
+        settings.setContentDescription(getString(R.string.settings));
         settings.setOnClickListener(v -> showQuickOptions());
         LinearLayout.LayoutParams settingsParams =
             new LinearLayout.LayoutParams(buttonHeight, buttonHeight);
@@ -520,7 +500,7 @@ public class LauncherActivity extends Activity {
 
         if (lastRunCrashed()) {
             TextView banner = makeText(
-                "上次游戏出错退出了，点这里查看日志", 14, 0xFF3A2A00, true);
+                getString(R.string.last_run_crashed), 14, 0xFF3A2A00, true);
             banner.setGravity(Gravity.CENTER);
             banner.setPadding(dp(14), dp(10), dp(14), dp(10));
             banner.setBackground(buttonBackground(WARNING, dp(12)));
@@ -568,7 +548,7 @@ public class LauncherActivity extends Activity {
         statusText.setGravity(Gravity.CENTER);
         statusText.setLineSpacing(0, 1.2f);
         empty.addView(statusText);
-        importBigButton = makeButton("导入游戏", true, v -> startImport());
+        importBigButton = makeButton(getString(R.string.import_games), true, v -> startImport());
         LinearLayout.LayoutParams bigParams = new LinearLayout.LayoutParams(dp(200), dp(50));
         bigParams.topMargin = dp(20);
         empty.addView(importBigButton, bigParams);
@@ -595,10 +575,10 @@ public class LauncherActivity extends Activity {
         boolean showMessage = loading || apps.isEmpty();
         ((View) statusText.getParent()).setVisibility(showMessage ? View.VISIBLE : View.GONE);
         if (loading) {
-            statusText.setText("正在读取游戏列表…");
+            statusText.setText(R.string.loading_games);
             importBigButton.setVisibility(View.GONE);
         } else {
-            statusText.setText("还没有游戏\n\n点击「导入游戏」，选择 .ipa 文件即可。");
+            statusText.setText(R.string.no_games);
             importBigButton.setVisibility(View.VISIBLE);
         }
     }
@@ -695,14 +675,20 @@ public class LauncherActivity extends Activity {
     }
 
     private void showAppMenu(final App app) {
-        String[] items = "com.rockstargames.gta3vc".equals(app.bundleId)
-            ? new String[]{"导入存档", "导出存档", "删除游戏", "模拟机型：" + appDeviceProfileLabel(app), "性能对比测试", "声音对比测试"}
-            : "jp.co.capcom.mhp2gjp".equals(app.bundleId)
-                ? new String[]{"导入存档", "导出存档", "删除游戏", "模拟机型：" + appDeviceProfileLabel(app), "画面与按键布局"}
-                : new String[]{"导入存档", "导出存档", "删除游戏", "模拟机型：" + appDeviceProfileLabel(app)};
+        List<String> items = new ArrayList<>();
+        items.add(getString(R.string.menu_import_save));
+        items.add(getString(R.string.menu_export_save));
+        items.add(getString(R.string.menu_delete_game));
+        items.add(getString(R.string.menu_device_profile, appDeviceProfileLabel(app)));
+        if ("com.rockstargames.gta3vc".equals(app.bundleId)) {
+            items.add(getString(R.string.menu_performance_tests));
+            items.add(getString(R.string.menu_audio_tests));
+        } else if ("jp.co.capcom.mhp2gjp".equals(app.bundleId)) {
+            items.add(getString(R.string.menu_p2g_layout));
+        }
         new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
             .setTitle(app.name)
-            .setItems(items, (dialog, which) -> {
+            .setItems(items.toArray(new String[0]), (dialog, which) -> {
                 if (which == 5) {
                     showAudioTests(app);
                 } else if (which == 4) {
@@ -716,7 +702,7 @@ public class LauncherActivity extends Activity {
                 } else if (which == 2) {
                     confirmDelete(app);
                 } else if (app.bundleId == null || app.bundleId.isEmpty()) {
-                    Toast.makeText(this, "无法识别这个游戏，不能处理存档。", Toast.LENGTH_LONG).show();
+                    Toast.makeText(this, R.string.unknown_game_saves, Toast.LENGTH_LONG).show();
                 } else if (which == 0) {
                     confirmImportSave(app);
                 } else {
@@ -729,14 +715,15 @@ public class LauncherActivity extends Activity {
     private void showP2GViewOptions() {
         SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
-            .setTitle("P2G 画面与按键布局")
-            .setSingleChoiceItems(new String[]{"标准画面", "扩展视野 · 按键保留中央 16:9 布局"},
+            .setTitle(R.string.p2g_layout_title)
+            .setSingleChoiceItems(new String[]{getString(R.string.p2g_standard),
+                    getString(R.string.p2g_wide)},
                 prefs.getBoolean(PREF_P2G_WIDE, false) ? 1 : 0,
                 (dialog, which) -> {
                     prefs.edit().putBoolean(PREF_P2G_WIDE, which == 1).apply();
                     dialog.dismiss();
                 })
-            .setNegativeButton("取消", null)
+            .setNegativeButton(R.string.cancel, null)
             .show();
     }
 
@@ -744,15 +731,14 @@ public class LauncherActivity extends Activity {
 
     private void showPerformanceTests(final App app) {
         final String[] modes = {"reference", "low-resolution", "quiet-log", "low-resolution-quiet-log"};
-        String[] choices = {"A · 高清（960×640）", "B · 低分辨率（480×320）",
-            "C · 高清＋减少日志", "D · 低分辨率＋减少日志", "查看／分享全部测试报告", "清空测试报告"};
+        String[] choices = {getString(R.string.perf_choice_a), getString(R.string.perf_choice_b),
+            getString(R.string.perf_choice_c), getString(R.string.perf_choice_d),
+            getString(R.string.perf_view_reports), getString(R.string.perf_clear_reports)};
         LinearLayout title = new LinearLayout(this);
         title.setOrientation(LinearLayout.VERTICAL);
         title.setPadding(dp(24), dp(20), dp(24), dp(10));
-        title.addView(makeText("罪恶都市性能对比", 20, TEXT, true));
-        title.addView(makeText("每组选项都会启动游戏。请在同一存档、同一地点游玩至少 30 秒，再退出游戏切换下一组。"
-            + "\n结果每 5 秒累计保存，重启游戏不会覆盖。测试统一使用 iPhone 4S、1×渲染和平滑度相同的滤镜。"
-            + "\n普通方式启动游戏不启用测试。", 13, TEXT_DIM, false));
+        title.addView(makeText(getString(R.string.perf_title), 20, TEXT, true));
+        title.addView(makeText(getString(R.string.perf_description), 13, TEXT_DIM, false));
         new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
             .setCustomTitle(title)
             .setItems(choices, (dialog, which) -> {
@@ -762,30 +748,30 @@ public class LauncherActivity extends Activity {
                     showPerformanceReport();
                 } else {
                     new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
-                        .setTitle("清空性能测试报告？")
-                        .setMessage("只清除测试结果，游戏和存档保留。")
-                        .setPositiveButton("清空", (d, w) -> {
+                        .setTitle(R.string.perf_clear_title)
+                        .setMessage(R.string.perf_clear_message)
+                        .setPositiveButton(R.string.clear, (d, w) -> {
                             File report = new File(getBaseDir(), PERFORMANCE_REPORT);
                             boolean cleared = !report.exists() || report.delete();
-                            Toast.makeText(this, cleared ? "测试报告已清空。" : "清空失败。", Toast.LENGTH_SHORT).show();
+                            Toast.makeText(this, cleared ? R.string.reports_cleared : R.string.clear_failed,
+                                Toast.LENGTH_SHORT).show();
                         })
-                        .setNegativeButton("取消", null).show();
+                        .setNegativeButton(R.string.cancel, null).show();
                 }
             })
-            .setNegativeButton("关闭", null).show();
+            .setNegativeButton(R.string.close, null).show();
     }
 
     private void showAudioTests(final App app) {
         final String[] modes = {"original", "smooth-edges", "lower-volume"};
-        String[] choices = {"原始声音（作对照）", "短音效起止平滑", "短音效音量减半", "查看／分享测试报告"};
+        String[] choices = {getString(R.string.audio_original), getString(R.string.audio_smooth_edges),
+            getString(R.string.audio_lower_volume), getString(R.string.audio_view_report)};
         LinearLayout title = new LinearLayout(this);
         title.setOrientation(LinearLayout.VERTICAL);
         title.setPadding(dp(24), dp(20), dp(24), dp(10));
-        title.addView(makeText("罪恶都市声音对比", 20, TEXT, true));
-        title.addView(makeText("每次选择都会启动游戏。请在同一位置捡取同一种物品，比较那一下爆音。"
-            + "\n起止平滑是实验性处理，可能减弱短音效的起音；音乐流保持原样。"
-            + "\n听到噪音后，马上点屏幕上方的「记录噪音」，继续玩几秒再退出并分享报告。"
-            + "\n标记会保存附近音源状态和最近少量声音数据，不录麦克风，不开启性能计时。普通启动恢复原声音。",
+        title.addView(makeText(getString(R.string.audio_title), 20, TEXT, true));
+        title.addView(makeText(
+            getString(R.string.audio_description, getString(R.string.mark_noise)),
             13, TEXT_DIM, false));
         new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
             .setCustomTitle(title)
@@ -796,13 +782,13 @@ public class LauncherActivity extends Activity {
                     showPerformanceReport();
                 }
             })
-            .setNegativeButton("关闭", null).show();
+            .setNegativeButton(R.string.close, null).show();
     }
 
     private void showPerformanceReport() {
         byte[] bytes = readFile(new File(getBaseDir(), PERFORMANCE_REPORT), 64 * 1024);
         if (bytes == null || bytes.length == 0) {
-            Toast.makeText(this, "还没有测试结果。请先选择一组设置进入游戏测试。", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, R.string.no_test_results, Toast.LENGTH_LONG).show();
             return;
         }
         final String report = "Device: " + android.os.Build.MANUFACTURER + " " + android.os.Build.MODEL
@@ -810,31 +796,31 @@ public class LauncherActivity extends Activity {
             + "\nCPU/GL/present values are host wall time, not GPU execution time. "
             + "Readback is part of present time. Instrumentation adds overhead.\n\n"
             + new String(bytes, StandardCharsets.UTF_8);
-        showTextDialog("测试报告（最近 64 KB）", report, "分享", () -> {
+        showTextDialog(getString(R.string.test_report_title), report, getString(R.string.share), () -> {
             Intent intent = new Intent(Intent.ACTION_SEND);
             intent.setType("text/plain");
             intent.putExtra(Intent.EXTRA_TEXT, report);
             try {
-                startActivity(Intent.createChooser(intent, "分享测试报告"));
+                startActivity(Intent.createChooser(intent, getString(R.string.share_test_report)));
             } catch (ActivityNotFoundException e) {
-                Toast.makeText(this, "没有可以分享的应用。", Toast.LENGTH_LONG).show();
+                Toast.makeText(this, R.string.no_share_app, Toast.LENGTH_LONG).show();
             }
         });
     }
 
     private void confirmDelete(final App app) {
         new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
-            .setTitle("删除「" + app.name + "」？")
-            .setMessage("会删除游戏文件，存档会保留。")
-            .setPositiveButton("删除", (dialog, which) -> {
+            .setTitle(getString(R.string.delete_title, app.name))
+            .setMessage(R.string.delete_message)
+            .setPositiveButton(R.string.delete, (dialog, which) -> {
                 if (deleteRecursively(new File(app.path))) {
-                    Toast.makeText(this, "已删除。", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(this, R.string.deleted, Toast.LENGTH_SHORT).show();
                 } else {
-                    Toast.makeText(this, "删除失败。", Toast.LENGTH_LONG).show();
+                    Toast.makeText(this, R.string.delete_failed, Toast.LENGTH_LONG).show();
                 }
                 rescan();
             })
-            .setNegativeButton("取消", null)
+            .setNegativeButton(R.string.cancel, null)
             .show();
     }
 
@@ -851,20 +837,20 @@ public class LauncherActivity extends Activity {
     private void showLog() {
         byte[] tail = readFile(new File(getBaseDir(), LOG_FILE), 48 * 1024);
         final String log = tail != null ? new String(tail, StandardCharsets.UTF_8) : "";
-        showTextDialog("运行日志（" + LOG_FILE + "）", log, "分享", () -> {
+        showTextDialog(getString(R.string.log_title, LOG_FILE), log, getString(R.string.share), () -> {
             Intent intent = new Intent(Intent.ACTION_SEND);
             intent.setType("text/plain");
             intent.putExtra(Intent.EXTRA_TEXT, log);
             try {
-                startActivity(Intent.createChooser(intent, "分享日志"));
+                startActivity(Intent.createChooser(intent, getString(R.string.share_log)));
             } catch (ActivityNotFoundException e) {
-                Toast.makeText(this, "没有可以分享的应用。", Toast.LENGTH_LONG).show();
+                Toast.makeText(this, R.string.no_share_app, Toast.LENGTH_LONG).show();
             }
         });
     }
 
     private void showCopyright() {
-        showTextDialog("版权信息",
+        showTextDialog(getString(R.string.copyright),
             new String(nativeCopyrightText(getAssets()), StandardCharsets.UTF_8), null, null);
     }
 
@@ -885,7 +871,7 @@ public class LauncherActivity extends Activity {
             params.rightMargin = dp(10);
             bar.addView(makeButton(extraButton, false, v -> extra.run()), params);
         }
-        bar.addView(makeButton("关闭", true, v -> dialog.dismiss()),
+        bar.addView(makeButton(getString(R.string.close), true, v -> dialog.dismiss()),
             new LinearLayout.LayoutParams(-2, dp(40)));
         layout.addView(bar);
 
@@ -941,15 +927,19 @@ public class LauncherActivity extends Activity {
         return readDeviceProfile(appDeviceProfileKey(app));
     }
 
+    private String[] deviceProfileLabels() {
+        return getResources().getStringArray(R.array.device_profile_labels);
+    }
+
     private String deviceProfileLabel(String profile) {
         int index = deviceProfileIndex(profile);
-        return DEVICE_PROFILE_LABELS[index >= 0 ? index : 0];
+        return deviceProfileLabels()[index >= 0 ? index : 0];
     }
 
     private String appDeviceProfileLabel(App app) {
         String profile = appDeviceProfile(app);
         return profile != null ? deviceProfileLabel(profile)
-            : "使用全局设置（" + deviceProfileLabel(globalDeviceProfile()) + "）";
+            : getString(R.string.device_profile_use_global, deviceProfileLabel(globalDeviceProfile()));
     }
 
     /// Single-choice lists scroll on smaller phones; no cramped row of models.
@@ -959,20 +949,22 @@ public class LauncherActivity extends Activity {
         int offset = app != null ? 1 : 0;
         String[] choices = new String[DEVICE_PROFILES.length + offset];
         if (app != null) {
-            choices[0] = "使用全局设置（" + deviceProfileLabel(global) + "）";
+            choices[0] = getString(R.string.device_profile_use_global, deviceProfileLabel(global));
         }
-        System.arraycopy(DEVICE_PROFILE_LABELS, 0, choices, offset, DEVICE_PROFILE_LABELS.length);
+        System.arraycopy(deviceProfileLabels(), 0, choices, offset, DEVICE_PROFILES.length);
 
         LinearLayout title = new LinearLayout(this);
         title.setOrientation(LinearLayout.VERTICAL);
         title.setPadding(dp(24), dp(20), dp(24), dp(8));
-        title.addView(makeText("模拟机型", 20, TEXT, true));
-        TextView current = makeText("全局：" + deviceProfileLabel(global)
-            + (app != null ? "\n此游戏：" + appDeviceProfileLabel(app) : ""),
+        title.addView(makeText(getString(R.string.device_profile_title), 20, TEXT, true));
+        TextView current = makeText(getString(R.string.device_profile_global, deviceProfileLabel(global))
+            + (app != null
+                ? "\n" + getString(R.string.device_profile_this_game, appDeviceProfileLabel(app))
+                : ""),
             14, TEXT_DIM, false);
         current.setPadding(0, dp(10), 0, dp(6));
         title.addView(current);
-        title.addView(makeText(DEVICE_PROFILE_HINT, 13, TEXT_DIM, false));
+        title.addView(makeText(getString(R.string.device_profile_hint), 13, TEXT_DIM, false));
 
         new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
             .setCustomTitle(title)
@@ -991,7 +983,7 @@ public class LauncherActivity extends Activity {
                     }
                     dialog.dismiss();
                 })
-            .setNegativeButton("取消", null)
+            .setNegativeButton(R.string.cancel, null)
             .show();
     }
 
@@ -1002,36 +994,50 @@ public class LauncherActivity extends Activity {
         layout.setPadding(pad, dp(8), pad, dp(8));
 
         final TextView deviceProfile = makeText(
-            "模拟机型：" + deviceProfileLabel(globalDeviceProfile()), 15, TEXT, true);
+            getString(R.string.menu_device_profile, deviceProfileLabel(globalDeviceProfile())),
+            15, TEXT, true);
         deviceProfile.setPadding(dp(14), dp(12), dp(14), dp(12));
         deviceProfile.setMinHeight(dp(48));
         deviceProfile.setBackground(buttonBackground(0x2EFFFFFF, dp(12)));
         deviceProfile.setOnClickListener(v -> showDeviceProfiles(null,
-            () -> deviceProfile.setText("模拟机型：" + deviceProfileLabel(globalDeviceProfile()))));
+            () -> deviceProfile.setText(getString(R.string.menu_device_profile,
+                deviceProfileLabel(globalDeviceProfile())))));
         layout.addView(deviceProfile, new LinearLayout.LayoutParams(-1, -2));
-        TextView deviceHint = makeText(DEVICE_PROFILE_HINT, 13, TEXT_DIM, false);
+        TextView deviceHint = makeText(getString(R.string.device_profile_hint), 13, TEXT_DIM, false);
         deviceHint.setPadding(0, dp(6), 0, 0);
         layout.addView(deviceHint);
 
-        addSegments(layout, "画面滤镜", new String[]{"平滑", "锐利", "像素", "高清"},
+        addSegments(layout, getString(R.string.option_filter),
+            getResources().getStringArray(R.array.option_filter_choices),
             quickOptions.filter, i -> quickOptions.filter = i);
-        addSegments(layout, "画面比例", new String[]{"原始", "拉伸", "填满", "整数倍"},
+        addSegments(layout, getString(R.string.option_aspect),
+            getResources().getStringArray(R.array.option_aspect_choices),
             quickOptions.aspect, i -> quickOptions.aspect = i);
-        addSegments(layout, "屏幕方向", new String[]{"默认", "横向 ←", "横向 →", "倒置"},
+        addSegments(layout, getString(R.string.option_orientation),
+            getResources().getStringArray(R.array.option_orientation_choices),
             quickOptions.orientation, i -> quickOptions.orientation = i);
-        addSegments(layout, "放大渲染（实验性）", new String[]{"默认", "关", "2×", "3×", "4×"},
+        addSegments(layout, getString(R.string.option_scale),
+            getResources().getStringArray(R.array.option_scale_choices),
             quickOptions.scaleHack, i -> quickOptions.scaleHack = i);
-        addSwitch(layout, "游戏时保持亮屏", quickOptions.keepScreenOn,
+        addSwitch(layout, getString(R.string.option_keep_screen_on), quickOptions.keepScreenOn,
             b -> quickOptions.keepScreenOn = b);
-        addSwitch(layout, "用摇杆模拟重力感应", quickOptions.tiltControls,
+        addSwitch(layout, getString(R.string.option_tilt_controls), quickOptions.tiltControls,
             b -> quickOptions.tiltControls = b);
-        addSwitch(layout, "允许游戏联网", quickOptions.network, b -> quickOptions.network = b);
+        addSwitch(layout, getString(R.string.option_network), quickOptions.network,
+            b -> quickOptions.network = b);
         // A launcher setting, not a touchHLE option, so it's not in the file.
         final SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
-        addSwitch(layout, "自动检查更新", prefs.getBoolean(PREF_CHECK_UPDATES, true),
+        addSwitch(layout, getString(R.string.option_check_updates),
+            prefs.getBoolean(PREF_CHECK_UPDATES, true),
             b -> prefs.edit().putBoolean(PREF_CHECK_UPDATES, b).apply());
 
-        TextView copyright = makeButton("版权信息", false, null);
+        TextView language = makeButton(
+            getString(R.string.language, Languages.name(this, Languages.chosenTag(this))), false, null);
+        LinearLayout.LayoutParams languageParams = new LinearLayout.LayoutParams(-1, dp(44));
+        languageParams.topMargin = dp(16);
+        layout.addView(language, languageParams);
+
+        TextView copyright = makeButton(getString(R.string.copyright), false, null);
         LinearLayout.LayoutParams copyrightParams = new LinearLayout.LayoutParams(-1, dp(44));
         copyrightParams.topMargin = dp(16);
         layout.addView(copyright, copyrightParams);
@@ -1040,13 +1046,39 @@ public class LauncherActivity extends Activity {
         scroll.addView(layout);
         final AlertDialog dialog = new AlertDialog.Builder(
                 this, android.R.style.Theme_Material_Dialog_Alert)
-            .setTitle("设置")
+            .setTitle(R.string.settings)
             .setView(scroll)
-            .setPositiveButton("完成", null)
+            .setPositiveButton(R.string.done, null)
             .setOnDismissListener(d -> quickOptions.save(getBaseDir()))
             .create();
+        language.setOnClickListener(v -> showLanguages(dialog));
         copyright.setOnClickListener(v -> showCopyright());
         dialog.show();
+    }
+
+    /// Changing the language closes the settings and rebuilds the launcher in
+    /// the new language.
+    private void showLanguages(final Dialog settings) {
+        final String current = Languages.chosenTag(this);
+        int selected = 0;
+        for (int i = 0; i < Languages.TAGS.length; i++) {
+            if (Languages.TAGS[i].equals(current)) {
+                selected = i;
+            }
+        }
+        new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+            .setTitle(R.string.language_title)
+            .setSingleChoiceItems(Languages.names(this), selected, (dialog, which) -> {
+                dialog.dismiss();
+                if (Languages.TAGS[which].equals(current)) {
+                    return;
+                }
+                Languages.choose(this, Languages.TAGS[which]);
+                settings.dismiss();
+                recreate();
+            })
+            .setNegativeButton(R.string.cancel, null)
+            .show();
     }
 
     private interface IntSetter {
@@ -1214,7 +1246,7 @@ public class LauncherActivity extends Activity {
                 // Try the next one.
             }
         }
-        Toast.makeText(this, "无法打开系统的文件选择器。", Toast.LENGTH_LONG).show();
+        Toast.makeText(this, R.string.no_file_picker, Toast.LENGTH_LONG).show();
     }
 
     private static Intent pickIntent(String action) {
@@ -1258,7 +1290,7 @@ public class LauncherActivity extends Activity {
 
         loading = true;
         updateStatus();
-        statusText.setText("正在导入…");
+        statusText.setText(R.string.importing);
         // Copying can take a while for big files, so don't block the UI thread.
         new Thread(() -> {
             final String message = importAll(uris);
@@ -1291,13 +1323,16 @@ public class LauncherActivity extends Activity {
             }
         }
 
+        String separator = getString(R.string.list_separator);
         StringBuilder message = new StringBuilder();
-        message.append("已导入 ").append(imported).append(" 个游戏。");
+        message.append(getResources().getQuantityString(R.plurals.imported_games, imported, imported));
         if (!skipped.isEmpty()) {
-            message.append("\n不是 .ipa 文件，已跳过：").append(TextUtils.join("、", skipped));
+            message.append('\n').append(
+                getString(R.string.skipped_not_ipa, TextUtils.join(separator, skipped)));
         }
         if (!failed.isEmpty()) {
-            message.append("\n导入失败：").append(TextUtils.join("、", failed));
+            message.append('\n').append(
+                getString(R.string.import_failed, TextUtils.join(separator, failed)));
         }
         return message.toString();
     }
@@ -1432,7 +1467,7 @@ public class LauncherActivity extends Activity {
 
     private void startExportSave(App app) {
         if (!hasSaves(app.bundleId)) {
-            Toast.makeText(this, "「" + app.name + "」还没有存档。", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, getString(R.string.no_saves_yet, app.name), Toast.LENGTH_LONG).show();
             return;
         }
         saveBundleId = app.bundleId;
@@ -1460,17 +1495,19 @@ public class LauncherActivity extends Activity {
                 }
                 message = exportMessage(name, writeSaveZip(bundleId, out), "");
             } catch (Exception e) {
-                message = "导出存档失败：" + e.getMessage();
+                message = getString(R.string.export_save_failed, e.getMessage());
             }
             final String text = message;
             runOnUiThread(() -> Toast.makeText(this, text, Toast.LENGTH_LONG).show());
         }).start();
     }
 
-    private static String exportMessage(String name, int[] count, String where) {
-        String message = "已导出「" + name + "」的存档（" + count[0] + " 个文件）。" + where;
+    private String exportMessage(String name, int[] count, String where) {
+        String message = getResources().getQuantityString(
+            R.plurals.exported_saves, count[0], name, count[0]) + where;
         if (count[1] > 0) {
-            message += "\n有 " + count[1] + " 个文件没有读取权限，已跳过。";
+            message += "\n" + getResources().getQuantityString(
+                R.plurals.unreadable_files_skipped, count[1], count[1]);
         }
         return message;
     }
@@ -1489,10 +1526,11 @@ public class LauncherActivity extends Activity {
                     count = writeSaveZip(bundleId, out);
                 }
                 message = exportMessage(name, count,
-                    "\n保存在 touchHLE 文件夹：" + SAVE_EXPORTS_DIR + "/" + file.getName());
+                    "\n" + getString(R.string.saved_in_folder,
+                        SAVE_EXPORTS_DIR + "/" + file.getName()));
             } catch (Exception e) {
                 file.delete();
-                message = "导出存档失败：" + e.getMessage();
+                message = getString(R.string.export_save_failed, e.getMessage());
             }
             final String text = message;
             runOnUiThread(() -> Toast.makeText(this, text, Toast.LENGTH_LONG).show());
@@ -1501,10 +1539,9 @@ public class LauncherActivity extends Activity {
 
     private void confirmImportSave(final App app) {
         new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
-            .setTitle("导入「" + app.name + "」的存档？")
-            .setMessage("请选择一个导出的存档 zip。现有存档会先备份到 touchHLE 文件夹的 "
-                + SAVE_BACKUPS_DIR + "，再被替换。\n\n导入前请先退出这个游戏。")
-            .setPositiveButton("选择文件", (dialog, which) -> {
+            .setTitle(getString(R.string.import_save_title, app.name))
+            .setMessage(getString(R.string.import_save_message, SAVE_BACKUPS_DIR))
+            .setPositiveButton(R.string.choose_file, (dialog, which) -> {
                 saveBundleId = app.bundleId;
                 saveAppName = app.name;
                 Intent[] attempts = {new Intent(Intent.ACTION_OPEN_DOCUMENT),
@@ -1519,9 +1556,9 @@ public class LauncherActivity extends Activity {
                         // Try the next one.
                     }
                 }
-                Toast.makeText(this, "无法打开系统的文件选择器。", Toast.LENGTH_LONG).show();
+                Toast.makeText(this, R.string.no_file_picker, Toast.LENGTH_LONG).show();
             })
-            .setNegativeButton("取消", null)
+            .setNegativeButton(R.string.cancel, null)
             .show();
     }
 
@@ -1543,10 +1580,10 @@ public class LauncherActivity extends Activity {
                     zipBundleId = readMarker(new File(root, SAVE_MARKER));
                 }
                 if (!hasFiles(root)) {
-                    error = "这个 zip 里没有存档文件。";
+                    error = getString(R.string.zip_has_no_saves);
                 }
             } catch (Exception e) {
-                error = "无法读取这个文件，它是存档 zip 吗？";
+                error = getString(R.string.zip_unreadable);
             }
             final String failure = error;
             final String fromId = zipBundleId;
@@ -1556,11 +1593,11 @@ public class LauncherActivity extends Activity {
                     Toast.makeText(this, failure, Toast.LENGTH_LONG).show();
                 } else if (fromId != null && !fromId.equals(bundleId)) {
                     new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
-                        .setTitle("存档和游戏不一致")
-                        .setMessage("这个存档来自另一个游戏（" + fromId + "），不是「" + name
-                            + "」（" + bundleId + "）。仍然导入吗？")
-                        .setPositiveButton("仍然导入", (d, w) -> applySave(staging, bundleId, name))
-                        .setNegativeButton("取消", (d, w) -> deleteRecursively(staging))
+                        .setTitle(R.string.save_mismatch_title)
+                        .setMessage(getString(R.string.save_mismatch_message, fromId, name, bundleId))
+                        .setPositiveButton(R.string.import_anyway,
+                            (d, w) -> applySave(staging, bundleId, name))
+                        .setNegativeButton(R.string.cancel, (d, w) -> deleteRecursively(staging))
                         .show();
                 } else {
                     applySave(staging, bundleId, name);
@@ -1573,7 +1610,7 @@ public class LauncherActivity extends Activity {
         new Thread(() -> {
             String message;
             File saveDir = getSaveDir(bundleId);
-            String step = "移走旧存档";
+            String step = getString(R.string.step_move_old_saves);
             try {
                 // The old saves are moved into the backup folder rather than
                 // copied and deleted: saves copied in by hand (e.g. with a file
@@ -1590,13 +1627,14 @@ public class LauncherActivity extends Activity {
                         }
                     }
                 }
-                step = "写入新存档";
+                step = getString(R.string.step_write_new_saves);
                 File root = saveRoot(staging);
                 int count = installSave(root, saveDir);
-                message = "已导入「" + name + "」的存档（" + count + " 个文件）。";
+                message = getResources().getQuantityString(
+                    R.plurals.imported_saves, count, name, count);
             } catch (Exception e) {
-                message = "导入存档失败（" + step + "时）：" + e.getMessage()
-                    + "\n原来的存档在 touchHLE 文件夹的 " + SAVE_BACKUPS_DIR + " 里。";
+                message = getString(R.string.import_save_failed, step, e.getMessage(),
+                    SAVE_BACKUPS_DIR);
             }
             deleteRecursively(staging);
             final String text = message;
@@ -1605,13 +1643,13 @@ public class LauncherActivity extends Activity {
     }
 
     /// Moves `file` (if it exists) to `dest`, which must not exist yet.
-    private static void moveAside(File file, File dest) throws Exception {
+    private void moveAside(File file, File dest) throws Exception {
         if (!file.exists()) {
             return;
         }
         dest.getParentFile().mkdirs();
         if (!file.renameTo(dest)) {
-            throw new Exception("无法移走旧存档 " + file.getName());
+            throw new Exception(getString(R.string.cant_move_old_save, file.getName()));
         }
     }
 
@@ -1839,7 +1877,7 @@ public class LauncherActivity extends Activity {
         if (update == null || update.version.equals(ignored)) {
             return;
         }
-        TextView banner = makeText("发现新版本 " + update.version + "，点这里更新", 14, TEXT, true);
+        TextView banner = makeText(getString(R.string.update_banner, update.version), 14, TEXT, true);
         banner.setGravity(Gravity.CENTER);
         banner.setPadding(dp(14), dp(10), dp(14), dp(10));
         banner.setBackground(buttonBackground(ACCENT, dp(12)));
@@ -1874,17 +1912,17 @@ public class LauncherActivity extends Activity {
             return;
         }
         new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
-            .setTitle("发现新版本 " + info.version)
+            .setTitle(getString(R.string.update_title, info.version))
             .setMessage(plainNotes(info.notes))
-            .setPositiveButton("下载安装包", (dialog, which) -> {
+            .setPositiveButton(R.string.download_apk, (dialog, which) -> {
                 try {
                     startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(info.downloadUrl)));
                 } catch (ActivityNotFoundException e) {
-                    Toast.makeText(this, "没有可以打开下载链接的浏览器。", Toast.LENGTH_LONG).show();
+                    Toast.makeText(this, R.string.no_browser, Toast.LENGTH_LONG).show();
                 }
             })
-            .setNegativeButton("稍后", null)
-            .setNeutralButton("忽略这个版本", (dialog, which) -> {
+            .setNegativeButton(R.string.later, null)
+            .setNeutralButton(R.string.ignore_version, (dialog, which) -> {
                 getSharedPreferences(PREFS, MODE_PRIVATE).edit()
                     .putString(PREF_IGNORED_VERSION, info.version).apply();
                 showUpdateBanner();

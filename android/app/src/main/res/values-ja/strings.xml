@@ -1,0 +1,170 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, You can obtain one at https://mozilla.org/MPL/2.0/. -->
+
+<!-- 日本語 -->
+<resources>
+    <string name="launcher_hint">アイコンをタップしてゲームを起動 · 長押しで管理</string>
+    <string name="import_games">ゲームを追加</string>
+    <string name="settings">設定</string>
+    <string name="last_run_crashed">前回ゲームがエラーで終了しました。ここをタップしてログを表示</string>
+    <string name="loading_games">ゲーム一覧を読み込み中…</string>
+    <string name="no_games">ゲームがまだありません\n\n「ゲームを追加」をタップして .ipa ファイルを選んでください。</string>
+    <string name="importing">追加中…</string>
+    <string name="list_separator">、</string>
+
+    <string name="cancel">キャンセル</string>
+    <string name="close">閉じる</string>
+    <string name="done">完了</string>
+    <string name="share">共有</string>
+    <string name="delete">削除</string>
+    <string name="clear">消去</string>
+    <string name="no_share_app">共有できるアプリがありません。</string>
+    <string name="no_file_picker">システムのファイル選択画面を開けませんでした。</string>
+
+    <string name="menu_import_save">セーブを読み込む</string>
+    <string name="menu_export_save">セーブを書き出す</string>
+    <string name="menu_delete_game">ゲームを削除</string>
+    <string name="menu_device_profile">エミュレートする機種：%1$s</string>
+    <string name="menu_performance_tests">パフォーマンス比較テスト</string>
+    <string name="menu_audio_tests">サウンド比較テスト</string>
+    <string name="menu_p2g_layout">画面とボタンの配置</string>
+    <string name="unknown_game_saves">このゲームを識別できないため、セーブを扱えません。</string>
+
+    <string name="p2g_layout_title">P2G の画面とボタンの配置</string>
+    <string name="p2g_standard">標準の画面</string>
+    <string name="p2g_wide">ワイド表示 · ボタンは中央の 16:9 配置のまま</string>
+
+    <string name="perf_title">バイスシティ パフォーマンス比較</string>
+    <string name="perf_description">どの項目を選んでもゲームが起動します。同じセーブ・同じ場所で 30 秒以上プレイしてから、ゲームを終了して次の項目に切り替えてください。\n結果は 5 秒ごとに累積して保存され、ゲームを再起動しても上書きされません。テストはすべて iPhone 4S、1× レンダリング、同じ滑らかさのフィルターで行います。\n通常どおり起動した場合はテストは行われません。</string>
+    <string name="perf_choice_a">A · 高画質（960×640）</string>
+    <string name="perf_choice_b">B · 低解像度（480×320）</string>
+    <string name="perf_choice_c">C · 高画質＋ログ削減</string>
+    <string name="perf_choice_d">D · 低解像度＋ログ削減</string>
+    <string name="perf_view_reports">すべてのテストレポートを表示／共有</string>
+    <string name="perf_clear_reports">テストレポートを消去</string>
+    <string name="perf_clear_title">パフォーマンステストのレポートを消去しますか？</string>
+    <string name="perf_clear_message">消去されるのはテスト結果だけで、ゲームとセーブは残ります。</string>
+    <string name="reports_cleared">テストレポートを消去しました。</string>
+    <string name="clear_failed">消去できませんでした。</string>
+
+    <string name="audio_title">バイスシティ サウンド比較</string>
+    <string name="audio_description">どの項目を選んでもゲームが起動します。同じ場所で同じ種類のアイテムを拾い、その瞬間のノイズを比べてください。\n開始・終了のなめらか化は実験的な処理で、短い効果音の立ち上がりが弱まることがあります。音楽ストリームはそのままです。\nノイズが聞こえたらすぐに画面上部の「%1$s」をタップし、数秒プレイを続けてから終了してレポートを共有してください。\nマークすると、近くの音源の状態と直近の少量の音声データが保存されます。マイクの録音やパフォーマンス計測は行いません。通常どおり起動すると元のサウンドに戻ります。</string>
+    <string name="audio_original">元のサウンド（比較用）</string>
+    <string name="audio_smooth_edges">短い効果音の開始・終了をなめらかに</string>
+    <string name="audio_lower_volume">短い効果音の音量を半分に</string>
+    <string name="audio_view_report">テストレポートを表示／共有</string>
+    <string name="no_test_results">テスト結果がまだありません。先に項目を選んでゲームでテストしてください。</string>
+    <string name="test_report_title">テストレポート（直近 64 KB）</string>
+    <string name="share_test_report">テストレポートを共有</string>
+
+    <string name="mark_noise">ノイズをマーク</string>
+    <string name="noise_marked">マークしました。数秒プレイを続けてから終了し、レポートを共有してください。</string>
+    <string name="back_again_to_exit">もう一度戻るとゲームを終了してメイン画面に戻ります</string>
+
+    <string name="delete_title">「%1$s」を削除しますか？</string>
+    <string name="delete_message">ゲームのファイルは削除され、セーブは残ります。</string>
+    <string name="deleted">削除しました。</string>
+    <string name="delete_failed">削除できませんでした。</string>
+    <string name="log_title">実行ログ（%1$s）</string>
+    <string name="share_log">ログを共有</string>
+    <string name="copyright">著作権情報</string>
+
+    <string name="device_profile_title">エミュレートする機種</string>
+    <string name="device_profile_global">全体：%1$s</string>
+    <string name="device_profile_this_game">このゲーム：%1$s</string>
+    <string name="device_profile_use_global">全体の設定を使う（%1$s）</string>
+    <string name="device_profile_hint">「自動」は画面の縦横比で選びます。その画面に対応しないゲームは互換サイズになります。</string>
+    <string-array name="device_profile_labels">
+        <item>自動</item>
+        <item>iPhone 3GS（480×320）</item>
+        <item>iPhone 4（960×640）</item>
+        <item>iPhone 4S（960×640）</item>
+        <item>iPhone 5（1136×640）</item>
+        <item>iPhone 5s（1136×640）</item>
+        <item>iPhone 6（1334×750）</item>
+        <item>iPhone 6 Plus（2208×1242）</item>
+        <item>iPad 2（1024×768）</item>
+        <item>iPad Retina（2048×1536）</item>
+    </string-array>
+    <string name="option_filter">フィルター</string>
+    <string-array name="option_filter_choices">
+        <item>なめらか</item>
+        <item>シャープ</item>
+        <item>ドット</item>
+        <item>高画質</item>
+    </string-array>
+    <string name="option_aspect">画面比率</string>
+    <string-array name="option_aspect_choices">
+        <item>オリジナル</item>
+        <item>引き伸ばし</item>
+        <item>全画面</item>
+        <item>整数倍</item>
+    </string-array>
+    <string name="option_orientation">画面の向き</string>
+    <string-array name="option_orientation_choices">
+        <item>デフォルト</item>
+        <item>横向き ←</item>
+        <item>横向き →</item>
+        <item>上下逆</item>
+    </string-array>
+    <string name="option_scale">高解像度レンダリング（実験的）</string>
+    <string-array name="option_scale_choices">
+        <item>デフォルト</item>
+        <item>オフ</item>
+        <item>2×</item>
+        <item>3×</item>
+        <item>4×</item>
+    </string-array>
+    <string name="option_keep_screen_on">プレイ中は画面をオンのままにする</string>
+    <string name="option_tilt_controls">スティックで傾きセンサーを再現</string>
+    <string name="option_network">ゲームのネットワーク接続を許可</string>
+    <string name="option_check_updates">アップデートを自動で確認</string>
+    <string name="language">言語：%1$s</string>
+    <string name="language_title">言語</string>
+    <string name="language_system">システムに合わせる</string>
+
+    <plurals name="imported_games">
+        <item quantity="other">%1$d 本のゲームを追加しました。</item>
+    </plurals>
+    <string name="skipped_not_ipa">.ipa ファイルではないためスキップしました：%1$s</string>
+    <string name="import_failed">追加できませんでした：%1$s</string>
+
+    <string name="no_saves_yet">「%1$s」にはまだセーブがありません。</string>
+    <string name="export_save_failed">セーブを書き出せませんでした：%1$s</string>
+    <plurals name="exported_saves">
+        <item quantity="other">「%1$s」のセーブを書き出しました（%2$d 個のファイル）。</item>
+    </plurals>
+    <plurals name="unreadable_files_skipped">
+        <item quantity="other">読み取り権限のないファイル %1$d 個をスキップしました。</item>
+    </plurals>
+    <string name="saved_in_folder">touchHLE フォルダーに保存しました：%1$s</string>
+    <string name="import_save_title">「%1$s」のセーブを読み込みますか？</string>
+    <string name="import_save_message">書き出したセーブの zip を選んでください。今のセーブは touchHLE フォルダーの %1$s にバックアップしてから置き換えます。\n\n読み込む前にこのゲームを終了してください。</string>
+    <string name="choose_file">ファイルを選択</string>
+    <string name="zip_has_no_saves">この zip にはセーブファイルがありません。</string>
+    <string name="zip_unreadable">このファイルを読み込めません。セーブの zip ですか？</string>
+    <string name="save_mismatch_title">セーブとゲームが一致しません</string>
+    <string name="save_mismatch_message">このセーブは別のゲーム（%1$s）のもので、「%2$s」（%3$s）のものではありません。それでも読み込みますか？</string>
+    <string name="import_anyway">それでも読み込む</string>
+    <string name="step_move_old_saves">古いセーブの移動</string>
+    <string name="step_write_new_saves">新しいセーブの書き込み</string>
+    <plurals name="imported_saves">
+        <item quantity="other">「%1$s」のセーブを読み込みました（%2$d 個のファイル）。</item>
+    </plurals>
+    <string name="import_save_failed">セーブを読み込めませんでした（%1$s中）：%2$s\n元のセーブは touchHLE フォルダーの %3$s にあります。</string>
+    <string name="cant_move_old_save">古いセーブ %1$s を移動できませんでした</string>
+
+    <string name="update_banner">新しいバージョン %1$s があります。ここをタップして更新</string>
+    <string name="update_title">新しいバージョン %1$s</string>
+    <string name="download_apk">ダウンロード</string>
+    <string name="later">あとで</string>
+    <string name="ignore_version">このバージョンをスキップ</string>
+    <string name="no_browser">ダウンロードリンクを開けるブラウザがありません。</string>
+
+    <string name="file_manager_failed">ファイルマネージャーを開けませんでした。システムの「ファイル」アプリで、サイドバーから「%1$s」を開いてください。</string>
+    <string name="keep_alive_channel">バックグラウンドでゲームを保持</string>
+    <string name="keep_alive_channel_description">バックグラウンドに切り替えたときに、実行中のゲームがシステムに終了されにくくなり、進行状況が失われにくくなります。</string>
+    <string name="keep_alive_running">実行中。バックグラウンドではゲームが一時停止し、進行状況は保持されます。</string>
+</resources>

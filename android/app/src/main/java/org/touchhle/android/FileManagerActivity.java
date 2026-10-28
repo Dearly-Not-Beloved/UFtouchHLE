@@ -7,6 +7,7 @@ package org.touchhle.android;
 
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
+import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
@@ -24,6 +25,11 @@ import android.widget.Toast;
 public class FileManagerActivity extends Activity {
     // DocumentsContract.Root.MIME_TYPE_ITEM
     private static final String ROOT_MIME_TYPE = "vnd.android.document/root";
+
+    @Override
+    protected void attachBaseContext(Context base) {
+        super.attachBaseContext(Languages.wrap(base));
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -57,8 +63,7 @@ public class FileManagerActivity extends Activity {
         if (!opened) {
             Toast.makeText(
                 this,
-                "无法打开文件管理器。请在系统「文件」应用中，从侧边栏打开「"
-                    + getString(R.string.app_name) + "」。",
+                getString(R.string.file_manager_failed, getString(R.string.app_name)),
                 Toast.LENGTH_LONG
             ).show();
         }
