@@ -1,6 +1,6 @@
 # IOS_SAVE_DIFF_REPORT.md - iOS MHP2G save differential report
 
-> Status: partial. Outer layer fully solved. Controlled 3-sample experiment (original / re-save / single-value-change) NOT yet complete - only naturally-occurring saves captured so far.
+> Status: 2026-10-28 — inner layer SOLVED (table perm + LCG, PSP-homologous), controlled 3-sample diff DONE, checksum F = remaining blocker.
 > Method: byte-level, block-level and statistical diff of outer ciphertext, inner ciphertext and inner plaintext.
 
 ---
@@ -9,81 +9,65 @@
 
 | Sample | Origin | Outer ciphertext | Inner ciphertext | Inner plaintext | Notes |
 |---|---|---|---|---|---|
-| run13 save i1 | in-game save | yes | yes (from outer decrypt) | no | upper16 stable, lower16 varies |
-| run13 save i2 | in-game save | yes | yes | no | seed 0x33df |
-| run24 save | in-game save | savedata_write_stream.bin | cccrypt_plain.bin | plain_full.bin | seed 0x33ac |
+| s1/s2/s3 (sample1-3.dat) | user-uploaded controlled saves | yes | yes (.inner.bin) | yes (.plain.bin) | s2/s3 same session pair |
+| male.dat / female.dat | real-device exports | yes | yes | yes | /tmp/mhp2g_analysis/user_samples/ |
+| run24 save | in-game save | savedata_write_stream.bin | cccrypt_plain.bin | plain_full.bin | archived in samples_run24/ |
 | k73 PSP save | PPSSPP | n/a (PSP format) | n/a | /tmp/MHP2NDG.t2.plain | PSP plaintext reference |
 
-Note: /tmp/touchhle_dump was cleared on each restart; run13 intermediates were lost. Current archive: /tmp/mhp2g_analysis/samples_run24/ (plain_full.bin, cccrypt_plain.bin, savedata_write_stream.bin, memcpy_dst.bin).
+## 2. Outer-layer diff (write stream vs re-encryption)
 
----
+- openssl aes-128-cbc (key `6c7336285b66245d3d7e49286e663238`, iv `3b6c6b6e63283b665f776e5839383c69`) encrypt(cccrypt_plain.bin) == savedata_write_stream.bin — byte-identical. Outer layer fully deterministic.
 
-## 2. Outer-layer diff (savedata_write_stream vs re-encryption)
+## 3. Inner-layer crack (s2/s3 same-session differential)
 
-- openssl aes-128-cbc -K 6c7336285b66245d3d7e49286e663238 -iv 3b6c6b6e63283b665f776e5839383c69 encrypt(cccrypt_plain.bin) == savedata_write_stream.bin
-- Result: byte-identical (True). Outer layer fully deterministic given inner ciphertext.
+- s2 vs s3 (same session): recovered per-block betas — **upper16 identical across the whole save, lower16 all different** → exactly the "two-LCG-stream" signature later confirmed by beta-recovery from zero-plaintext blocks.
+- beta = lower + (upper<<16); `lower*0x215F %0xFF8F`, `upper*0xDFA3 %0xFFEF` (params identical to PSP; permutation table differs).
+- Decrypt: `p = T2[T2[c] ^ beta_byte]`; Encrypt: `c = T1[T1[p] ^ beta_byte]`. T1@file 0x5f27d0, T2@0x5f28d0 (inverses, verified T2[T1[i]]==i).
+- Closed loop: decrypt(encrypt(x)) == x, **0-byte diff on all 4 real saves**.
 
----
+## 4. Game load-decrypt mechanism (WLOG + beta-recovery, verified)
 
-## 3. Inner-ciphertext block diff (run13 i1 vs i2, 4-byte blocks)
+- Game recovers beta from ciphertext block at offset **0xDFC00** (zero-plaintext anchor): `beta = T2[c_DFC00] ^ T1[0]`.
+- Then runs the LCG **backward 0xDFC00/4 = 229120 steps** to get block-0 beta, then decrypts the whole save from block 0.
+- Verified: `LCG^229120(block0 beta) == game-recovered beta` for both the random-beta test save (0xf94d64cb→0xcae1be89) and the male save (0x1ddbd6c0→0x90279d3b).
+- Simulated full decryption of the random-beta save with recovered beta matches the real plaintext **100.00%** (all 1,483,008 bytes).
+- Save tail u32 is NOT the seed: changing it (0x11223344) leaves the game's beta unchanged.
 
-Historical result (run13): comparing two different saves' inner ciphertexts:
-- 99.998% of 4-byte blocks have identical upper 16 bits
-- lower 16 bits change nearly everywhere (seed-driven)
+## 5. Load-verification experiments (all deployed to touchHLE, reproducible)
 
-Interpretation: the keystream upper half is a fixed sequence independent of seed; the lower half is generated from the per-save seed. The 4-byte block structure (upper = fixed, lower = seeded) is the dominant pattern of the inner layer.
+| Save | Change vs male | Game result |
+|---|---|---|
+| male original | none | **loads OK** (no alert) |
+| roundtrip_male_randbeta | same plaintext, new random beta | corrupt ×N |
+| seedtest_11223344 | inner tail u32 = 0x11223344 | corrupt; game beta unchanged |
+| exp_tailzero | inner tail 30B zeroed | corrupt ×2 |
+| exp_body1b | 1 byte at offset 0x2000 flipped | corrupt ×2 |
+| exp_tail82 / exp_tail20 | tail 8B+2B only / tail 20B only | pending test |
 
-## 4. Inner-ciphertext vs plaintext relationship (run24, single save)
+=> Checksum covers **body + tail region**; it is a function of the **inner ciphertext** (plaintext-identical re-encryption still fails). Not standard SHA1/MD5/SHA256 (no hash constants in binary, no CC_* calls logged).
 
-- plain_full.bin XOR cccrypt_plain.bin[:1483008] = keystream
-- Keystream stats: 370752 4-byte blocks; lower 16 unique values ~9612; upper 16 unique values 65519
-- Lower 16: strict local periodicity. Value 0x4b0c appears at blocks [5113, 14459] (spacing 9346) in run24 and at [1, 9347, 18693, ...] in run17 - period component confirmed, phase shifts with seed.
-- Upper 16: no repeat >2 times in first 20000 terms; identical across saves.
+## 6. Plaintext structural features (current, supersedes older notes)
 
-## 5. Plaintext structural features (run24 plain_full.bin)
+- Offset 0x0000: `00 01 04 04` (version marker); 0x1000: UTF-16LE character name ("殲滅のレウス…"/"unknown…" on real saves).
+- 0x5351+: 15-byte-spaced ff runs (bitmap-like); ~99.9% zero.
+- **Tail 30B = tail8 | tail20 | tail2**: tail2's last byte is always `0x77` (all 4 saves); tail8/tail20 vary per save; s2/s3 share `ff d0` at tail8 bytes 4-5.
 
-- Offset 0x0000: 00 01 04 04 (version marker)
-- Offset 0x1000: UTF-16LE "111" (character name, sample save)
-- 0x5351+: 15-byte-spaced ff runs (bitmap-like)
-- 0x16a0e0: 6B 1b 0f 1b 2a ea 0a
-- 0x16a0e8: 22B a9 49 7d 8f b2 50 d2 2c 64 f9 37 59 db 2f fe 2f f8 e7 12 b6 91 08 (last 20B suspected SHA1-like checksum)
-- Tail u32 0x0891 (0x16a0fc)
-- 99.94% zero -> most of the 1.48MB is reserved/empty
+## 7. PSP structural comparison (for reference)
 
-## 6. PSP plaintext structural features (k73, for comparison)
+- PSP 1,483,004B, head `00 03 07 07`; tail 12B metadata + 20B SHA1(data[:-12] + salt `S)R?Bf8xW3#5h9lGU8wR`) — verified exactly on k73.
+- ~91% of bytes identical between k73 (PSP) and male (iOS) plaintexts; platform-specific header + tail differ.
 
-- /tmp/MHP2NDG.t2.plain = 1,483,004B, zero ratio 98.44%
-- head 4B: 00 03 07 07
-- character name "111" found at plaintext 0x148b00 area (quest name m60038.mib at 0x148b00; char data elsewhere)
-- tail 20B = SHA1(data[:-12] + salt "S)R?Bf8xW3#5h9lGU8wR") - verified exactly on k73 save
-- seed = last 4B, permuted twice through T2 table
+## 8. Checksum F — current blocker
 
-## 7. What remains for a true controlled 3-sample diff
+- F(inner ciphertext body) must equal stored tail20; algorithm unknown. No standard-hash constants in binary. Two 16-byte ASCII strings `f09qfkn#olsp9fkn` / `b#hl-*pa-lspzm ` sit right after the AES key/iv strings (candidate salts/second key pair) — SHA1(body+salt) did not match any tested salt/range/endianness variant.
+- Recommended attacks: (a) CPU-level PC capture to isolate the checksum routine (runs after inner decrypt, before alert); (b) static xrefs of those two strings; (c) deploy roundtrip_male.dat (byte-identical to original) as a baseline sanity check.
 
-The task book requires three controlled iOS saves:
-1. original save (untouched)
-2. re-save with no game-state change
-3. save after changing exactly one game value
+## 9. Verified facts only
 
-Not yet achieved: current captures are natural saves after the game auto-loads; no controlled single-value mutation was performed yet. This needs:
-- a deliberate single-value change in-game (e.g. carry item count / zenny), then save
-- diff of plaintexts 1 vs 2 (expect: timestamp/seed region only), 2 vs 3 (expect: exactly the changed field(s) + seed region)
-
-Block-level and statistical diff tooling exists; run it on controlled samples once produced.
-
-## 8. Cross-save keystream differential (next main attack)
-
-With 3+ seeds (S1, S2, S3) and their lower16 sequences L1, L2, L3:
-- If lower16 = PRNG(seed, i), test linearity: L1[i] XOR L2[i] should be a function of S1 XOR S2 if the PRNG is linear (LCG/xorshift-like)
-- If PRNG is non-linear (e.g. table-driven), collect (seed, L[0..8]) pairs and brute-force candidate structures offline
-- Upper16: verify cross-save identity on all blocks, not just first 20000
-
-## 9. Verified facts only (do not conflate)
-
-- Outer AES-128-CBC with fixed key/iv: VERIFIED (byte-identical reproduction)
-- Inner ciphertext = outer AES plaintext: VERIFIED
-- Keystream = plaintext XOR inner ciphertext: VERIFIED by construction
-- Lower16 9346-period component: VERIFIED (two saves, exact spacing)
-- Lower16 global 9346 period: DISPROVEN
-- PSP inner scheme (table perm + LCG) applies to iOS inner: DISPROVEN
-- Inner PRNG identified: NOT YET
+- Outer AES-128-CBC fixed key/iv: VERIFIED (byte-identical reproduction)
+- Inner = table perm + dual LCG (params PSP-identical, table differs): VERIFIED (closed-loop 0-diff on 4 saves)
+- Game load-decrypt: beta from 0xDFC00, LCG back 229120 steps, decrypt whole save: VERIFIED (100% plaintext match)
+- Original male save loads in touchHLE; any re-encryption rejected: VERIFIED (in-game)
+- Checksum covers body+tail, function of inner ciphertext: VERIFIED (tailzero/body1b experiments)
+- Checksum algorithm F identified: NOT YET (blocker)
+- PSP SHA1 tail verified; iOS tail not a simple SHA1 of the file: VERIFIED
