@@ -1,9 +1,9 @@
 name: Build touchHLE
 
 on:
-  push:
-    branches: [ "trunk" ]
-  create: # for tags
+  create:
+    tags:
+      - "v*"
   workflow_dispatch:
 
 permissions:
