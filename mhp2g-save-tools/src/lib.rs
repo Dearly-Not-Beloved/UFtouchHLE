@@ -19,7 +19,10 @@ pub mod ios;
 pub mod psp;
 
 pub use game::Platform;
-use game::{BODY_LEN, HASH_OFF, HEADER_LEN, SEED_OFF};
+use game::{
+    BODY_LEN, GUILD_CARD, HASH_OFF, HEADER_LEN, IOS_GUILD_CARD_NAME, SEED_OFF, SLOTS, SLOT_LEN,
+    SLOT_NAME_LEN, SLOT_OFF,
+};
 use std::fmt;
 
 #[derive(Debug)]
@@ -153,11 +156,28 @@ pub fn complete_plain(raw: &[u8], platform: Platform) -> Result<Vec<u8>, Error> 
 
 /// Move a plaintext to another platform. The settings block comes from
 /// `template` (a plaintext of the target platform) or the default one.
+///
+/// The characters' own guild cards are laid out differently on the two
+/// platforms, so they are cleared (the target game would misread them); on
+/// iOS the card gets the character's name. Their statistics are lost.
+/// Areas only the PSP uses are kept: iOS leaves them alone.
 pub fn convert(plain: &[u8], from: Platform, to: Platform, template: Option<&[u8]>) -> Vec<u8> {
     let mut out = plain.to_vec();
     if from != to {
         let header = to.default_header();
         out[..HEADER_LEN].copy_from_slice(template.map_or(&header[..], |t| &t[..HEADER_LEN]));
+        for slot in 0..SLOTS {
+            let base = SLOT_OFF + slot * SLOT_LEN;
+            out[base + GUILD_CARD.start..base + GUILD_CARD.end].fill(0);
+            if to == Platform::Ios {
+                // The UTF-16 name, up to its terminator.
+                let len = (0..SLOT_NAME_LEN)
+                    .step_by(2)
+                    .find(|&i| out[base + i] == 0 && out[base + i + 1] == 0)
+                    .unwrap_or(SLOT_NAME_LEN);
+                out.copy_within(base..base + len, base + IOS_GUILD_CARD_NAME);
+            }
+        }
     }
     game::seal(&mut out, to, game::random_seed());
     out
@@ -194,7 +214,7 @@ pub fn psp_file_with_header(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use game::synthetic_plain;
+    use game::{synthetic_plain, NAME_OFF};
 
     #[test]
     fn load_every_format() {
@@ -244,13 +264,34 @@ mod tests {
 
     #[test]
     fn convert_both_ways() {
-        let psp = synthetic_plain(Platform::Psp);
+        let mut psp = synthetic_plain(Platform::Psp);
+        // Something in a guild card, and in an area only the PSP uses.
+        let card = SLOT_OFF + SLOT_LEN + 0x672B8;
+        let psp_only = SLOT_OFF + SLOT_LEN + 0x69230;
+        psp[card] = 0x67;
+        psp[psp_only] = 0x42;
+        game::seal(&mut psp, Platform::Psp, 1);
+
         let ios = convert(&psp, Platform::Psp, Platform::Ios, None);
         assert_eq!(ios[..HEADER_LEN], Platform::Ios.default_header());
-        assert_eq!(ios[HEADER_LEN..HASH_OFF], psp[HEADER_LEN..HASH_OFF]);
         assert!(game::hash_ok(&ios, Platform::Ios));
+        assert_eq!(ios[card], 0);
+        assert_eq!(ios[psp_only], 0x42);
+        let name = SLOT_OFF + IOS_GUILD_CARD_NAME;
+        assert_eq!(game::character_name(&ios[name - NAME_OFF..]), "テスト");
+        assert_eq!(ios[name + 6..name + SLOT_NAME_LEN], [0; SLOT_NAME_LEN - 6]);
+        let changed: Vec<usize> = (HEADER_LEN..HASH_OFF)
+            .filter(|&i| ios[i] != psp[i])
+            .collect();
+        assert!(changed
+            .iter()
+            .all(|&i| (i - SLOT_OFF) % SLOT_LEN >= GUILD_CARD.start
+                && (i - SLOT_OFF) % SLOT_LEN < GUILD_CARD.end));
+
         let back = convert(&ios, Platform::Ios, Platform::Psp, None);
-        assert_eq!(back[..HASH_OFF], psp[..HASH_OFF]);
+        assert_eq!(back[..HEADER_LEN], psp[..HEADER_LEN]);
+        assert_eq!(back[name], 0);
+        assert_eq!(back[psp_only], 0x42);
         assert!(game::hash_ok(&back, Platform::Psp));
 
         let mut template = synthetic_plain(Platform::Ios);

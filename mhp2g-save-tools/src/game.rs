@@ -40,6 +40,21 @@ pub const HEADER_LEN: usize = 0x24;
 pub const NAME_OFF: usize = 0x1000;
 pub const NAME_LEN: usize = 0x20;
 
+/// The three character slots.
+pub const SLOT_OFF: usize = 0x1000;
+pub const SLOT_LEN: usize = 0x6B100;
+pub const SLOTS: usize = 3;
+/// Part of each slot (relative to the slot) that holds the character's own
+/// guild card (equipment record, quest records, medals, counters). The two
+/// platforms lay it out differently: the PSP at +0x672B8..+0x680C2, iOS at
+/// +0x64A34..+0x6803C, with other field encodings. Everything else in the
+/// slots lines up, as far as the samples show.
+pub const GUILD_CARD: std::ops::Range<usize> = 0x64A00..0x68100;
+/// Name field of the iOS guild card. The game doesn't fill it in itself.
+pub const IOS_GUILD_CARD_NAME: usize = 0x64A34;
+/// Length of the name field at the start of each slot.
+pub const SLOT_NAME_LEN: usize = 0x10;
+
 const LO_MUL: u32 = 0x215F;
 const LO_MOD: u32 = 0xFF8F;
 const HI_MUL: u32 = 0xDFA3;
@@ -226,6 +241,8 @@ mod tests {
         for (i, u) in "テスト".encode_utf16().enumerate() {
             plain[NAME_OFF + 2 * i..NAME_OFF + 2 * i + 2].copy_from_slice(&u.to_le_bytes());
         }
+        // Real saves have another field after the name's terminator.
+        plain[NAME_OFF + 8] = 0x6A;
         for (i, b) in plain[0x2000..0x2100].iter_mut().enumerate() {
             *b = i as u8;
         }
