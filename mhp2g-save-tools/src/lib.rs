@@ -159,8 +159,8 @@ pub fn complete_plain(raw: &[u8], platform: Platform) -> Result<Vec<u8>, Error> 
 ///
 /// The end of each character slot is laid out differently on the two
 /// platforms: its parts are moved, and the guild card's monster records are
-/// repacked. On iOS the guild card is named after the character, like the
-/// game's own saves; the hunter names in quest histories are kept.
+/// repacked. An iOS guild card without a name gets the character's (the iOS
+/// game doesn't fill it in itself); other names are kept.
 pub fn convert(plain: &[u8], from: Platform, to: Platform, template: Option<&[u8]>) -> Vec<u8> {
     let mut out = plain.to_vec();
     if from != to {
@@ -200,15 +200,13 @@ pub fn convert(plain: &[u8], from: Platform, to: Platform, template: Option<&[u8
                 };
                 record[..4].copy_from_slice(&packed.to_le_bytes());
             }
-            if to == Platform::Ios {
-                // On iOS the guild card carries the character's name; on the
-                // PSP it can differ (e.g. the console's nickname).
+            let card_name = base + IOS_GUILD_CARD_NAME;
+            if to == Platform::Ios && out[card_name] == 0 && out[card_name + 1] == 0 {
+                // The UTF-16 name, up to its terminator.
                 let len = (0..SLOT_NAME_LEN)
                     .step_by(2)
                     .find(|&i| out[base + i] == 0 && out[base + i + 1] == 0)
                     .unwrap_or(SLOT_NAME_LEN);
-                let card_name = base + IOS_GUILD_CARD_NAME;
-                out[card_name..card_name + SLOT_NAME_LEN].fill(0);
                 out.copy_within(base..base + len, card_name);
             }
         }
@@ -299,16 +297,16 @@ mod tests {
     #[test]
     fn convert_both_ways() {
         let mut psp = synthetic_plain(Platform::Psp);
-        let slot = SLOT_OFF + SLOT_LEN; // The second character.
-                                        // Money (PSP +0x69250, iOS +0x66960), a flag table entry (PSP
-                                        // +0x6A14C, iOS +0x67854), the guild card comment (not converted),
-                                        // and the global area after the slots (PSP only, kept).
+        // In the second character: money (PSP +0x69250, iOS +0x66960), a
+        // flag table entry (PSP +0x6A14C, iOS +0x67854), the guild card's
+        // comment and name, and a monster record as in a real save. And
+        // something in the global area after the slots (PSP only, kept).
+        let slot = SLOT_OFF + SLOT_LEN;
         psp[slot + 0x69250..slot + 0x69254].copy_from_slice(&1174809u32.to_le_bytes());
         psp[slot + 0x6A14C] = 0x11;
-        psp[slot + 0x672EE] = 0x38; // The guild card comment.
-        psp[slot + 0x672B8] = b'G'; // The guild card name.
-        psp[slot..slot + 4].copy_from_slice(&[0xCF, 0x30, 0xF3, 0x30]); // "ハン".
-                                                                        // A monster record, as in a real save.
+        psp[slot + 0x672EE] = 0x38;
+        psp[slot + 0x672B8] = b'G';
+        psp[slot..slot + 4].copy_from_slice(&[0xCF, 0x30, 0xF3, 0x30]);
         psp[slot + 0x67408 + 8..slot + 0x67408 + 16]
             .copy_from_slice(&[0x03, 0x00, 0x15, 0x00, 0xae, 0x20, 0x42, 0x1e]);
         let global = SLOT_OFF + SLOTS * SLOT_LEN + 0x100;
@@ -325,9 +323,9 @@ mod tests {
         assert_eq!(ios[slot + 0x67854], 0x11);
         assert!(ios[slot + 0x6803C..slot + SLOT_LEN].iter().all(|&b| b == 0));
         assert_eq!(ios[slot + 0x64A68 + 2], 0x38);
-        // The guild card is named after the character, not "G".
-        let card_name = slot + IOS_GUILD_CARD_NAME;
-        assert_eq!(game::character_name(&ios[card_name - NAME_OFF..]), "ハン");
+        // The guild card keeps its name; the first character's, which has
+        // none, gets the character's.
+        assert_eq!(ios[slot + IOS_GUILD_CARD_NAME], b'G');
         assert_eq!(
             ios[slot + 0x64B88..slot + 0x64B90],
             [0x83, 0x0a, 0x00, 0x00, 0xae, 0x20, 0x42, 0x1e]
@@ -351,16 +349,10 @@ mod tests {
             1174809u32.to_le_bytes()
         );
         assert_eq!(back[slot + 0x6A14C], 0x11);
-        // The guild card, back where it was, but named after the character.
-        let psp_card_name = slot + IOS_GUILD_CARD_NAME + 0x2884;
-        assert_eq!(back[psp_card_name..psp_card_name + 4], psp[slot..slot + 4]);
+        // The guild card, back where it was.
         assert_eq!(
-            back[slot + 0x64A00..psp_card_name],
-            psp[slot + 0x64A00..psp_card_name]
-        );
-        assert_eq!(
-            back[psp_card_name + 4..slot + SLOT_LEN],
-            psp[psp_card_name + 4..slot + SLOT_LEN]
+            back[slot + 0x64A00..slot + SLOT_LEN],
+            psp[slot + 0x64A00..slot + SLOT_LEN]
         );
         assert_eq!(back[name], 0); // No iOS guild card name on the PSP.
         assert_eq!(back[global], 0x42);
