@@ -261,4 +261,5 @@ com.rockstargames.gta3vc: --device-model=iPhone4,1 --retina --system-version=7.0
 # Renders at Retina resolution when told it has a Retina display. The game
 # lists older models (e.g. iPhone1,1, the default) separately, so report an
 # iPhone 4S.
-jp.co.capcom.mhp2gjp: --device-model=iPhone4,1 --retina --system-version=7.0
+# Its local multiplayer works over the LAN, finding or hosting a room.
+jp.co.capcom.mhp2gjp: --device-model=iPhone4,1 --retina --system-version=7.0 --allow-network-access --gamekit-auto

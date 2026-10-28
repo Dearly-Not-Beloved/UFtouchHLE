@@ -157,6 +157,8 @@ pub struct Options {
     pub gamekit_bind: std::net::SocketAddrV4,
     pub gamekit_player_id: Option<crate::transport::PlayerId>,
     pub gamekit_timeout: std::time::Duration,
+    /// See `--gamekit-auto`. An explicit role or discovery overrides it.
+    pub gamekit_auto: bool,
     pub gamekit_room: Option<String>,
     pub gamekit_discover: Option<String>,
     pub gamekit_discovery_bind: std::net::SocketAddrV4,
@@ -219,6 +221,7 @@ impl Default for Options {
             gamekit_bind: "0.0.0.0:0".parse().unwrap(),
             gamekit_player_id: None,
             gamekit_timeout: std::time::Duration::from_secs(30),
+            gamekit_auto: false,
             gamekit_room: None,
             gamekit_discover: None,
             gamekit_discovery_bind: "0.0.0.0:42019".parse().unwrap(),
@@ -241,6 +244,11 @@ impl Options {
     /// Parse the command-line argument syntax for an option. Returns `Ok(true)`
     /// if the option was valid and has been applied, or `Ok(false)` if the
     /// option was not recognized.
+    /// Whether the local GameKit backend has a connection mode.
+    pub fn gamekit_enabled(&self) -> bool {
+        self.gamekit_role.is_some() || self.gamekit_discover.is_some() || self.gamekit_auto
+    }
+
     pub fn parse_argument(&mut self, arg: &str) -> Result<bool, String> {
         fn parse_degrees(arg: &str, name: &str) -> Result<f32, String> {
             let arg: f32 = arg
@@ -523,6 +531,7 @@ impl Options {
             }
             self.gamekit_bind = value.parse().map_err(|_| "GameKit Host needs IPv4:port")?;
             self.gamekit_role = Some(crate::transport::Role::Host);
+            self.gamekit_auto = false;
         } else if let Some(value) = arg.strip_prefix("--gamekit-join=") {
             if self.gamekit_discover.is_some()
                 || matches!(self.gamekit_role, Some(crate::transport::Role::Host))
@@ -532,6 +541,7 @@ impl Options {
             self.gamekit_role = Some(crate::transport::Role::Client(crate::lan::ipv4_endpoint(
                 value,
             )?));
+            self.gamekit_auto = false;
         } else if let Some(value) = arg.strip_prefix("--gamekit-room=") {
             if value.is_empty() || value.len() > 96 || value.chars().any(char::is_control) {
                 return Err(
@@ -551,6 +561,11 @@ impl Options {
                 return Err("GameKit discovery needs auto or a nonzero room UUID".into());
             }
             self.gamekit_discover = Some(value.into());
+            self.gamekit_auto = false;
+        } else if arg == "--gamekit-auto" {
+            // Options from files are applied before and after command-line
+            // ones, so an explicit role must win whichever comes first.
+            self.gamekit_auto = self.gamekit_role.is_none() && self.gamekit_discover.is_none();
         } else if let Some(value) = arg.strip_prefix("--gamekit-discovery-bind=") {
             let address: std::net::SocketAddrV4 = value
                 .parse()

@@ -139,7 +139,7 @@ pub const CLASSES: ClassExports = objc_classes! {
 - (id)initWithRequest:(id)request // NSURLRequest *
              delegate:(id)delegate
      startImmediately:(bool)start_immediately {
-    if env.options.network_access && (env.options.gamekit_role.is_some() || env.options.gamekit_discover.is_some()) {
+    if env.options.network_access && env.options.gamekit_enabled() {
         retain(env,request);retain(env,delegate);
         let c=env.objc.borrow_mut::<Connection>(this);
         c.request=request;c.delegate=delegate;

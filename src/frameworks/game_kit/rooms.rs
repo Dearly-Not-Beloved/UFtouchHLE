@@ -4,6 +4,11 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 //! LAN directory for real GameKit sessions, containing no guest objects.
+//!
+//! In automatic mode (`--gamekit-auto`), matchmaking first looks for a room
+//! for a short while and joins it, or else hosts one. Hosts keep looking
+//! until someone joins, and if two hosted at the same time, the one with the
+//! greater room ID joins the other, so that both end up in one room.
 use crate::lan::{self, Discovery};
 use crate::options::Options;
 use crate::transport::{self, Config, Event, Role, SessionId};
@@ -28,7 +33,15 @@ pub(super) struct State {
     advertised_players: Option<u8>,
     observed: Vec<lan::Room>,
     first_seen: Option<Instant>,
+    /// Automatic mode: the configuration, kept to switch from hosting to
+    /// joining.
+    auto: Option<Config>,
+    /// Automatic mode: when to give up looking and host instead.
+    host_at: Option<Instant>,
 }
+
+/// Room name used in automatic mode without `--gamekit-room`.
+const AUTO_ROOM_NAME: &str = "UFtouchHLE";
 impl State {
     pub fn start(
         &mut self,
@@ -42,6 +55,28 @@ impl State {
         self.compatibility = config.compatibility;
         self.capacity = config.max_players as u8;
         self.players = 1;
+        if options.gamekit_auto {
+            self.name.get_or_insert_with(|| AUTO_ROOM_NAME.into());
+            let mut discovery = lan::Config::browser();
+            discovery.bind = options.gamekit_discovery_bind;
+            discovery.compatibility = Some(config.compatibility);
+            match Discovery::browse(discovery) {
+                Ok(browser) => self.browser = Some(browser),
+                Err(e) => {
+                    // E.g. another instance on this machine is looking.
+                    // Others can still find this one if it hosts.
+                    log!("[LocalGameKit] room discovery unavailable ({e}), hosting");
+                    self.host = true;
+                    return Ok(Some((config, Role::Host)));
+                }
+            }
+            // Spread out when instances started together give up looking.
+            let jitter = u64::from(config.player.0[0]) * 4;
+            self.host_at = Some(Instant::now() + Duration::from_millis(2000 + jitter));
+            self.auto = Some(config.clone());
+            self.waiting = Some(config);
+            return Ok(None);
+        }
         if let Some(wanted) = &options.gamekit_discover {
             self.wanted = if wanted == "auto" {
                 None
@@ -66,6 +101,10 @@ impl State {
             )))
         }
     }
+    /// Whether this instance hosts the current room.
+    pub fn is_host(&self) -> bool {
+        self.host
+    }
     pub fn poll(&mut self) -> Option<Result<(Config, Role), String>> {
         for _ in 0..16 {
             let Some(event) = self.browser.as_mut()?.poll() else {
@@ -88,6 +127,16 @@ impl State {
                     }
                     self.observed = rooms;
                 }
+                lan::Event::Error(error) if self.auto.is_some() => {
+                    log!("[LocalGameKit] room discovery: {error}");
+                    self.browser = None;
+                    return self.auto_host();
+                }
+                lan::Event::Stopped(reason) if self.auto.is_some() => {
+                    log!("[LocalGameKit] room discovery stopped: {reason}");
+                    self.browser = None;
+                    return self.auto_host();
+                }
                 lan::Event::Error(error) => {
                     self.browser = None;
                     return Some(Err(format!("Room discovery: {error}")));
@@ -98,6 +147,9 @@ impl State {
                 }
                 lan::Event::Ready(_) => (),
             }
+        }
+        if self.auto.is_some() {
+            return self.poll_auto();
         }
         if self.wanted.is_some()
             || self
@@ -119,6 +171,66 @@ impl State {
         }
         None
     }
+    fn poll_auto(&mut self) -> Option<Result<(Config, Role), String>> {
+        let own = self.session;
+        let room = auto_select(&self.observed, own);
+        if self.waiting.is_some() {
+            // Give rooms a moment to show up together, so the same one is
+            // picked as others would pick.
+            let settled = self
+                .first_seen
+                .is_some_and(|time| time.elapsed() >= Duration::from_secs(1));
+            if let (Some((id, address)), true) = (room, settled) {
+                return Some(self.auto_join(id, address));
+            }
+            if self.host_at.is_some_and(|time| Instant::now() >= time) {
+                return self.auto_host();
+            }
+            return None;
+        }
+        // Hosting: if another room appeared before anyone joined this one,
+        // only one of the two hosts gives way.
+        let (Some(own), Some((id, address))) = (own, room) else {
+            return None;
+        };
+        if self.host && self.players <= 1 && id.0 < own.0 {
+            log!(
+                "[LocalGameKit] joining room {} instead of hosting",
+                uuid::Uuid::from_bytes(id.0)
+            );
+            self.host = false;
+            self.publisher = None;
+            self.advertised_players = None;
+            self.listening = None;
+            self.session = None;
+            self.waiting = self.auto.clone();
+            return Some(self.auto_join(id, address));
+        }
+        None
+    }
+    fn auto_join(
+        &mut self,
+        id: SessionId,
+        address: SocketAddrV4,
+    ) -> Result<(Config, Role), String> {
+        log!(
+            "[LocalGameKit] joining room {} at {}",
+            uuid::Uuid::from_bytes(id.0),
+            address
+        );
+        self.selected = Some(id);
+        self.browser = None;
+        self.host_at = None;
+        let config = self.waiting.take().ok_or("No GameKit configuration")?;
+        Ok((config, Role::Client(address)))
+    }
+    fn auto_host(&mut self) -> Option<Result<(Config, Role), String>> {
+        self.host_at = None;
+        let config = self.waiting.take()?;
+        log!("[LocalGameKit] no room found, hosting");
+        self.host = true;
+        Some(Ok((config, Role::Host)))
+    }
     pub fn observe(&mut self, event: &Event, accepting: bool) -> Result<(), String> {
         match event {
             Event::Listening(address) => self.listening = Some(*address),
@@ -131,7 +243,13 @@ impl State {
                 }
                 self.session = Some(*session);
             }
-            Event::Roster(peers) => self.players = peers.len() as u8,
+            Event::Roster(peers) => {
+                self.players = peers.len() as u8;
+                if self.players > 1 {
+                    // Someone joined: stop looking for other rooms.
+                    self.browser = None;
+                }
+            }
             Event::Stopped(_) => {
                 self.publisher = None;
                 self.session = None;
@@ -196,6 +314,26 @@ impl State {
     }
 }
 
+/// The room to join in automatic mode: the available one with the smallest
+/// ID, so instances seeing the same rooms agree. `own` is the room this
+/// instance hosts, if any.
+fn auto_select(rooms: &[lan::Room], own: Option<SessionId>) -> Option<(SessionId, SocketAddrV4)> {
+    rooms
+        .iter()
+        .filter(|room| {
+            room.info.protocol == transport::PROTOCOL_VERSION
+                && room.info.players < room.info.capacity
+                && Some(room.info.id) != own
+        })
+        .filter_map(|room| {
+            room.endpoints.iter().find_map(|address| match address {
+                SocketAddr::V4(address) => Some((room.info.id, *address)),
+                _ => None,
+            })
+        })
+        .min_by_key(|(id, _)| id.0)
+}
+
 fn select(
     rooms: &[lan::Room],
     wanted: Option<SessionId>,
@@ -252,6 +390,19 @@ mod tests {
         let mut newer = room(1);
         newer.info.protocol += 1;
         assert!(select(&[newer], None).unwrap().is_none());
+    }
+    #[test]
+    fn automatic_mode_picks_the_same_room_everywhere() {
+        assert_eq!(auto_select(&[], None), None);
+        let picked = auto_select(&[room(3), room(2)], None).unwrap();
+        assert_eq!(picked.0, SessionId([2; 16]));
+        // A host doesn't join itself, and only gives way to smaller IDs
+        // (checked by the caller).
+        let picked = auto_select(&[room(2), room(3)], Some(SessionId([2; 16]))).unwrap();
+        assert_eq!(picked.0, SessionId([3; 16]));
+        let mut full = room(1);
+        full.info.players = 4;
+        assert_eq!(auto_select(&[full], None), None);
     }
     #[test]
     fn selected_room_identity_cannot_be_silently_replaced() {

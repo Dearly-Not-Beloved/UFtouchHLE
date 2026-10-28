@@ -10,6 +10,7 @@ package org.touchhle.android;
 
 import android.content.Context;
 import android.content.Intent;
+import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.SystemClock;
@@ -37,6 +38,10 @@ public class MainActivity extends SDLActivity {
      * set by LauncherActivity.
      */
     public static final String EXTRA_ARGS = "org.touchhle.android.ARGS";
+
+    /// Lets the local multiplayer see other players' rooms: many devices drop
+    /// broadcast packets to save power unless an app asks for them.
+    private WifiManager.MulticastLock multicastLock;
 
     private boolean hasArgs() {
         return getIntent() != null && getIntent().getStringArrayExtra(EXTRA_ARGS) != null;
@@ -75,6 +80,20 @@ public class MainActivity extends SDLActivity {
         }
         hideSystemBars();
         installNoiseMarker();
+        acquireMulticastLock();
+    }
+
+    private void acquireMulticastLock() {
+        try {
+            WifiManager wifi = (WifiManager) getApplicationContext()
+                .getSystemService(Context.WIFI_SERVICE);
+            multicastLock = wifi.createMulticastLock("touchHLE local multiplayer");
+            multicastLock.setReferenceCounted(false);
+            multicastLock.acquire();
+        } catch (Throwable e) {
+            // Not essential: rooms can still be found on many devices.
+            multicastLock = null;
+        }
     }
 
     private native void nativeMarkAudioNoise();
@@ -180,6 +199,9 @@ public class MainActivity extends SDLActivity {
             watchdog.start();
         }
         super.onDestroy();
+        if (multicastLock != null) {
+            multicastLock.release();
+        }
         try {
             stopService(new Intent(this, KeepAliveService.class));
         } catch (Throwable e) {

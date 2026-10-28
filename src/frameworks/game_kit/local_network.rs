@@ -10,7 +10,7 @@ use crate::frameworks::foundation::{ns_array, ns_string};
 use crate::libc::dispatch::{_Block_copy, _Block_release, block_invoke_function};
 use crate::mem::MutVoidPtr;
 use crate::objc::{autorelease, id, msg, msg_class, nil, release, retain};
-use crate::transport::{Config, Event, Peer, PlayerId, Role, Transport};
+use crate::transport::{Config, Event, Peer, PlayerId, Transport};
 use crate::Environment;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -89,8 +89,7 @@ fn state(env: &mut Environment) -> &mut State {
     &mut env.framework_state.game_kit.local
 }
 pub(super) fn enabled(env: &Environment) -> bool {
-    env.options.network_access
-        && (env.options.gamekit_role.is_some() || env.options.gamekit_discover.is_some())
+    env.options.network_access && env.options.gamekit_enabled()
 }
 
 pub(super) fn identity(env: &mut Environment) -> PlayerId {
@@ -533,7 +532,7 @@ fn receive(env: &mut Environment, peer: PlayerId, bytes: Vec<u8>, unreliable: bo
         && !unreliable
         && bytes.len() == 6
         && bytes[5] <= 1
-        && matches!(env.options.gamekit_role, Some(Role::Host))
+        && state(env).rooms.is_host()
         && state(env).connected.contains(&peer)
     {
         if bytes[5] == 1 {
@@ -605,7 +604,19 @@ pub(crate) fn pump(env: &mut Environment) {
         match connection
             .and_then(|(config, role)| Transport::start(config, role).map_err(|e| e.to_string()))
         {
-            Ok(node) => state(env).node = Some(node),
+            Ok(node) => {
+                // In automatic mode, this can replace a room nobody had
+                // joined yet with another instance's room.
+                let s = state(env);
+                s.node = Some(node);
+                s.joined = false;
+                s.coordinator = None;
+                s.connected.clear();
+                s.announced.clear();
+                s.attributes.clear();
+                s.roster.clear();
+                s.remote_admission.clear();
+            }
             Err(error) => {
                 complete(env, Err((3, error)));
                 reset_network(env);

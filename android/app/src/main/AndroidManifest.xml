@@ -30,6 +30,8 @@
         android:required="false" />
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- For receiving local multiplayer rooms' broadcasts, see MainActivity -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
 
     <!-- External mouse input events -->
     <uses-feature
