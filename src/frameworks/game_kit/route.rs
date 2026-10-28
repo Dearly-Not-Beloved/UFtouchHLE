@@ -19,7 +19,8 @@ fn probe(bind: SocketAddrV4, destination: SocketAddrV4) -> bool {
     let result = || -> std::io::Result<bool> {
         let socket = UdpSocket::bind(SocketAddrV4::new(*bind.ip(), 0))?;
         socket.set_broadcast(true)?;
-        // UDP connect asks the OS to select a route; it does not send a datagram.
+        // UDP connect asks the OS to select a route; it does not send a
+        // datagram.
         socket.connect(destination)?;
         Ok(!socket.local_addr()?.ip().is_unspecified())
     };

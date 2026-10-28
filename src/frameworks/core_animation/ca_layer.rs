@@ -821,7 +821,8 @@ fn is_implicit_animation_enabled(env: &mut Environment, layer: id) -> bool {
 }
 
 /// Replace uniform XY scale while retaining translation and the directions of
-/// the existing affine basis. The renderer already projects CATransform3D to XY.
+/// the existing affine basis. The renderer already projects CATransform3D to
+/// XY.
 fn with_uniform_scale(t: CGAffineTransform, scale: CGFloat) -> CGAffineTransform {
     let sx = t.a.hypot(t.b);
     let sy = t.c.hypot(t.d);

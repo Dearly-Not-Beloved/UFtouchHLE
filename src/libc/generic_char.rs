@@ -58,7 +58,7 @@ impl<T: Copy + Default + Eq + Ord + SafeRead + Debug> GenericChar<T> {
                 "all_memcpy.log",
                 format!("{d:x} {s:x} {size}\n").as_bytes(),
             );
-            if (d >= 0x313f0000 && d < 0x31570000) || (d >= 0x345dae0 && d < 0x3560a20) {
+            if (0x313f0000..0x31570000).contains(&d) || (0x345dae0..0x3560a20).contains(&d) {
                 log!("[MEMCPYHOOK] dst={:#x} src={:#x} size={}", d, s, size);
                 // Clear the CPU read/write capture logs right before the
                 // inner-encryption window (this memcpy is the last step
@@ -110,7 +110,7 @@ impl<T: Copy + Default + Eq + Ord + SafeRead + Debug> GenericChar<T> {
                 "all_memmove.log",
                 format!("{d:x} {s:x} {size}\n").as_bytes(),
             );
-            if (d >= 0x313f0000 && d < 0x31570000) || (d >= 0x345dae0 && d < 0x3560a20) {
+            if (0x313f0000..0x31570000).contains(&d) || (0x345dae0..0x3560a20).contains(&d) {
                 log!("[MEMMOVEHOOK] dst={:#x} src={:#x} size={}", d, s, size);
                 let s_lo = s.saturating_sub(0x400000) & !0xfff;
                 if let Some(region) = env.mem.get_bytes_fallible(Ptr::from_bits(s_lo), 0x800000) {

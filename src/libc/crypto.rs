@@ -197,7 +197,7 @@ fn CCCrypt(
     if crate::save_research::enabled() && (data_in_length >= 1_000_000 || key_length >= 8) {
         log!("[CCCrypt] op={} alg={} options={} keyLen={} iv={:#x} dataIn={:#x} dataInLen={} dataOut={:#x} dataOutAvail={}",
              op, alg, options, key_length, iv.to_bits(), data_in.to_bits(), data_in_length, data_out.to_bits(), data_out_available);
-        let klen: GuestUSize = key_length.min(64).try_into().unwrap();
+        let klen: GuestUSize = key_length.min(64);
         log!("[CCCrypt] key={:02x?}", env.mem.bytes_at(key.cast(), klen));
         if !iv.is_null() {
             log!(
@@ -223,7 +223,8 @@ fn CCCrypt(
                 region.len(),
                 start
             );
-            // dump the HaXe heap region 0x02000000..0x05000000 (plaintext ByteArray candidate)
+            // dump the HaXe heap region 0x02000000..0x05000000 (plaintext
+            // ByteArray candidate)
             let heap = env
                 .mem
                 .bytes_at(ConstVoidPtr::from_bits(0x02000000).cast(), 0x03000000)

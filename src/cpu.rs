@@ -60,7 +60,7 @@ fn touchHLE_cpu_read_impl<T: SafeRead + Default>(
     }
     let value = res.unwrap_or_default();
     let research = crate::save_research::enabled();
-    if research && addr >= RTARGET_LO && addr < RTARGET_HI {
+    if research && (RTARGET_LO..RTARGET_HI).contains(&addr) {
         unsafe {
             let mut log = MHP2G_RLOG.lock().unwrap();
             if log.len() < 2000000 {
@@ -75,7 +75,7 @@ fn touchHLE_cpu_read_impl<T: SafeRead + Default>(
                 log.push((addr, v32));
             }
         }
-    } else if research && addr >= 0x313f0000 && addr < 0x31570000 {
+    } else if research && (0x313f0000..0x31570000).contains(&addr) {
         unsafe {
             let mut log = MHP2G_RLOG_C.lock().unwrap();
             if log.len() < 3000000 {
@@ -109,7 +109,7 @@ fn touchHLE_cpu_write_impl<T: SafeWrite>(mem: *mut touchHLE_Mem, addr: VAddr, va
     if hit && crate::save_research::enabled() {
         unsafe {
             // Split logs: main plaintext buffer writes vs ciphertext staging.
-            let main = addr >= 0x345dae0 && addr < 0x3560a20;
+            let main = (0x345dae0..0x3560a20).contains(&addr);
             let vbytes = std::slice::from_raw_parts(
                 (&value as *const T) as *const u8,
                 std::mem::size_of::<T>(),

@@ -428,7 +428,7 @@ pub fn write(
     if file.save_dump {
         crate::save_research::append("savedata_write_stream.bin", buffer_slice);
         // Dump guest memory around the write buffer to look for the plaintext.
-        let buf_addr: u32 = buffer.to_bits() as u32;
+        let buf_addr: u32 = buffer.to_bits();
         let start = buf_addr.saturating_sub(0x800000) & !0xfff;
         let size_dump = 0x1800000usize;
         let Some(pre) = env.mem.get_bytes_fallible(
@@ -462,11 +462,11 @@ pub fn write(
         // Start by reading the saved LR at the top of the current frame.
         let sp = regs[13];
         let mut lr = regs[14];
-        for depth in 0..10 {
+        for _ in 0..10 {
             if lr & 1 != 0 {
                 lr &= !1; // Thumb bit
             }
-            if lr < 0x8000 || lr >= 0x70000000 {
+            if !(0x8000..0x70000000).contains(&lr) {
                 break;
             }
             stack_trace.push_str(&format!("{:#x} <- ", lr));
@@ -484,7 +484,7 @@ pub fn write(
                     continue;
                 };
                 let cand = u32::from_le_bytes(bytes.try_into().unwrap()) & !1;
-                if cand >= 0x8000 && cand < 0x70000000 {
+                if (0x8000..0x70000000).contains(&cand) {
                     lr = cand;
                     found = true;
                     break;

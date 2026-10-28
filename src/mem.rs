@@ -508,7 +508,7 @@ impl Mem {
         // staging area (0x313f6000). CPU writes are already traced elsewhere;
         // this catches framework/native writes via mem::write.
         let waddr = ptr.to_bits();
-        if crate::save_research::enabled() && waddr >= 0x313f0000 && waddr < 0x31570000 {
+        if crate::save_research::enabled() && (0x313f0000..0x31570000).contains(&waddr) {
             let bt = std::backtrace::Backtrace::force_capture();
             crate::save_research::append(
                 "mem_write_313f.log",

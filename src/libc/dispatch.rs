@@ -253,7 +253,8 @@ fn _Block_object_dispose(env: &mut Environment, object: MutVoidPtr, flags: i32) 
     }
 }
 
-// Clang's 32-bit Block ABI: isa, forwarding, flags, size, optional keep/destroy.
+// Clang's 32-bit Block ABI: isa, forwarding, flags, size, optional
+// keep/destroy.
 // The forwarding cell is installed before calling guest helpers (which may
 // recursively capture the same cell). Never keep a State borrow across helpers.
 fn copy_byref(env: &mut Environment, original: MutVoidPtr) -> MutVoidPtr {

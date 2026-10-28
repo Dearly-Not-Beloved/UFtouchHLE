@@ -137,7 +137,8 @@ impl Discovery {
         std::thread::Builder::new()
             .name("touchHLE LAN discovery".into())
             .spawn(move || {
-                // Even unwinding drops the event sender, yielding Stopped to poll.
+                // Even unwinding drops the event sender, yielding Stopped to
+                // poll.
                 let result = run(
                     config,
                     room,
@@ -374,7 +375,8 @@ fn run(
                 let bytes = packet(room, sequence, false);
                 for target in &config.targets {
                     if let Err(e) = socket.send_to(&bytes, target) {
-                        // Deduplicate persistent errors, but let other NICs work.
+                        // Deduplicate persistent errors, but let other NICs
+                        // work.
                         let error = format!("Discovery broadcast to {target}: {e}");
                         if last_error.get(target) != Some(&e.kind()) {
                             if !emit(&tx, Event::Error(error.clone())) {

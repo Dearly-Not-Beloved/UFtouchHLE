@@ -578,8 +578,7 @@ impl Worker {
                     return;
                 }
             };
-            if len < 58
-                || len > super::MAX_UNRELIABLE_MESSAGE + 58
+            if !(58..=super::MAX_UNRELIABLE_MESSAGE + 58).contains(&len)
                 || &buffer[..8] != b"UFUD\0\x01\0\0"
             {
                 continue;

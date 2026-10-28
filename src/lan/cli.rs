@@ -190,7 +190,8 @@ fn command(line: &str) -> Result<Value, String> {
     }
 }
 
-/// Standalone CLI; requires explicit network permission and never starts a game.
+/// Standalone CLI; requires explicit network permission and never starts a
+/// game.
 pub fn run_cli(args: impl Iterator<Item = String>) -> Result<(), String> {
     let args: Vec<_> = args.collect();
     if args.is_empty() || args.iter().any(|s| s == "--help") {
