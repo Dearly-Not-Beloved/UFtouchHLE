@@ -667,8 +667,20 @@ impl Window {
         let sdl_ctx = sdl2::init().unwrap();
         let video_ctx = sdl_ctx.video().unwrap();
         if let Some(support) = support {
-            let host_size = video_ctx.display_bounds(0).ok().map(|bounds| bounds.size());
-            crate::device_profiles::apply(options, support, host_size);
+            let host = video_ctx.display_bounds(0).ok().map(|bounds| {
+                let size = bounds.size();
+                // Only Android uses the physical size (see device_profiles),
+                // and only there does SDL report the screen's own density.
+                let inches = (env::consts::OS == "android")
+                    .then(|| video_ctx.display_dpi(0).ok())
+                    .flatten()
+                    .filter(|&(diagonal_dpi, _, _)| diagonal_dpi > 0.0)
+                    .map(|(diagonal_dpi, _, _)| {
+                        (size.0 as f32).hypot(size.1 as f32) / diagonal_dpi
+                    });
+                crate::device_profiles::HostScreen { size, inches }
+            });
+            crate::device_profiles::apply(options, support, host);
         } else {
             // The app picker keeps its legacy geometry, without auto-selection.
             options.device_screen_size = Some(

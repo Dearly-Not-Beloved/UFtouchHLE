@@ -258,8 +258,10 @@ jp.co.capcom.deadrisingus: --device-model=iPhone3,1 --subpixel-offset=0.01
 com.rockstargames.gta3vc: --device-model=iPhone4,1 --retina --system-version=7.0 --touch-map-size=480,320 --disable-analog-stick-tilt-controls --stick-to-touch=25,220,80,80 --stick-touch-start-at-center --right-stick-swipe=180,100,130,100 --button-to-touch=A,447,260 --button-to-touch=B,385,260 --button-to-touch=X,447,203 --button-to-touch=Y,447,158 --button-to-touch=RightTrigger,447,203 --button-to-touch=LeftTrigger,385,260 --button-to-touch=Start,24,84 --button-to-touch=Back,24,84 --button-to-touch=LeftShoulder,450,25 --button-to-touch=RightShoulder,412,122 --button-to-touch=DPadLeft,34,260 --button-to-touch=DPadRight,92,260
 
 # Monster Hunter Portable 2nd G
-# Renders at Retina resolution when told it has a Retina display. The game
-# lists older models (e.g. iPhone1,1, the default) separately, so report an
-# iPhone 4S.
+# Renders at Retina resolution only on a model it knows has a Retina screen,
+# which automatic device selection reports when the screen is sharp enough.
 # Its local multiplayer works over the LAN, finding or hosting a room.
-jp.co.capcom.mhp2gjp: --device-model=iPhone4,1 --retina --system-version=7.0 --allow-network-access --gamekit-auto
+jp.co.capcom.mhp2gjp: --system-version=7.0 --allow-network-access --gamekit-auto
+
+# Monster Hunter Freedom Unite (P2G's Western release, same engine)
+jp.co.capcom.mhp2gwd: --system-version=7.0

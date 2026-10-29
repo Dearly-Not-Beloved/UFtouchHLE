@@ -319,7 +319,7 @@ fn handle_touches_down(env: &mut Environment, map: HashMap<FingerId, Coords>) {
 /// Letterbox bars and the expanded scene both allow a finger to move past
 /// the original screen edge. New touches retain their normal hit testing.
 fn active_touch_coords(options: &crate::options::Options, app_id: &str, (x, y): Coords) -> Coords {
-    if app_id != "jp.co.capcom.mhp2gjp" {
+    if !crate::frameworks::opengles::p2g_wide::supports(app_id) {
         return (x, y);
     }
     let (width, height) = options.device_screen_size.unwrap_or((320, 480));

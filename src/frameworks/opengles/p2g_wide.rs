@@ -3,7 +3,9 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
-//! P2G's optional wider 3D viewport with its original 16:9 UI canvas.
+//! P2G's optional wider 3D viewport with its original 16:9 UI canvas. It also
+//! works for Monster Hunter Freedom Unite, P2G's Western release, which uses
+//! the same engine.
 //! The guest keeps its original screen, renderbuffer dimensions and input
 //! coordinates. Only the host main render target and perspective viewport grow.
 
@@ -74,10 +76,18 @@ fn size(env: &mut Environment) -> Option<(id, Size, bool)> {
         s.projection.contains_key(&(share, c.program)),
     ))
 }
-/// Check several independent method entry points in the supported ARMv7 binary.
-/// No patch or projection interception is enabled for other P2G executables.
+/// Whether the app is one this supports (see [validate] for its versions).
+pub fn supports(bundle_id: &str) -> bool {
+    matches!(bundle_id, "jp.co.capcom.mhp2gjp" | "jp.co.capcom.mhp2gwd")
+}
+
+/// Check several independent method entry points in a supported ARMv7
+/// binary: `-[hxViewController setup]`,
+/// `createFramebuffer:isCreateDepthBuffer:` and `touchesBegan:withEvent:`.
+/// No patch or projection interception is enabled for other executables.
 pub fn validate(mem: &Mem) -> Result<(), String> {
-    const CHECKS: &[(u32, &[u8])] = &[
+    // P2G 1.00.02
+    const P2G: &[(u32, &[u8])] = &[
         (
             0x386978,
             &[
@@ -97,12 +107,38 @@ pub fn validate(mem: &Mem) -> Result<(), String> {
             ],
         ),
     ];
-    for &(addr, bytes) in CHECKS {
-        if mem.bytes_at(ConstPtr::from_bits(addr), bytes.len().try_into().unwrap()) != bytes {
-            return Err("P2G expanded view requires the supported 1.00.02 ARMv7 executable; disable expanded view for this IPA.".into());
-        }
+    // Monster Hunter Freedom Unite 1.00.11
+    const MHFU: &[(u32, &[u8])] = &[
+        (
+            0x38fb64,
+            &[
+                240, 181, 3, 175, 77, 248, 4, 141, 132, 176, 128, 70, 72, 242, 244, 48,
+            ],
+        ),
+        (
+            0x390064,
+            &[
+                240, 181, 3, 175, 45, 233, 0, 13, 173, 241, 16, 4, 36, 240, 15, 4,
+            ],
+        ),
+        (
+            0x3904a8,
+            &[
+                240, 181, 3, 175, 45, 233, 0, 13, 176, 176, 108, 70, 36, 240, 15, 4,
+            ],
+        ),
+    ];
+    let matches = |checks: &[(u32, &[u8])]| {
+        checks.iter().all(|&(addr, bytes)| {
+            mem.get_bytes_fallible(ConstPtr::from_bits(addr), bytes.len().try_into().unwrap())
+                == Some(bytes)
+        })
+    };
+    if matches(P2G) || matches(MHFU) {
+        Ok(())
+    } else {
+        Err("Expanded view requires the supported ARMv7 executable (P2G 1.00.02 or Freedom Unite 1.00.11); disable expanded view for this IPA.".into())
     }
-    Ok(())
 }
 /// Expand only landscape screen-sized drawable storage.
 /// Other targets stay intact.

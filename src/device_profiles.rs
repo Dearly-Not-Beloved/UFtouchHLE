@@ -95,7 +95,23 @@ pub struct DeviceSupport {
     /// Explicit large-phone point sizes from launch resources/declarations.
     pub large_phone_sizes: Vec<(u32, u32)>,
     pub family_override: Option<DeviceFamily>,
+    /// Whether the app has Retina (@2x) images, so it can use a Retina
+    /// screen rather than being scaled up.
+    pub retina_assets: bool,
 }
+
+/// What's known about the host's screen. The physical size is only given
+/// on Android, where it tells phones from tablets.
+#[derive(Clone, Copy, Debug)]
+pub struct HostScreen {
+    /// Pixels.
+    pub size: (u32, u32),
+    /// Diagonal, in inches.
+    pub inches: Option<f32>,
+}
+
+/// Hosts at least this large (diagonally) are tablets.
+const TABLET_INCHES: f32 = 7.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ResolvedDevice {
@@ -125,11 +141,16 @@ fn aspect(size: (u32, u32)) -> Option<f64> {
 
 /// Select screen shape by relative aspect-ratio difference, independent of
 /// the host's orientation. Equal shapes preserve the app's existing identity.
+///
+/// Apps with Retina images get a Retina model if the host has the pixels for
+/// it. When the host's physical size is known, phones get an iPhone and
+/// tablets an iPad (if the app supports it).
 pub fn select(
     options: &Options,
     support: &DeviceSupport,
-    host_size: Option<(u32, u32)>,
+    host: Option<HostScreen>,
 ) -> ResolvedDevice {
+    let host_size = host.map(|h| h.size);
     if let Some(manual) = profile(options.device_profile) {
         if support.families.contains(&manual.family) {
             let mut result = ResolvedDevice::from(manual);
@@ -156,29 +177,53 @@ pub fn select(
         }
     }
 
-    let allowed = |family| {
+    let supported = |family| {
         support.families.contains(&family)
             && support
                 .family_override
                 .filter(|f| support.families.contains(f))
                 .is_none_or(|f| f == family)
     };
+    // A phone or tablet only considers its own kind of device, if the app
+    // supports it: screen shape alone can't tell a 7:5 tablet from a phone.
+    let host_family = host.and_then(|h| h.inches).map(|inches| {
+        if inches >= TABLET_INCHES {
+            DeviceFamily::iPad
+        } else {
+            DeviceFamily::iPhone
+        }
+    });
+    let allowed =
+        |family| supported(family) && host_family.is_none_or(|f| f == family || !supported(f));
+    // Retina if the app has the images for it and the host has at least 1.5
+    // pixels for each of a Retina device's.
+    let auto_retina = |points: (u32, u32)| {
+        support.retina_assets
+            && host_size.is_some_and(|(w, h)| w.min(h) * 2 >= points.0.min(points.1) * 3)
+    };
+    let phone_retina = options.retina || auto_retina((320, 480));
+    let tablet_retina = options.retina || auto_retina((768, 1024));
     let baseline_family = options.device_family.unwrap_or(DeviceFamily::iPhone);
+    // Apps may only recognise a Retina screen on a model that has one.
     let phone_machine = options
         .device_model
         .filter(|m| !m.starts_with("iPad"))
-        .unwrap_or("iPhone1,1");
+        .unwrap_or(if phone_retina && !options.retina {
+            "iPhone4,1"
+        } else {
+            "iPhone1,1"
+        });
     let tablet_machine = options
         .device_model
         .filter(|m| m.starts_with("iPad"))
-        .unwrap_or(if options.retina { "iPad3,1" } else { "iPad2,1" });
+        .unwrap_or(if tablet_retina { "iPad3,1" } else { "iPad2,1" });
     let mut candidates = Vec::new();
     if allowed(DeviceFamily::iPhone) {
         candidates.push(ResolvedDevice {
             machine: phone_machine,
             family: DeviceFamily::iPhone,
             portrait_size: (320, 480),
-            scale: if options.retina { 2 } else { 1 },
+            scale: if phone_retina { 2 } else { 1 },
             compatibility_size: false,
         });
         if support.widescreen {
@@ -200,7 +245,7 @@ pub fn select(
             machine: tablet_machine,
             family: DeviceFamily::iPad,
             portrait_size: (768, 1024),
-            scale: if options.retina { 2 } else { 1 },
+            scale: if tablet_retina { 2 } else { 1 },
             compatibility_size: false,
         });
     }
@@ -227,8 +272,8 @@ pub fn select(
 
 /// Apply only resolved display properties; game-specific workarounds and
 /// emulated system-version settings are preserved.
-pub fn apply(options: &mut Options, support: &DeviceSupport, host_size: Option<(u32, u32)>) {
-    let resolved = select(options, support, host_size);
+pub fn apply(options: &mut Options, support: &DeviceSupport, host: Option<HostScreen>) {
+    let resolved = select(options, support, host);
     if options.device_profile != "auto"
         && profile(options.device_profile).is_some_and(|p| !support.families.contains(&p.family))
     {
@@ -263,12 +308,16 @@ pub fn apply(options: &mut Options, support: &DeviceSupport, host_size: Option<(
 #[cfg(test)]
 mod tests {
     use super::*;
+    pub(super) fn screen(size: (u32, u32)) -> HostScreen {
+        HostScreen { size, inches: None }
+    }
     fn support(widescreen: bool) -> DeviceSupport {
         DeviceSupport {
             families: vec![DeviceFamily::iPhone, DeviceFamily::iPad],
             widescreen,
             large_phone_sizes: Vec::new(),
             family_override: None,
+            retina_assets: false,
         }
     }
     #[test]
@@ -277,16 +326,16 @@ mod tests {
         let supported = support(true);
         for host in [(1080, 2280), (2280, 1080), (1920, 1080)] {
             assert_eq!(
-                select(&options, &supported, Some(host)).portrait_size,
+                select(&options, &supported, Some(screen(host))).portrait_size,
                 (320, 568)
             );
         }
         assert_eq!(
-            select(&options, &supported, Some((2048, 1536))).family,
+            select(&options, &supported, Some(screen((2048, 1536)))).family,
             DeviceFamily::iPad
         );
         assert_eq!(
-            select(&options, &supported, Some((1080, 1620))).portrait_size,
+            select(&options, &supported, Some(screen((1080, 1620)))).portrait_size,
             (320, 480)
         );
     }
@@ -298,11 +347,11 @@ mod tests {
         };
         let mut supported = support(false);
         supported.families = vec![DeviceFamily::iPhone];
-        let chosen = select(&options, &supported, Some((1080, 2400)));
+        let chosen = select(&options, &supported, Some(screen((1080, 2400))));
         assert_eq!(chosen.machine, "iPhone3,1");
         assert_eq!(chosen.portrait_size, (320, 480));
         options.device_profile = "iPhone6,1";
-        let chosen = select(&options, &supported, Some((1080, 2400)));
+        let chosen = select(&options, &supported, Some(screen((1080, 2400))));
         assert_eq!(chosen.machine, "iPhone6,1");
         assert!(chosen.compatibility_size);
         assert_eq!(chosen.portrait_size, (320, 480));
@@ -313,7 +362,7 @@ mod tests {
             device_profile: "iPhone6,1",
             ..Options::default()
         };
-        let chosen = select(&options, &support(true), Some((1536, 2048)));
+        let chosen = select(&options, &support(true), Some(screen((1536, 2048))));
         assert_eq!(chosen.machine, "iPhone6,1");
         assert_eq!(chosen.portrait_size, (320, 568));
         assert_eq!(chosen.scale, 2);
@@ -321,7 +370,7 @@ mod tests {
         let mut supported = support(true);
         supported.families = vec![DeviceFamily::iPhone];
         assert_eq!(
-            select(&options, &supported, Some((1080, 2400))).family,
+            select(&options, &supported, Some(screen((1080, 2400)))).family,
             DeviceFamily::iPhone
         );
     }
@@ -331,7 +380,7 @@ mod tests {
         let mut supported = support(true);
         supported.family_override = Some(DeviceFamily::iPad);
         assert_eq!(
-            select(&options, &supported, Some((1080, 2400))).family,
+            select(&options, &supported, Some(screen((1080, 2400)))).family,
             DeviceFamily::iPad
         );
         assert_eq!(
@@ -339,8 +388,45 @@ mod tests {
             (320, 480)
         );
         assert_eq!(
-            select(&options, &support(true), Some((0, 0))).portrait_size,
+            select(&options, &support(true), Some(screen((0, 0)))).portrait_size,
             (320, 480)
+        );
+    }
+    #[test]
+    fn android_hosts_pick_their_own_family_and_retina() {
+        let options = Options::default();
+        let mut supported = support(false);
+        supported.retina_assets = true;
+        // A 7:5 tablet is about as close to 3:2 as to 4:3; being a tablet
+        // decides it.
+        let tablet = HostScreen {
+            size: (2400, 3392),
+            inches: Some(9.9),
+        };
+        let chosen = select(&options, &supported, Some(tablet));
+        assert_eq!(chosen.machine, "iPad3,1");
+        assert_eq!(chosen.scale, 2);
+        let phone = HostScreen {
+            size: (1080, 2340),
+            inches: Some(6.4),
+        };
+        let chosen = select(&options, &supported, Some(phone));
+        assert_eq!((chosen.machine, chosen.scale), ("iPhone4,1", 2));
+        // Without Retina images, or the pixels for them, apps stay at 1x.
+        supported.retina_assets = false;
+        assert_eq!(select(&options, &supported, Some(phone)).scale, 1);
+        supported.retina_assets = true;
+        let small_tablet = HostScreen {
+            size: (800, 1280),
+            inches: Some(8.0),
+        };
+        let chosen = select(&options, &supported, Some(small_tablet));
+        assert_eq!((chosen.machine, chosen.scale), ("iPad2,1", 1));
+        // Phone-only apps still run on tablets.
+        supported.families = vec![DeviceFamily::iPhone];
+        assert_eq!(
+            select(&options, &supported, Some(tablet)).family,
+            DeviceFamily::iPhone
         );
     }
     #[test]
@@ -350,7 +436,7 @@ mod tests {
             system_version: "7.0".into(),
             ..Options::default()
         };
-        apply(&mut options, &support(true), Some((1080, 2400)));
+        apply(&mut options, &support(true), Some(screen((1080, 2400))));
         assert_eq!(options.system_version, "7.0");
         assert_eq!(options.device_model, Some("iPhone6,1"));
         assert_eq!(options.device_screen_size, Some((320, 568)));
@@ -359,6 +445,7 @@ mod tests {
 
 #[cfg(test)]
 mod large_phone_tests {
+    use super::tests::screen;
     use super::*;
 
     fn support(large_phone_sizes: Vec<(u32, u32)>) -> DeviceSupport {
@@ -367,6 +454,7 @@ mod large_phone_tests {
             widescreen: true,
             large_phone_sizes,
             family_override: None,
+            retina_assets: false,
         }
     }
 
@@ -381,7 +469,7 @@ mod large_phone_tests {
                 device_profile: machine,
                 ..Options::default()
             };
-            apply(&mut options, &supported, Some((1080, 2280)));
+            apply(&mut options, &supported, Some(screen((1080, 2280))));
             assert_eq!(options.device_screen_size, Some(points));
             assert_eq!(options.screen_scale(), scale);
             assert_eq!((points.0 * scale, points.1 * scale), pixels);
@@ -412,7 +500,7 @@ mod large_phone_tests {
         let options = Options::default();
         for host in [(1080, 1920), (1080, 2280), (1334, 750)] {
             assert_eq!(
-                select(&options, &supported, Some(host)).machine,
+                select(&options, &supported, Some(screen(host))).machine,
                 "iPhone5,1"
             );
         }

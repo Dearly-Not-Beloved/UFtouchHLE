@@ -378,8 +378,12 @@ impl Environment {
         log!("{:?} device family is chosen.", device_family);
         options.device_family = Some(device_family);
         if options.p2g_wide_screen {
-            if bundle.bundle_identifier() != "jp.co.capcom.mhp2gjp" {
-                return Err("Expanded P2G view is only supported for jp.co.capcom.mhp2gjp.".into());
+            if !crate::frameworks::opengles::p2g_wide::supports(bundle.bundle_identifier()) {
+                return Err(
+                    "Expanded P2G view is only supported for Monster Hunter Portable 2nd G \
+                     and Freedom Unite."
+                        .into(),
+                );
             }
             options.device_profile = "iPhone5,1";
             options.p2g_wide_width = Some(694);
@@ -389,6 +393,9 @@ impl Environment {
             widescreen: bundle.supports_widescreen(&fs),
             large_phone_sizes: bundle.large_phone_sizes(&fs),
             family_override: device_family_override,
+            retina_assets: fs
+                .enumerate(bundle.bundle_path())
+                .is_ok_and(|mut names| names.any(|name| name.contains("@2x"))),
         };
 
         let window = if options.headless {
