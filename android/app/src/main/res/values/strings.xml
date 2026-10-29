@@ -193,6 +193,47 @@
     <string name="keep_alive_channel_description">Makes Android less likely to close a running game while it’s in the background, so progress isn’t lost.</string>
     <string name="keep_alive_running">Running. In the background, the game is paused and keeps its progress.</string>
     <string name="shortcut_unsupported">Your home screen doesn’t support adding shortcuts.</string>
-    <string name="shortcut_added">Added to the home screen.</string>
     <string name="shortcut_game_missing">This game can’t be found. It may have been deleted.</string>
+    <!-- Game library -->
+    <string name="time_just_now">just now</string>
+    <plurals name="time_minutes_ago">
+        <item quantity="one">%1$d minute ago</item>
+        <item quantity="other">%1$d minutes ago</item>
+    </plurals>
+    <plurals name="time_hours_ago">
+        <item quantity="one">%1$d hour ago</item>
+        <item quantity="other">%1$d hours ago</item>
+    </plurals>
+    <plurals name="time_days_ago">
+        <item quantity="one">%1$d day ago</item>
+        <item quantity="other">%1$d days ago</item>
+    </plurals>
+    <string name="duration_minutes">%1$d min</string>
+    <string name="duration_hours">%1$d h</string>
+    <string name="duration_hours_minutes">%1$d h %2$d min</string>
+    <string name="filter_all">All</string>
+    <string name="filter_playing">Playing</string>
+    <string name="filter_completed">Completed</string>
+    <string name="filter_shelved">On hold</string>
+    <string name="filter_favorites">Favorites</string>
+    <string name="sort_title">Sort by</string>
+    <string name="sort_label">Sort: %1$s</string>
+    <string name="sort_recent">Recently played</string>
+    <string name="sort_name">Name</string>
+    <string name="sort_play_time">Play time</string>
+    <string name="filter_empty">No games here yet.</string>
+    <string name="continue_playing">Continue playing</string>
+    <string name="last_played">Last played %1$s</string>
+    <string name="never_played">Not played yet</string>
+    <string name="play_time">Played for %1$s</string>
+    <string name="favorite_add">☆ Favorite</string>
+    <string name="favorite_remove">★ Favorite</string>
+    <string name="play">Play</string>
+    <string name="library_status_label">Progress</string>
+    <string-array name="library_status">
+        <item>Not started</item>
+        <item>Playing</item>
+        <item>Completed</item>
+        <item>On hold</item>
+    </string-array>
 </resources>

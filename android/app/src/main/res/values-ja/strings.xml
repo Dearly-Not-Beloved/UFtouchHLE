@@ -177,6 +177,43 @@
     <string name="keep_alive_channel_description">バックグラウンドに切り替えたときに、実行中のゲームがシステムに終了されにくくなり、進行状況が失われにくくなります。</string>
     <string name="keep_alive_running">実行中。バックグラウンドではゲームが一時停止し、進行状況は保持されます。</string>
     <string name="shortcut_unsupported">お使いのホーム画面はショートカットの追加に対応していません。</string>
-    <string name="shortcut_added">ホーム画面に追加しました。</string>
     <string name="shortcut_game_missing">このゲームが見つかりません。削除された可能性があります。</string>
+    <string name="time_just_now">たった今</string>
+    <plurals name="time_minutes_ago">
+        <item quantity="other">%1$d 分前</item>
+    </plurals>
+    <plurals name="time_hours_ago">
+        <item quantity="other">%1$d 時間前</item>
+    </plurals>
+    <plurals name="time_days_ago">
+        <item quantity="other">%1$d 日前</item>
+    </plurals>
+    <string name="duration_minutes">%1$d 分</string>
+    <string name="duration_hours">%1$d 時間</string>
+    <string name="duration_hours_minutes">%1$d 時間 %2$d 分</string>
+    <string name="filter_all">すべて</string>
+    <string name="filter_playing">プレイ中</string>
+    <string name="filter_completed">クリア済み</string>
+    <string name="filter_shelved">中断</string>
+    <string name="filter_favorites">お気に入り</string>
+    <string name="sort_title">並べ替え</string>
+    <string name="sort_label">並べ替え：%1$s</string>
+    <string name="sort_recent">最近プレイした順</string>
+    <string name="sort_name">名前</string>
+    <string name="sort_play_time">プレイ時間</string>
+    <string name="filter_empty">ここにはまだゲームがありません</string>
+    <string name="continue_playing">続きをプレイ</string>
+    <string name="last_played">最後にプレイ：%1$s</string>
+    <string name="never_played">まだプレイしていません</string>
+    <string name="play_time">プレイ時間：%1$s</string>
+    <string name="favorite_add">☆ お気に入り</string>
+    <string name="favorite_remove">★ お気に入り済み</string>
+    <string name="play">プレイ</string>
+    <string name="library_status_label">進行状況</string>
+    <string-array name="library_status">
+        <item>未プレイ</item>
+        <item>プレイ中</item>
+        <item>クリア済み</item>
+        <item>中断</item>
+    </string-array>
 </resources>

@@ -173,6 +173,12 @@ public class LauncherActivity extends Activity {
         Bitmap icon;
         /// Box art, or one drawn from the icon (see [Posters]).
         Bitmap poster;
+        /// See [Library].
+        String key;
+        long lastPlayed;
+        long playTime;
+        boolean favorite;
+        int status;
         /// Empty if unknown.
         String bundleId;
     }
@@ -182,7 +188,11 @@ public class LauncherActivity extends Activity {
     private String saveBundleId;
     private String saveAppName;
 
+    /// Every game, and the ones shown with the library's filter and order.
+    private final List<App> allApps = new ArrayList<>();
     private final List<App> apps = new ArrayList<>();
+    private FrameLayout continueSlot;
+    private LinearLayout filterBar;
     private boolean loading = true;
     private QuickOptions quickOptions;
     private Bitmap wallpaper;
@@ -337,16 +347,14 @@ public class LauncherActivity extends Activity {
                 if (app.poster == null) {
                     app.poster = Posters.generate(app.icon);
                 }
+                loadLibraryInfo(app);
                 found.add(app);
             }
             runOnUiThread(() -> {
-                apps.clear();
-                apps.addAll(found);
+                allApps.clear();
+                allApps.addAll(found);
                 loading = false;
-                if (adapter != null) {
-                    adapter.notifyDataSetChanged();
-                }
-                updateStatus();
+                refreshLibrary();
                 fetchPosters(found);
             });
         }).start();
@@ -597,6 +605,19 @@ public class LauncherActivity extends Activity {
         content.addView(updateSlot, new LinearLayout.LayoutParams(-1, -2));
         showUpdateBanner();
 
+        continueSlot = new FrameLayout(this);
+        content.addView(continueSlot, new LinearLayout.LayoutParams(-1, -2));
+        android.widget.HorizontalScrollView filterScroll =
+            new android.widget.HorizontalScrollView(this);
+        filterScroll.setHorizontalScrollBarEnabled(false);
+        filterBar = new LinearLayout(this);
+        filterBar.setOrientation(LinearLayout.HORIZONTAL);
+        filterBar.setGravity(Gravity.CENTER_VERTICAL);
+        filterScroll.addView(filterBar);
+        LinearLayout.LayoutParams filterParams = new LinearLayout.LayoutParams(-1, -2);
+        filterParams.topMargin = dp(12);
+        content.addView(filterScroll, filterParams);
+
         View divider = new View(this);
         divider.setBackgroundColor(0x33FFFFFF);
         LinearLayout.LayoutParams dividerParams = new LinearLayout.LayoutParams(-1, dp(1));
@@ -623,7 +644,7 @@ public class LauncherActivity extends Activity {
         grid.setAdapter(adapter);
         grid.setOnItemClickListener((parent, view, position, id) -> launch(apps.get(position)));
         grid.setOnItemLongClickListener((parent, view, position, id) -> {
-            showAppMenu(apps.get(position));
+            showDetails(apps.get(position));
             return true;
         });
         middle.addView(grid, new FrameLayout.LayoutParams(-1, -1));
@@ -652,7 +673,7 @@ public class LauncherActivity extends Activity {
         content.addView(version, new LinearLayout.LayoutParams(-1, -2));
 
         setContentView(root);
-        updateStatus();
+        refreshLibrary();
     }
 
     private void updateStatus() {
@@ -664,10 +685,303 @@ public class LauncherActivity extends Activity {
         if (loading) {
             statusText.setText(R.string.loading_games);
             importBigButton.setVisibility(View.GONE);
-        } else {
+        } else if (allApps.isEmpty()) {
             statusText.setText(R.string.no_games);
             importBigButton.setVisibility(View.VISIBLE);
+        } else {
+            statusText.setText(R.string.filter_empty);
+            importBigButton.setVisibility(View.GONE);
         }
+    }
+
+    // ---- Library ----
+
+    private static final String[] FILTERS = {"all", "playing", "completed", "shelved", "favorites"};
+    private static final String[] SORTS = {"recent", "name", "playTime"};
+
+    /// Reads what the library knows about a game. Off the UI thread is fine.
+    private void loadLibraryInfo(App app) {
+        app.key = Library.key(app.bundleId, app.path);
+        app.lastPlayed = Library.lastPlayed(this, app.key);
+        app.playTime = Library.playTime(getBaseDir(), app.key);
+        app.favorite = Library.favorite(this, app.key);
+        app.status = Library.status(this, app.key);
+    }
+
+    private static boolean matchesFilter(App app, String filter) {
+        switch (filter) {
+            case "playing":
+                return app.status == Library.STATUS_PLAYING;
+            case "completed":
+                return app.status == Library.STATUS_COMPLETED;
+            case "shelved":
+                return app.status == Library.STATUS_SHELVED;
+            case "favorites":
+                return app.favorite;
+            default:
+                return true;
+        }
+    }
+
+    /// Shows the games with the chosen filter and order: favourites first,
+    /// then by when they were last played (games not played yet last), name
+    /// or play time.
+    private void refreshLibrary() {
+        String filter = Library.filter(this);
+        String sort = Library.sortMode(this);
+        final java.text.Collator collator = java.text.Collator.getInstance();
+        List<App> shown = new ArrayList<>();
+        for (App app : allApps) {
+            if (matchesFilter(app, filter)) {
+                shown.add(app);
+            }
+        }
+        java.util.Collections.sort(shown, (a, b) -> {
+            if (a.favorite != b.favorite) {
+                return a.favorite ? -1 : 1;
+            }
+            int order = 0;
+            if ("recent".equals(sort)) {
+                order = Long.compare(b.lastPlayed, a.lastPlayed);
+            } else if ("playTime".equals(sort)) {
+                order = Long.compare(b.playTime, a.playTime);
+            }
+            return order != 0 ? order : collator.compare(a.name, b.name);
+        });
+        apps.clear();
+        apps.addAll(shown);
+        if (adapter != null) {
+            adapter.notifyDataSetChanged();
+        }
+        updateStatus();
+        showFilterBar();
+        showContinueBanner();
+    }
+
+    private String[] filterTitles() {
+        return new String[]{getString(R.string.filter_all), getString(R.string.filter_playing),
+            getString(R.string.filter_completed), getString(R.string.filter_shelved),
+            getString(R.string.filter_favorites)};
+    }
+
+    private String[] sortTitles() {
+        return new String[]{getString(R.string.sort_recent), getString(R.string.sort_name),
+            getString(R.string.sort_play_time)};
+    }
+
+    private void showFilterBar() {
+        if (filterBar == null) {
+            return;
+        }
+        filterBar.removeAllViews();
+        String filter = Library.filter(this);
+        String[] titles = filterTitles();
+        for (int i = 0; i < FILTERS.length; i++) {
+            final String value = FILTERS[i];
+            boolean on = value.equals(filter);
+            TextView chip = makeText(titles[i], 14, TEXT, on);
+            chip.setGravity(Gravity.CENTER);
+            chip.setPadding(dp(14), 0, dp(14), 0);
+            chip.setBackground(buttonBackground(on ? ACCENT : 0x2EFFFFFF, dp(17)));
+            chip.setOnClickListener(v -> {
+                Library.setFilter(this, value);
+                refreshLibrary();
+            });
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-2, dp(34));
+            params.rightMargin = dp(8);
+            filterBar.addView(chip, params);
+        }
+        int sort = java.util.Arrays.asList(SORTS).indexOf(Library.sortMode(this));
+        TextView sortChip = makeText(
+            getString(R.string.sort_label, sortTitles()[Math.max(sort, 0)]), 14, TEXT, false);
+        sortChip.setGravity(Gravity.CENTER);
+        sortChip.setPadding(dp(14), 0, dp(14), 0);
+        sortChip.setBackground(buttonBackground(0x2EFFFFFF, dp(17)));
+        sortChip.setOnClickListener(v -> new AlertDialog.Builder(
+                this, android.R.style.Theme_Material_Dialog_Alert)
+            .setTitle(R.string.sort_title)
+            .setSingleChoiceItems(sortTitles(), Math.max(sort, 0), (dialog, which) -> {
+                Library.setSortMode(this, SORTS[which]);
+                dialog.dismiss();
+                refreshLibrary();
+            })
+            .show());
+        filterBar.addView(sortChip, new LinearLayout.LayoutParams(-2, dp(34)));
+    }
+
+    /// "3 days ago · 12 h", or empty for a game not played yet.
+    private String playedText(App app) {
+        if (app.lastPlayed == 0) {
+            return "";
+        }
+        String text = Library.ago(this, app.lastPlayed);
+        return app.playTime > 0 ? text + " · " + Library.duration(this, app.playTime) : text;
+    }
+
+    /// A banner for going back to the game played last. Phones in landscape
+    /// don't have the room for it.
+    private void showContinueBanner() {
+        if (continueSlot == null) {
+            return;
+        }
+        continueSlot.removeAllViews();
+        boolean phone = getResources().getConfiguration().smallestScreenWidthDp < 600;
+        if (phone && isLandscape()) {
+            return;
+        }
+        App last = null;
+        for (App app : allApps) {
+            if (app.lastPlayed > 0 && (last == null || app.lastPlayed > last.lastPlayed)) {
+                last = app;
+            }
+        }
+        if (last == null) {
+            return;
+        }
+        final App app = last;
+        LinearLayout banner = new LinearLayout(this);
+        banner.setOrientation(LinearLayout.HORIZONTAL);
+        banner.setGravity(Gravity.CENTER_VERTICAL);
+        banner.setPadding(dp(10), dp(10), dp(14), dp(10));
+        banner.setBackground(buttonBackground(0x26FFFFFF, dp(14)));
+        banner.setOnClickListener(v -> launch(app));
+        ImageView poster = new ImageView(this);
+        poster.setImageBitmap(app.poster);
+        poster.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        GradientDrawable shape = new GradientDrawable();
+        shape.setCornerRadius(dp(8));
+        poster.setBackground(shape);
+        poster.setClipToOutline(true);
+        banner.addView(poster, new LinearLayout.LayoutParams(dp(54), dp(72)));
+        LinearLayout texts = new LinearLayout(this);
+        texts.setOrientation(LinearLayout.VERTICAL);
+        texts.setPadding(dp(14), 0, dp(10), 0);
+        texts.addView(makeText(getString(R.string.continue_playing), 12, TEXT_DIM, false));
+        TextView name = makeText(app.name, 17, TEXT, true);
+        name.setSingleLine(true);
+        name.setEllipsize(TextUtils.TruncateAt.END);
+        texts.addView(name);
+        texts.addView(makeText(playedText(app), 13, TEXT_DIM, false));
+        banner.addView(texts, new LinearLayout.LayoutParams(0, -2, 1));
+        TextView play = makeText("▶", 20, TEXT, true);
+        play.setGravity(Gravity.CENTER);
+        play.setBackground(buttonBackground(ACCENT, dp(22)));
+        banner.addView(play, new LinearLayout.LayoutParams(dp(44), dp(44)));
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(-1, -2);
+        params.topMargin = dp(14);
+        continueSlot.addView(banner, params);
+    }
+
+    private int statusColor(int status) {
+        switch (status) {
+            case Library.STATUS_PLAYING:
+                return ACCENT;
+            case Library.STATUS_COMPLETED:
+                return 0xFF2E9E5B;
+            case Library.STATUS_SHELVED:
+                return 0xFF6B7280;
+            default:
+                return 0;
+        }
+    }
+
+    /**
+     * A game's page: its poster, play time, progress and favourite, and
+     * everything that can be done with it.
+     */
+    private void showDetails(final App app) {
+        final Dialog dialog = new Dialog(this, android.R.style.Theme_Material_NoActionBar_Fullscreen);
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        int pad = dp(20);
+        layout.setPadding(pad, pad, pad, pad);
+
+        LinearLayout bar = new LinearLayout(this);
+        bar.setGravity(Gravity.CENTER_VERTICAL);
+        TextView title = makeText(app.name, 22, TEXT, true);
+        title.setSingleLine(true);
+        title.setEllipsize(TextUtils.TruncateAt.END);
+        bar.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
+        bar.addView(makeButton(getString(R.string.close), false, v -> dialog.dismiss()),
+            new LinearLayout.LayoutParams(-2, dp(40)));
+        layout.addView(bar);
+
+        LinearLayout top = new LinearLayout(this);
+        top.setOrientation(LinearLayout.HORIZONTAL);
+        top.setPadding(0, dp(16), 0, 0);
+        ImageView poster = new ImageView(this);
+        poster.setImageBitmap(app.poster);
+        poster.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        GradientDrawable shape = new GradientDrawable();
+        shape.setCornerRadius(dp(10));
+        poster.setBackground(shape);
+        poster.setClipToOutline(true);
+        top.addView(poster, new LinearLayout.LayoutParams(dp(138),
+            dp(138) * Posters.HEIGHT / Posters.WIDTH));
+        LinearLayout info = new LinearLayout(this);
+        info.setOrientation(LinearLayout.VERTICAL);
+        info.setPadding(dp(18), 0, 0, 0);
+        TextView lastPlayed = makeText(app.lastPlayed > 0
+            ? getString(R.string.last_played, Library.ago(this, app.lastPlayed))
+            : getString(R.string.never_played), 15, TEXT, false);
+        info.addView(lastPlayed);
+        if (app.playTime > 0) {
+            TextView playTime = makeText(
+                getString(R.string.play_time, Library.duration(this, app.playTime)),
+                15, TEXT, false);
+            playTime.setPadding(0, dp(6), 0, 0);
+            info.addView(playTime);
+        }
+        final TextView favorite = makeButton("", false, null);
+        Runnable showFavorite = () -> favorite.setText(app.favorite
+            ? R.string.favorite_remove : R.string.favorite_add);
+        showFavorite.run();
+        favorite.setOnClickListener(v -> {
+            app.favorite = !app.favorite;
+            Library.setFavorite(this, app.key, app.favorite);
+            showFavorite.run();
+            refreshLibrary();
+        });
+        LinearLayout.LayoutParams favoriteParams = new LinearLayout.LayoutParams(-2, dp(40));
+        favoriteParams.topMargin = dp(14);
+        info.addView(favorite, favoriteParams);
+        top.addView(info, new LinearLayout.LayoutParams(0, -2, 1));
+        layout.addView(top);
+
+        LinearLayout.LayoutParams playParams = new LinearLayout.LayoutParams(-1, dp(50));
+        playParams.topMargin = dp(18);
+        layout.addView(makeButton(getString(R.string.play), true, v -> {
+            dialog.dismiss();
+            launch(app);
+        }), playParams);
+
+        addSegments(layout, getString(R.string.library_status_label),
+            getResources().getStringArray(R.array.library_status), app.status, i -> {
+                app.status = i;
+                Library.setStatus(this, app.key, i);
+                refreshLibrary();
+            });
+
+        List<String> items = new ArrayList<>();
+        List<Runnable> actions = new ArrayList<>();
+        appActions(app, items, actions);
+        for (int i = 0; i < items.size(); i++) {
+            final Runnable action = actions.get(i);
+            TextView button = makeButton(items.get(i), false, v -> {
+                dialog.dismiss();
+                action.run();
+            });
+            button.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, dp(46));
+            params.topMargin = dp(i == 0 ? 18 : 8);
+            layout.addView(button, params);
+        }
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.setBackgroundColor(0xFF15192E);
+        scroll.addView(layout);
+        dialog.setContentView(scroll);
+        dialog.show();
     }
 
     private class AppAdapter extends BaseAdapter {
@@ -689,16 +1003,14 @@ public class LauncherActivity extends Activity {
         @Override
         public View getView(int position, View convertView, ViewGroup parent) {
             LinearLayout item;
-            ImageView poster;
-            TextView name;
             if (convertView instanceof LinearLayout) {
                 item = (LinearLayout) convertView;
-                poster = (ImageView) item.getChildAt(0);
-                name = (TextView) item.getChildAt(1);
             } else {
                 item = new LinearLayout(LauncherActivity.this);
                 item.setOrientation(LinearLayout.VERTICAL);
-                poster = new PosterView(LauncherActivity.this);
+                FrameLayout frame = new FrameLayout(LauncherActivity.this);
+                frame.setClipChildren(false);
+                ImageView poster = new PosterView(LauncherActivity.this);
                 poster.setScaleType(ImageView.ScaleType.CENTER_CROP);
                 GradientDrawable shape = new GradientDrawable();
                 shape.setColor(0x40FFFFFF);
@@ -709,8 +1021,25 @@ public class LauncherActivity extends Activity {
                 // Ripple on top of the picture when pressed.
                 poster.setForeground(new RippleDrawable(
                     ColorStateList.valueOf(0x40FFFFFF), null, shape));
-                item.addView(poster, new LinearLayout.LayoutParams(-1, -2));
-                name = makeText("", 13, TEXT, false);
+                frame.addView(poster, new FrameLayout.LayoutParams(-1, -2));
+                // Progress, top left, and favourite, top right.
+                TextView status = makeText("", 11, TEXT, true);
+                status.setPadding(dp(7), dp(2), dp(7), dp(2));
+                status.setElevation(dp(5));
+                FrameLayout.LayoutParams statusParams = new FrameLayout.LayoutParams(-2, -2,
+                    Gravity.TOP | Gravity.START);
+                statusParams.setMargins(dp(6), dp(6), 0, 0);
+                frame.addView(status, statusParams);
+                TextView star = makeText("★", 18, 0xFFFFD34D, true);
+                star.setShadowLayer(dp(3), 0, dp(1), 0xCC000000);
+                star.setElevation(dp(5));
+                FrameLayout.LayoutParams starParams = new FrameLayout.LayoutParams(-2, -2,
+                    Gravity.TOP | Gravity.END);
+                starParams.setMargins(0, dp(2), dp(7), 0);
+                frame.addView(star, starParams);
+                item.addView(frame, new LinearLayout.LayoutParams(-1, -2));
+
+                TextView name = makeText("", 13, TEXT, false);
                 name.setGravity(Gravity.CENTER);
                 name.setSingleLine(true);
                 name.setEllipsize(TextUtils.TruncateAt.END);
@@ -718,10 +1047,31 @@ public class LauncherActivity extends Activity {
                 LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
                 params.topMargin = dp(6);
                 item.addView(name, params);
+                // Always present, so cards in a row line up.
+                TextView played = makeText("", 11, TEXT_DIM, false);
+                played.setGravity(Gravity.CENTER);
+                played.setSingleLine(true);
+                played.setEllipsize(TextUtils.TruncateAt.END);
+                item.addView(played, new LinearLayout.LayoutParams(-1, -2));
             }
+            FrameLayout frame = (FrameLayout) item.getChildAt(0);
+            ImageView poster = (ImageView) frame.getChildAt(0);
+            TextView status = (TextView) frame.getChildAt(1);
+            TextView star = (TextView) frame.getChildAt(2);
+            TextView name = (TextView) item.getChildAt(1);
+            TextView played = (TextView) item.getChildAt(2);
             App app = apps.get(position);
             poster.setImageBitmap(app.poster);
+            int color = statusColor(app.status);
+            status.setVisibility(color != 0 ? View.VISIBLE : View.GONE);
+            if (color != 0) {
+                status.setText(getResources().getStringArray(R.array.library_status)[app.status]);
+                status.setBackground(buttonBackground(color, dp(8)));
+            }
+            star.setVisibility(app.favorite ? View.VISIBLE : View.GONE);
             name.setText(app.name);
+            String text = playedText(app);
+            played.setText(text.isEmpty() ? " " : text);
             return item;
         }
     }
@@ -767,14 +1117,18 @@ public class LauncherActivity extends Activity {
         if (audioMode != null) {
             args.add("--audio-test=" + audioMode);
         }
+        if (app.key == null) {
+            app.key = Library.key(app.bundleId, app.path);
+        }
+        Library.started(this, app.key);
         Intent intent = new Intent(this, MainActivity.class);
         intent.putExtra(MainActivity.EXTRA_ARGS, args.toArray(new String[0]));
+        intent.putExtra(MainActivity.EXTRA_LIBRARY_KEY, app.key);
         startActivity(intent);
     }
 
-    private void showAppMenu(final App app) {
-        final List<String> items = new ArrayList<>();
-        final List<Runnable> actions = new ArrayList<>();
+    /// What can be done with a game, as titles and actions.
+    private void appActions(final App app, List<String> items, List<Runnable> actions) {
         // Saves need to know which game they belong to.
         final boolean identified = app.bundleId != null && !app.bundleId.isEmpty();
         final Runnable unidentified = () ->
@@ -803,10 +1157,6 @@ public class LauncherActivity extends Activity {
             items.add(getString(R.string.menu_p2g_layout));
             actions.add(() -> showP2GViewOptions(app));
         }
-        new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
-            .setTitle(app.name)
-            .setItems(items.toArray(new String[0]), (dialog, which) -> actions.get(which).run())
-            .show();
     }
 
     // ---- Home screen shortcuts ----

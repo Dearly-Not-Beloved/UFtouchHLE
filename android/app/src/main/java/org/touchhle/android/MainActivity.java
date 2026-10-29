@@ -26,6 +26,8 @@ import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 
+import java.io.File;
+
 import org.libsdl.app.SDLActivity;
 
 /**
@@ -38,6 +40,11 @@ public class MainActivity extends SDLActivity {
      * set by LauncherActivity.
      */
     public static final String EXTRA_ARGS = "org.touchhle.android.ARGS";
+    /** The game's key in the launcher's library, for counting play time. */
+    public static final String EXTRA_LIBRARY_KEY = "org.touchhle.android.LIBRARY_KEY";
+
+    /// When the game last came to the foreground, or 0 while it's not there.
+    private long resumedAt;
 
     /// Lets the local multiplayer see other players' rooms: many devices drop
     /// broadcast packets to save power unless an app asks for them.
@@ -165,6 +172,7 @@ public class MainActivity extends SDLActivity {
         if (isFinishing()) {
             return;
         }
+        resumedAt = SystemClock.elapsedRealtime();
         hideSystemBars();
         // Started while touchHLE is in the foreground, since Android doesn't
         // allow starting foreground services from the background.
@@ -180,6 +188,20 @@ public class MainActivity extends SDLActivity {
     // quitting (e.g. Grand Theft Auto: Vice City), and waiting longer just
     // keeps the game on screen.
     private static final long QUIT_TIMEOUT_MS = 2000;
+
+    @Override
+    protected void onPause() {
+        // touchHLE pauses the game while it's in the background, so only
+        // foreground time is play time.
+        String key = getIntent() != null ? getIntent().getStringExtra(EXTRA_LIBRARY_KEY) : null;
+        if (key != null && resumedAt != 0) {
+            File dir = getExternalFilesDir(null);
+            Library.addPlayTime(dir != null ? dir : getFilesDir(), key,
+                (SystemClock.elapsedRealtime() - resumedAt) / 1000);
+        }
+        resumedAt = 0;
+        super.onPause();
+    }
 
     @Override
     protected void onDestroy() {

@@ -177,6 +177,43 @@
     <string name="keep_alive_channel_description">切到背景時，讓系統不容易關閉正在執行的遊戲，以免遺失進度。</string>
     <string name="keep_alive_running">執行中。切到背景時遊戲會暫停並保留進度。</string>
     <string name="shortcut_unsupported">你的主畫面不支援加入捷徑。</string>
-    <string name="shortcut_added">已加入主畫面。</string>
     <string name="shortcut_game_missing">找不到這個遊戲，可能已經被刪除了。</string>
+    <string name="time_just_now">剛剛</string>
+    <plurals name="time_minutes_ago">
+        <item quantity="other">%1$d 分鐘前</item>
+    </plurals>
+    <plurals name="time_hours_ago">
+        <item quantity="other">%1$d 小時前</item>
+    </plurals>
+    <plurals name="time_days_ago">
+        <item quantity="other">%1$d 天前</item>
+    </plurals>
+    <string name="duration_minutes">%1$d 分鐘</string>
+    <string name="duration_hours">%1$d 小時</string>
+    <string name="duration_hours_minutes">%1$d 小時 %2$d 分</string>
+    <string name="filter_all">全部</string>
+    <string name="filter_playing">在玩</string>
+    <string name="filter_completed">已破關</string>
+    <string name="filter_shelved">擱置</string>
+    <string name="filter_favorites">收藏</string>
+    <string name="sort_title">排序方式</string>
+    <string name="sort_label">排序：%1$s</string>
+    <string name="sort_recent">最近遊玩</string>
+    <string name="sort_name">名稱</string>
+    <string name="sort_play_time">遊玩時長</string>
+    <string name="filter_empty">這個分類裡還沒有遊戲</string>
+    <string name="continue_playing">繼續遊戲</string>
+    <string name="last_played">上次遊玩：%1$s</string>
+    <string name="never_played">還沒玩過</string>
+    <string name="play_time">遊玩時長：%1$s</string>
+    <string name="favorite_add">☆ 收藏</string>
+    <string name="favorite_remove">★ 已收藏</string>
+    <string name="play">開始遊戲</string>
+    <string name="library_status_label">進度</string>
+    <string-array name="library_status">
+        <item>未開始</item>
+        <item>在玩</item>
+        <item>已破關</item>
+        <item>擱置</item>
+    </string-array>
 </resources>
