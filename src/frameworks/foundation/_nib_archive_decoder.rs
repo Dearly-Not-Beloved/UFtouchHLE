@@ -10,7 +10,7 @@
 //! - [NibArchive File Format](https://github.com/matsmattsson/nibsqueeze/blob/master/NibArchive.md)
 
 use crate::environment::Environment;
-use crate::frameworks::core_graphics::{CGPoint, CGRect, CGSize};
+use crate::frameworks::core_graphics::{CGFloat, CGPoint, CGRect, CGSize};
 use crate::frameworks::foundation::ns_string::{from_rust_string, get_static_str, to_rust_string};
 use crate::frameworks::foundation::{NSInteger, NSUInteger};
 use crate::mem::ConstVoidPtr;
@@ -181,9 +181,7 @@ pub const CLASSES: ClassExports = objc_classes! {
     let ValueVariant::Data(data) = val.value() else {
         unreachable!()
     };
-    assert_eq!(6, data[0]);
-    let x = f32::from_le_bytes(data[1..5].try_into().unwrap());
-    let y = f32::from_le_bytes(data[5..9].try_into().unwrap());
+    let [x, y] = decode_geometry(data);
     log_dbg!("decoded CGPoint {} {}", x, y);
     CGPoint { x, y }
 }
@@ -192,11 +190,7 @@ pub const CLASSES: ClassExports = objc_classes! {
     let ValueVariant::Data(data) = val.value() else {
         unreachable!()
     };
-    assert_eq!(6, data[0]);
-    let x = f32::from_le_bytes(data[1..5].try_into().unwrap());
-    let y = f32::from_le_bytes(data[5..9].try_into().unwrap());
-    let width = f32::from_le_bytes(data[9..13].try_into().unwrap());
-    let height = f32::from_le_bytes(data[13..17].try_into().unwrap());
+    let [x, y, width, height] = decode_geometry(data);
     log_dbg!("decoded CGRect {} {} {} {}", x, y, width, height);
     CGRect {
         origin: CGPoint { x, y },
@@ -207,6 +201,36 @@ pub const CLASSES: ClassExports = objc_classes! {
 @end
 
 };
+
+/// Decodes the numbers of a geometry value (e.g. a CGRect): a type byte, then
+/// the numbers as 32-bit floats (type 6) or, in NIBs from later Xcode
+/// versions, 64-bit floats (type 7).
+fn decode_geometry<const N: usize>(data: &[u8]) -> [CGFloat; N] {
+    match data[0] {
+        6 => {
+            std::array::from_fn(|i| f32::from_le_bytes(data[1 + i * 4..][..4].try_into().unwrap()))
+        }
+        7 => std::array::from_fn(|i| {
+            f64::from_le_bytes(data[1 + i * 8..][..8].try_into().unwrap()) as CGFloat
+        }),
+        other => panic!("Unknown NIB geometry type {other}"),
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn test_decode_geometry() {
+    let mut floats = vec![6];
+    for v in [1.5f32, -2.0] {
+        floats.extend_from_slice(&v.to_le_bytes());
+    }
+    assert_eq!(decode_geometry::<2>(&floats), [1.5, -2.0]);
+    let mut doubles = vec![7];
+    for v in [0.0f64, 20.0, 320.0, 460.0] {
+        doubles.extend_from_slice(&v.to_le_bytes());
+    }
+    assert_eq!(decode_geometry::<4>(&doubles), [0.0, 20.0, 320.0, 460.0]);
+}
 
 fn borrow_host_obj(env: &mut Environment, unarchiver: id) -> &mut NIBArchiveDecoderHostObject {
     env.objc.borrow_mut(unarchiver)
