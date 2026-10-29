@@ -707,10 +707,8 @@ public class LauncherActivity extends Activity {
                 poster.setClipToOutline(true);
                 poster.setElevation(dp(4));
                 // Ripple on top of the picture when pressed.
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    poster.setForeground(new RippleDrawable(
-                        ColorStateList.valueOf(0x40FFFFFF), null, shape));
-                }
+                poster.setForeground(new RippleDrawable(
+                    ColorStateList.valueOf(0x40FFFFFF), null, shape));
                 item.addView(poster, new LinearLayout.LayoutParams(-1, -2));
                 name = makeText("", 13, TEXT, false);
                 name.setGravity(Gravity.CENTER);
@@ -820,7 +818,6 @@ public class LauncherActivity extends Activity {
     private static final String EXTRA_BUNDLE_ID = "org.touchhle.android.BUNDLE_ID";
     private static final String EXTRA_APP_NAME = "org.touchhle.android.APP_NAME";
 
-    @SuppressWarnings("deprecation")
     private void addShortcut(App app) {
         Intent play = new Intent(this, LauncherActivity.class)
             .setAction(ACTION_PLAY)
@@ -828,30 +825,21 @@ public class LauncherActivity extends Activity {
             .putExtra(EXTRA_BUNDLE_ID, app.bundleId)
             .putExtra(EXTRA_APP_NAME, app.name);
         Bitmap icon = app.icon != null ? app.icon : app.poster;
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            android.content.pm.ShortcutManager manager =
-                getSystemService(android.content.pm.ShortcutManager.class);
-            if (manager == null || !manager.isRequestPinShortcutSupported()) {
-                Toast.makeText(this, R.string.shortcut_unsupported, Toast.LENGTH_LONG).show();
-                return;
-            }
-            String id = "game:" + (app.bundleId.isEmpty() ? app.path : app.bundleId);
-            android.content.pm.ShortcutInfo info =
-                new android.content.pm.ShortcutInfo.Builder(this, id)
-                    .setShortLabel(app.name)
-                    .setIcon(android.graphics.drawable.Icon.createWithBitmap(icon))
-                    .setIntent(play)
-                    .build();
-            // The home screen asks for confirmation and says when it's added.
-            manager.requestPinShortcut(info, null);
-        } else {
-            Intent install = new Intent("com.android.launcher.action.INSTALL_SHORTCUT")
-                .putExtra(Intent.EXTRA_SHORTCUT_INTENT, play)
-                .putExtra(Intent.EXTRA_SHORTCUT_NAME, app.name)
-                .putExtra(Intent.EXTRA_SHORTCUT_ICON, icon);
-            sendBroadcast(install);
-            Toast.makeText(this, R.string.shortcut_added, Toast.LENGTH_SHORT).show();
+        android.content.pm.ShortcutManager manager =
+            getSystemService(android.content.pm.ShortcutManager.class);
+        if (manager == null || !manager.isRequestPinShortcutSupported()) {
+            Toast.makeText(this, R.string.shortcut_unsupported, Toast.LENGTH_LONG).show();
+            return;
         }
+        String id = "game:" + (app.bundleId.isEmpty() ? app.path : app.bundleId);
+        android.content.pm.ShortcutInfo info =
+            new android.content.pm.ShortcutInfo.Builder(this, id)
+                .setShortLabel(app.name)
+                .setIcon(android.graphics.drawable.Icon.createWithBitmap(icon))
+                .setIntent(play)
+                .build();
+        // The home screen asks for confirmation and says when it's added.
+        manager.requestPinShortcut(info, null);
     }
 
     /**

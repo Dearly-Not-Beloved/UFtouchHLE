@@ -7,7 +7,6 @@ package org.touchhle.android;
 
 import android.content.Context;
 import android.content.res.Configuration;
-import android.os.Build;
 import android.os.LocaleList;
 
 import java.util.Locale;
@@ -76,18 +75,12 @@ final class Languages {
         }
         Configuration config = new Configuration(base.getResources().getConfiguration());
         Locale locale = withRegion(Locale.forLanguageTag(tag), systemRegion(config));
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            config.setLocales(new LocaleList(locale));
-        } else {
-            config.setLocale(locale);
-        }
+        config.setLocales(new LocaleList(locale));
         return base.createConfigurationContext(config);
     }
 
-    @SuppressWarnings("deprecation")
     private static String systemRegion(Configuration config) {
-        Locale locale = Build.VERSION.SDK_INT >= Build.VERSION_CODES.N
-            ? config.getLocales().get(0) : config.locale;
+        Locale locale = config.getLocales().get(0);
         return locale != null ? locale.getCountry() : "";
     }
 
@@ -123,13 +116,9 @@ final class Languages {
         if (!tag.isEmpty()) {
             result.append(Locale.forLanguageTag(tag).getLanguage());
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            LocaleList locales = LocaleList.getDefault();
-            for (int i = 0; i < locales.size(); i++) {
-                appendLanguage(result, locales.get(i).getLanguage());
-            }
-        } else {
-            appendLanguage(result, Locale.getDefault().getLanguage());
+        LocaleList locales = LocaleList.getDefault();
+        for (int i = 0; i < locales.size(); i++) {
+            appendLanguage(result, locales.get(i).getLanguage());
         }
         return result.toString();
     }

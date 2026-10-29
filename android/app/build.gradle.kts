@@ -65,11 +65,11 @@ android {
         buildConfigField("int", "APP_ICON", join("R.drawable.icon", "_", branding.lowercase()))
         versionName = getTouchHLEVersionName()
 
-        minSdk = 21 // first version with AArch64
+        minSdk = 29 // Android 10
         targetSdk = 31
         externalNativeBuild {
             ndkBuild {
-                arguments("APP_PLATFORM=android-21")
+                arguments("APP_PLATFORM=android-29")
                 // abiFilters 'armeabi-v7a', 'arm64-v8a', 'x86', 'x86_64'
                 // Only 'arm64-v8a' and 'x86_64' are supported by dynarmic
                 // and hence touchHLE. The 'x86_64' build works, but the main
@@ -178,6 +178,8 @@ android {
 cargoNdk {
     // Make sure this matches the android abiFilters above.
     targets = arrayListOf("arm64")
+    // Must match minSdk above.
+    apiLevel = 29
     module = ".."
     librariesNames = arrayListOf("libtouchHLE.so", "libSDL2.so", "libc++_shared.so")
     extraCargoEnv = mapOf(
