@@ -23,6 +23,7 @@
     <string name="no_share_app">共有できるアプリがありません。</string>
     <string name="no_file_picker">システムのファイル選択画面を開けませんでした。</string>
 
+    <string name="menu_add_to_home">ホーム画面に追加</string>
     <string name="menu_import_save">セーブを読み込む</string>
     <string name="menu_export_save">セーブを書き出す</string>
     <string name="menu_delete_game">ゲームを削除</string>
@@ -32,7 +33,7 @@
     <string name="menu_p2g_layout">画面とボタンの配置</string>
     <string name="unknown_game_saves">このゲームを識別できないため、セーブを扱えません。</string>
 
-    <string name="p2g_layout_title">P2G の画面とボタンの配置</string>
+    <string name="p2g_layout_title">%1$s：画面とボタンの配置</string>
     <string name="p2g_standard">標準の画面</string>
     <string name="p2g_wide">ワイド表示 · ボタンは中央の 16:9 配置のまま</string>
 
@@ -75,14 +76,12 @@
     <string name="device_profile_global">全体：%1$s</string>
     <string name="device_profile_this_game">このゲーム：%1$s</string>
     <string name="device_profile_use_global">全体の設定を使う（%1$s）</string>
-    <string name="device_profile_hint">「自動」は画面の縦横比で選びます。その画面に対応しないゲームは互換サイズになります。</string>
+    <string name="device_profile_hint">「自動」はタブレットでは iPad、スマートフォンでは iPhone を選び（ゲームが対応していれば）、画面比率に近いサイズにして、ゲームに高画質の画像があれば Retina 機種にします。その画面に対応しないゲームは互換サイズになります。iPhone 6 より前のゲームは、iPhone 6 / 6 Plus を選んでも実機と同じく iPhone 5 のサイズで表示されます。</string>
     <string-array name="device_profile_labels">
         <item>自動</item>
         <item>iPhone 3GS（480×320）</item>
-        <item>iPhone 4（960×640）</item>
-        <item>iPhone 4S（960×640）</item>
-        <item>iPhone 5（1136×640）</item>
-        <item>iPhone 5s（1136×640）</item>
+        <item>iPhone 4 / 4S（960×640）</item>
+        <item>iPhone 5 / 5s（1136×640）</item>
         <item>iPhone 6（1334×750）</item>
         <item>iPhone 6 Plus（2208×1242）</item>
         <item>iPad 2（1024×768）</item>
@@ -121,6 +120,7 @@
     <string name="option_tilt_controls">スティックで傾きセンサーを再現</string>
     <string name="option_network">ゲームのネットワーク接続を許可</string>
     <string name="option_check_updates">アップデートを自動で確認</string>
+    <string name="option_online_posters">ゲームのポスターをオンラインで取得</string>
     <string name="language">言語：%1$s</string>
     <string name="language_title">言語</string>
     <string name="language_system">システムに合わせる</string>
@@ -176,4 +176,7 @@
     <string name="keep_alive_channel">バックグラウンドでゲームを保持</string>
     <string name="keep_alive_channel_description">バックグラウンドに切り替えたときに、実行中のゲームがシステムに終了されにくくなり、進行状況が失われにくくなります。</string>
     <string name="keep_alive_running">実行中。バックグラウンドではゲームが一時停止し、進行状況は保持されます。</string>
+    <string name="shortcut_unsupported">お使いのホーム画面はショートカットの追加に対応していません。</string>
+    <string name="shortcut_added">ホーム画面に追加しました。</string>
+    <string name="shortcut_game_missing">このゲームが見つかりません。削除された可能性があります。</string>
 </resources>

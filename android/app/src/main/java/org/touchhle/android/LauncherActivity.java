@@ -109,6 +109,8 @@ public class LauncherActivity extends Activity {
     private static final int REQUEST_IMPORT_PSP_SAVE_FOLDER = 4;
     private static final int REQUEST_IMPORT_PSP_SAVE_FILES = 5;
     private static final String MHP2G_BUNDLE_ID = "jp.co.capcom.mhp2gjp";
+    /// Monster Hunter Freedom Unite, P2G's Western release (same engine).
+    private static final String MHFU_BUNDLE_ID = "jp.co.capcom.mhp2gwd";
     /// Where touchHLE keeps each app's data (see src/paths.rs), in a folder
     /// named after the app's bundle identifier.
     private static final String SANDBOX_DIR = "touchHLE_sandbox";
@@ -124,14 +126,41 @@ public class LauncherActivity extends Activity {
         "https://api.github.com/repos/shawnw67/UFtouchHLE/releases/latest";
     private static final String PREFS = "launcher";
     private static final String PREF_CHECK_UPDATES = "checkUpdates";
+    private static final String PREF_ONLINE_POSTERS = "onlinePosters";
     private static final String PREF_IGNORED_VERSION = "ignoredUpdateVersion";
     private static final String PREF_P2G_WIDE = "p2gExpandedView";
+    private static final String PREF_MHFU_WIDE = "mhfuExpandedView";
+
+    /// The games P2G's expanded view (--p2g-wide-screen) supports, and where
+    /// each one's choice is kept.
+    private static String expandedViewPref(String bundleId) {
+        if (MHP2G_BUNDLE_ID.equals(bundleId)) {
+            return PREF_P2G_WIDE;
+        }
+        if (MHFU_BUNDLE_ID.equals(bundleId)) {
+            return PREF_MHFU_WIDE;
+        }
+        return null;
+    }
     private static final String PREF_DEVICE_PROFILE = "deviceProfile";
     private static final String PREF_APP_DEVICE_PROFILE = "appDeviceProfile:";
+    /// Models with the same screen are offered once: the one that's most
+    /// widely recognised by games (and that automatic selection uses).
     private static final String[] DEVICE_PROFILES = {
-        "auto", "iPhone2,1", "iPhone3,1", "iPhone4,1", "iPhone5,1", "iPhone6,1",
+        "auto", "iPhone2,1", "iPhone4,1", "iPhone5,1",
         "iPhone7,2", "iPhone7,1", "iPad2,1", "iPad3,1",
     };
+
+    /// Choices that were merged with another model of the same screen.
+    private static String mergedDeviceProfile(String value) {
+        if ("iPhone3,1".equals(value)) {
+            return "iPhone4,1";
+        }
+        if ("iPhone6,1".equals(value)) {
+            return "iPhone5,1";
+        }
+        return value;
+    }
 
     private static final int TEXT = Color.WHITE;
     private static final int TEXT_DIM = 0xB3FFFFFF;
@@ -142,6 +171,8 @@ public class LauncherActivity extends Activity {
         String path;
         String name;
         Bitmap icon;
+        /// Box art, or one drawn from the icon (see [Posters]).
+        Bitmap poster;
         /// Empty if unknown.
         String bundleId;
     }
@@ -201,6 +232,11 @@ public class LauncherActivity extends Activity {
             saveAppName = savedInstanceState.getString("saveAppName");
         }
         quickOptions = QuickOptions.load(getBaseDir());
+        if (savedInstanceState == null && playFromShortcut(intent)) {
+            // Leaving the game goes back to the home screen it came from.
+            finish();
+            return;
+        }
         wallpaper = loadWallpaper();
         buildUi();
         rescan();
@@ -293,6 +329,14 @@ public class LauncherActivity extends Activity {
                 app.name = fields[1];
                 app.icon = loadIcon(fields[2], fields[3], fields[4]);
                 app.bundleId = fields.length > 5 ? fields[5] : "";
+                File postersDir = getPostersDir();
+                app.poster = Posters.cached(postersDir, app.bundleId, app.name);
+                if (app.poster == null) {
+                    app.poster = Posters.fromArtwork(app.path);
+                }
+                if (app.poster == null) {
+                    app.poster = Posters.generate(app.icon);
+                }
                 found.add(app);
             }
             runOnUiThread(() -> {
@@ -303,7 +347,41 @@ public class LauncherActivity extends Activity {
                     adapter.notifyDataSetChanged();
                 }
                 updateStatus();
+                fetchPosters(found);
             });
+        }).start();
+    }
+
+    private File getPostersDir() {
+        return new File(getBaseDir(), Posters.DIR);
+    }
+
+    /// Looks for box art online for the games that don't have any yet, and
+    /// shows each as it arrives.
+    private void fetchPosters(final List<App> found) {
+        if (!getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(PREF_ONLINE_POSTERS, true)) {
+            return;
+        }
+        final File dir = getPostersDir();
+        final String userAgent = "UFtouchHLE/"
+            + new String(nativeVersion(), StandardCharsets.UTF_8).trim()
+            + " (https://github.com/shawnw67/UFtouchHLE)";
+        new Thread(() -> {
+            for (final App app : found) {
+                if (!Posters.shouldFetch(dir, app.bundleId, app.name)) {
+                    continue;
+                }
+                final Bitmap poster = Posters.fetch(dir, app.bundleId, app.name, userAgent);
+                if (poster == null) {
+                    continue;
+                }
+                runOnUiThread(() -> {
+                    app.poster = poster;
+                    if (adapter != null) {
+                        adapter.notifyDataSetChanged();
+                    }
+                });
+            }
         }).start();
     }
 
@@ -531,9 +609,12 @@ public class LauncherActivity extends Activity {
 
         GridView grid = new GridView(this);
         grid.setNumColumns(GridView.AUTO_FIT);
-        grid.setColumnWidth(dp(96));
+        // Tablets get bigger posters, so they don't look lost on the screen.
+        boolean tablet = getResources().getConfiguration().smallestScreenWidthDp >= 600;
+        grid.setColumnWidth(dp(tablet ? 190 : 108));
         grid.setStretchMode(GridView.STRETCH_COLUMN_WIDTH);
-        grid.setVerticalSpacing(dp(12));
+        grid.setHorizontalSpacing(dp(12));
+        grid.setVerticalSpacing(dp(16));
         grid.setPadding(0, dp(14), 0, dp(14));
         grid.setClipToPadding(false);
         grid.setSelector(new ColorDrawable(Color.TRANSPARENT));
@@ -608,24 +689,32 @@ public class LauncherActivity extends Activity {
         @Override
         public View getView(int position, View convertView, ViewGroup parent) {
             LinearLayout item;
-            ImageView icon;
+            ImageView poster;
             TextView name;
             if (convertView instanceof LinearLayout) {
                 item = (LinearLayout) convertView;
-                icon = (ImageView) item.getChildAt(0);
+                poster = (ImageView) item.getChildAt(0);
                 name = (TextView) item.getChildAt(1);
             } else {
                 item = new LinearLayout(LauncherActivity.this);
                 item.setOrientation(LinearLayout.VERTICAL);
-                item.setGravity(Gravity.CENTER_HORIZONTAL);
-                item.setPadding(dp(4), dp(8), dp(4), dp(8));
-                item.setBackground(buttonBackground(Color.TRANSPARENT, dp(16)));
-                icon = new ImageView(LauncherActivity.this);
-                icon.setScaleType(ImageView.ScaleType.FIT_CENTER);
-                item.addView(icon, new LinearLayout.LayoutParams(dp(68), dp(68)));
+                poster = new PosterView(LauncherActivity.this);
+                poster.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                GradientDrawable shape = new GradientDrawable();
+                shape.setColor(0x40FFFFFF);
+                shape.setCornerRadius(dp(10));
+                poster.setBackground(shape);
+                poster.setClipToOutline(true);
+                poster.setElevation(dp(4));
+                // Ripple on top of the picture when pressed.
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    poster.setForeground(new RippleDrawable(
+                        ColorStateList.valueOf(0x40FFFFFF), null, shape));
+                }
+                item.addView(poster, new LinearLayout.LayoutParams(-1, -2));
                 name = makeText("", 13, TEXT, false);
                 name.setGravity(Gravity.CENTER);
-                name.setMaxLines(2);
+                name.setSingleLine(true);
                 name.setEllipsize(TextUtils.TruncateAt.END);
                 name.setShadowLayer(dp(2), 0, dp(1), 0x99000000);
                 LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
@@ -633,18 +722,22 @@ public class LauncherActivity extends Activity {
                 item.addView(name, params);
             }
             App app = apps.get(position);
-            if (app.icon != null) {
-                icon.setImageBitmap(app.icon);
-                icon.setBackground(null);
-            } else {
-                GradientDrawable placeholder = new GradientDrawable();
-                placeholder.setColor(0x40FFFFFF);
-                placeholder.setCornerRadius(dp(68) * 10f / 57f);
-                icon.setImageDrawable(null);
-                icon.setBackground(placeholder);
-            }
+            poster.setImageBitmap(app.poster);
             name.setText(app.name);
             return item;
+        }
+    }
+
+    /// An image view as tall as a poster (3:4) for its width.
+    private static class PosterView extends ImageView {
+        PosterView(android.content.Context context) {
+            super(context);
+        }
+
+        @Override
+        protected void onMeasure(int widthSpec, int heightSpec) {
+            int width = View.MeasureSpec.getSize(widthSpec);
+            setMeasuredDimension(width, width * Posters.HEIGHT / Posters.WIDTH);
         }
     }
 
@@ -662,8 +755,9 @@ public class LauncherActivity extends Activity {
         List<String> args = new ArrayList<>();
         args.add(app.path);
         args.addAll(quickOptions.toArgs());
-        if ("jp.co.capcom.mhp2gjp".equals(app.bundleId)
-                && getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(PREF_P2G_WIDE, false)) {
+        String widePref = expandedViewPref(app.bundleId);
+        if (widePref != null
+                && getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(widePref, false)) {
             args.add("--p2g-wide-screen");
         }
         String profile = appDeviceProfile(app);
@@ -681,57 +775,125 @@ public class LauncherActivity extends Activity {
     }
 
     private void showAppMenu(final App app) {
-        List<String> items = new ArrayList<>();
+        final List<String> items = new ArrayList<>();
+        final List<Runnable> actions = new ArrayList<>();
+        // Saves need to know which game they belong to.
+        final boolean identified = app.bundleId != null && !app.bundleId.isEmpty();
+        final Runnable unidentified = () ->
+            Toast.makeText(this, R.string.unknown_game_saves, Toast.LENGTH_LONG).show();
+        items.add(getString(R.string.menu_add_to_home));
+        actions.add(() -> addShortcut(app));
         items.add(getString(R.string.menu_import_save));
+        actions.add(identified ? () -> confirmImportSave(app) : unidentified);
         items.add(getString(R.string.menu_export_save));
+        actions.add(identified ? () -> startExportSave(app) : unidentified);
         items.add(getString(R.string.menu_delete_game));
+        actions.add(() -> confirmDelete(app));
         items.add(getString(R.string.menu_device_profile, appDeviceProfileLabel(app)));
+        actions.add(() -> showDeviceProfiles(app, null));
         if ("com.rockstargames.gta3vc".equals(app.bundleId)) {
             items.add(getString(R.string.menu_performance_tests));
+            actions.add(() -> showPerformanceTests(app));
             items.add(getString(R.string.menu_audio_tests));
+            actions.add(() -> showAudioTests(app));
         } else if (MHP2G_BUNDLE_ID.equals(app.bundleId)) {
             items.add(getString(R.string.menu_p2g_layout));
+            actions.add(() -> showP2GViewOptions(app));
             items.add(getString(R.string.menu_import_psp_save));
+            actions.add(() -> confirmImportPspSave(app));
+        } else if (MHFU_BUNDLE_ID.equals(app.bundleId)) {
+            items.add(getString(R.string.menu_p2g_layout));
+            actions.add(() -> showP2GViewOptions(app));
         }
         new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
             .setTitle(app.name)
-            .setItems(items.toArray(new String[0]), (dialog, which) -> {
-                if (which == 5) {
-                    if (MHP2G_BUNDLE_ID.equals(app.bundleId)) {
-                        confirmImportPspSave(app);
-                    } else {
-                        showAudioTests(app);
-                    }
-                } else if (which == 4) {
-                    if (MHP2G_BUNDLE_ID.equals(app.bundleId)) {
-                        showP2GViewOptions();
-                    } else {
-                        showPerformanceTests(app);
-                    }
-                } else if (which == 3) {
-                    showDeviceProfiles(app, null);
-                } else if (which == 2) {
-                    confirmDelete(app);
-                } else if (app.bundleId == null || app.bundleId.isEmpty()) {
-                    Toast.makeText(this, R.string.unknown_game_saves, Toast.LENGTH_LONG).show();
-                } else if (which == 0) {
-                    confirmImportSave(app);
-                } else {
-                    startExportSave(app);
-                }
-            })
+            .setItems(items.toArray(new String[0]), (dialog, which) -> actions.get(which).run())
             .show();
     }
 
-    private void showP2GViewOptions() {
+    // ---- Home screen shortcuts ----
+
+    /// Shortcuts open the launcher with this action, which starts the game
+    /// straight away.
+    private static final String ACTION_PLAY = "org.touchhle.android.action.PLAY";
+    private static final String EXTRA_APP_PATH = "org.touchhle.android.APP_PATH";
+    private static final String EXTRA_BUNDLE_ID = "org.touchhle.android.BUNDLE_ID";
+    private static final String EXTRA_APP_NAME = "org.touchhle.android.APP_NAME";
+
+    @SuppressWarnings("deprecation")
+    private void addShortcut(App app) {
+        Intent play = new Intent(this, LauncherActivity.class)
+            .setAction(ACTION_PLAY)
+            .putExtra(EXTRA_APP_PATH, app.path)
+            .putExtra(EXTRA_BUNDLE_ID, app.bundleId)
+            .putExtra(EXTRA_APP_NAME, app.name);
+        Bitmap icon = app.icon != null ? app.icon : app.poster;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            android.content.pm.ShortcutManager manager =
+                getSystemService(android.content.pm.ShortcutManager.class);
+            if (manager == null || !manager.isRequestPinShortcutSupported()) {
+                Toast.makeText(this, R.string.shortcut_unsupported, Toast.LENGTH_LONG).show();
+                return;
+            }
+            String id = "game:" + (app.bundleId.isEmpty() ? app.path : app.bundleId);
+            android.content.pm.ShortcutInfo info =
+                new android.content.pm.ShortcutInfo.Builder(this, id)
+                    .setShortLabel(app.name)
+                    .setIcon(android.graphics.drawable.Icon.createWithBitmap(icon))
+                    .setIntent(play)
+                    .build();
+            // The home screen asks for confirmation and says when it's added.
+            manager.requestPinShortcut(info, null);
+        } else {
+            Intent install = new Intent("com.android.launcher.action.INSTALL_SHORTCUT")
+                .putExtra(Intent.EXTRA_SHORTCUT_INTENT, play)
+                .putExtra(Intent.EXTRA_SHORTCUT_NAME, app.name)
+                .putExtra(Intent.EXTRA_SHORTCUT_ICON, icon);
+            sendBroadcast(install);
+            Toast.makeText(this, R.string.shortcut_added, Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    /**
+     * Starts the game a shortcut is for. Returns false if the intent isn't
+     * from a shortcut, or the game is gone (which is pointed out).
+     */
+    private boolean playFromShortcut(Intent intent) {
+        if (intent == null || !ACTION_PLAY.equals(intent.getAction())) {
+            return false;
+        }
+        String path = intent.getStringExtra(EXTRA_APP_PATH);
+        if (path == null || !new File(path).exists()) {
+            Toast.makeText(this, R.string.shortcut_game_missing, Toast.LENGTH_LONG).show();
+            return false;
+        }
+        App app = new App();
+        app.path = path;
+        app.bundleId = intent.getStringExtra(EXTRA_BUNDLE_ID);
+        if (app.bundleId == null) {
+            app.bundleId = "";
+        }
+        app.name = intent.getStringExtra(EXTRA_APP_NAME);
+        launch(app);
+        return true;
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        playFromShortcut(intent);
+    }
+
+    private void showP2GViewOptions(App app) {
         SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        final String pref = expandedViewPref(app.bundleId);
         new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
-            .setTitle(R.string.p2g_layout_title)
+            .setTitle(getString(R.string.p2g_layout_title, app.name))
             .setSingleChoiceItems(new String[]{getString(R.string.p2g_standard),
                     getString(R.string.p2g_wide)},
-                prefs.getBoolean(PREF_P2G_WIDE, false) ? 1 : 0,
+                prefs.getBoolean(pref, false) ? 1 : 0,
                 (dialog, which) -> {
-                    prefs.edit().putBoolean(PREF_P2G_WIDE, which == 1).apply();
+                    prefs.edit().putBoolean(pref, which == 1).apply();
                     dialog.dismiss();
                 })
             .setNegativeButton(R.string.cancel, null)
@@ -915,7 +1077,8 @@ public class LauncherActivity extends Activity {
     /// Unknown or wrongly typed old preferences behave like a missing choice.
     private String readDeviceProfile(String key) {
         try {
-            String value = getSharedPreferences(PREFS, MODE_PRIVATE).getString(key, null);
+            String value = mergedDeviceProfile(
+                getSharedPreferences(PREFS, MODE_PRIVATE).getString(key, null));
             return deviceProfileIndex(value) >= 0 ? value : null;
         } catch (ClassCastException e) {
             return null;
@@ -1041,6 +1204,9 @@ public class LauncherActivity extends Activity {
         addSwitch(layout, getString(R.string.option_check_updates),
             prefs.getBoolean(PREF_CHECK_UPDATES, true),
             b -> prefs.edit().putBoolean(PREF_CHECK_UPDATES, b).apply());
+        addSwitch(layout, getString(R.string.option_online_posters),
+            prefs.getBoolean(PREF_ONLINE_POSTERS, true),
+            b -> prefs.edit().putBoolean(PREF_ONLINE_POSTERS, b).apply());
 
         TextView language = makeButton(
             getString(R.string.language, Languages.name(this, Languages.chosenTag(this))), false, null);

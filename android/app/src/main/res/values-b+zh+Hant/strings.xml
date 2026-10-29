@@ -23,6 +23,7 @@
     <string name="no_share_app">沒有可以分享的應用程式。</string>
     <string name="no_file_picker">無法開啟系統的檔案選擇器。</string>
 
+    <string name="menu_add_to_home">加入主畫面</string>
     <string name="menu_import_save">匯入存檔</string>
     <string name="menu_export_save">匯出存檔</string>
     <string name="menu_delete_game">刪除遊戲</string>
@@ -32,7 +33,7 @@
     <string name="menu_p2g_layout">畫面與按鍵配置</string>
     <string name="unknown_game_saves">無法辨識這個遊戲，不能處理存檔。</string>
 
-    <string name="p2g_layout_title">P2G 畫面與按鍵配置</string>
+    <string name="p2g_layout_title">%1$s：畫面與按鍵配置</string>
     <string name="p2g_standard">標準畫面</string>
     <string name="p2g_wide">擴展視野 · 按鍵保留中央 16:9 配置</string>
 
@@ -75,14 +76,12 @@
     <string name="device_profile_global">全域：%1$s</string>
     <string name="device_profile_this_game">此遊戲：%1$s</string>
     <string name="device_profile_use_global">使用全域設定（%1$s）</string>
-    <string name="device_profile_hint">自動依螢幕比例選擇；不支援該螢幕的遊戲會使用相容尺寸</string>
+    <string name="device_profile_hint">自動：平板用 iPad、手機用 iPhone（遊戲支援時），依螢幕比例選尺寸，遊戲有高畫質資源時用 Retina 機型；不支援該螢幕的遊戲會使用相容尺寸。iPhone 6 之前的遊戲，選 iPhone 6 / 6 Plus 時會和真機一樣以 iPhone 5 的尺寸顯示</string>
     <string-array name="device_profile_labels">
         <item>自動</item>
         <item>iPhone 3GS（480×320）</item>
-        <item>iPhone 4（960×640）</item>
-        <item>iPhone 4S（960×640）</item>
-        <item>iPhone 5（1136×640）</item>
-        <item>iPhone 5s（1136×640）</item>
+        <item>iPhone 4 / 4S（960×640）</item>
+        <item>iPhone 5 / 5s（1136×640）</item>
         <item>iPhone 6（1334×750）</item>
         <item>iPhone 6 Plus（2208×1242）</item>
         <item>iPad 2（1024×768）</item>
@@ -121,6 +120,7 @@
     <string name="option_tilt_controls">用搖桿模擬重力感應</string>
     <string name="option_network">允許遊戲連網</string>
     <string name="option_check_updates">自動檢查更新</string>
+    <string name="option_online_posters">線上取得遊戲海報</string>
     <string name="language">語言：%1$s</string>
     <string name="language_title">語言</string>
     <string name="language_system">跟隨系統</string>
@@ -176,4 +176,7 @@
     <string name="keep_alive_channel">在背景保留遊戲</string>
     <string name="keep_alive_channel_description">切到背景時，讓系統不容易關閉正在執行的遊戲，以免遺失進度。</string>
     <string name="keep_alive_running">執行中。切到背景時遊戲會暫停並保留進度。</string>
+    <string name="shortcut_unsupported">你的主畫面不支援加入捷徑。</string>
+    <string name="shortcut_added">已加入主畫面。</string>
+    <string name="shortcut_game_missing">找不到這個遊戲，可能已經被刪除了。</string>
 </resources>

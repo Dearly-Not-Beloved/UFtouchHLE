@@ -27,6 +27,7 @@
     <string name="no_file_picker">Couldn’t open the system’s file picker.</string>
 
     <!-- Game menu (long press) -->
+    <string name="menu_add_to_home">Add to home screen</string>
     <string name="menu_import_save">Import saves</string>
     <string name="menu_export_save">Export saves</string>
     <string name="menu_delete_game">Delete game</string>
@@ -36,7 +37,7 @@
     <string name="menu_p2g_layout">Screen and button layout</string>
     <string name="unknown_game_saves">This game can’t be identified, so its saves can’t be handled.</string>
 
-    <string name="p2g_layout_title">P2G screen and button layout</string>
+    <string name="p2g_layout_title">%1$s: screen and button layout</string>
     <string name="p2g_standard">Standard view</string>
     <string name="p2g_wide">Wider view · buttons keep the central 16:9 layout</string>
 
@@ -83,14 +84,12 @@
     <string name="device_profile_global">Global: %1$s</string>
     <string name="device_profile_this_game">This game: %1$s</string>
     <string name="device_profile_use_global">Use the global setting (%1$s)</string>
-    <string name="device_profile_hint">Automatic picks by screen shape. Games that don’t support that screen use a compatible size.</string>
+    <string name="device_profile_hint">Automatic picks an iPad on tablets and an iPhone on phones (if the game supports it), the closest screen shape, and Retina if the game has HD images. Games that don’t support that screen use a compatible size. Games made before the iPhone 6 show iPhone 6 and 6 Plus at the iPhone 5’s size, as on a real one.</string>
     <string-array name="device_profile_labels">
         <item>Automatic</item>
         <item>iPhone 3GS (480×320)</item>
-        <item>iPhone 4 (960×640)</item>
-        <item>iPhone 4S (960×640)</item>
-        <item>iPhone 5 (1136×640)</item>
-        <item>iPhone 5s (1136×640)</item>
+        <item>iPhone 4 / 4S (960×640)</item>
+        <item>iPhone 5 / 5s (1136×640)</item>
         <item>iPhone 6 (1334×750)</item>
         <item>iPhone 6 Plus (2208×1242)</item>
         <item>iPad 2 (1024×768)</item>
@@ -129,6 +128,7 @@
     <string name="option_tilt_controls">Use the stick for tilt controls</string>
     <string name="option_network">Allow games to use the network</string>
     <string name="option_check_updates">Check for updates automatically</string>
+    <string name="option_online_posters">Get game posters online</string>
     <string name="language">Language: %1$s</string>
     <string name="language_title">Language</string>
     <string name="language_system">System default</string>
@@ -192,4 +192,7 @@
     <string name="keep_alive_channel">Keep the game in the background</string>
     <string name="keep_alive_channel_description">Makes Android less likely to close a running game while it’s in the background, so progress isn’t lost.</string>
     <string name="keep_alive_running">Running. In the background, the game is paused and keeps its progress.</string>
+    <string name="shortcut_unsupported">Your home screen doesn’t support adding shortcuts.</string>
+    <string name="shortcut_added">Added to the home screen.</string>
+    <string name="shortcut_game_missing">This game can’t be found. It may have been deleted.</string>
 </resources>

@@ -23,6 +23,7 @@
     <string name="no_share_app">没有可以分享的应用。</string>
     <string name="no_file_picker">无法打开系统的文件选择器。</string>
 
+    <string name="menu_add_to_home">添加到桌面</string>
     <string name="menu_import_save">导入存档</string>
     <string name="menu_export_save">导出存档</string>
     <string name="menu_delete_game">删除游戏</string>
@@ -32,7 +33,7 @@
     <string name="menu_p2g_layout">画面与按键布局</string>
     <string name="unknown_game_saves">无法识别这个游戏，不能处理存档。</string>
 
-    <string name="p2g_layout_title">P2G 画面与按键布局</string>
+    <string name="p2g_layout_title">%1$s：画面与按键布局</string>
     <string name="p2g_standard">标准画面</string>
     <string name="p2g_wide">扩展视野 · 按键保留中央 16:9 布局</string>
 
@@ -75,14 +76,12 @@
     <string name="device_profile_global">全局：%1$s</string>
     <string name="device_profile_this_game">此游戏：%1$s</string>
     <string name="device_profile_use_global">使用全局设置（%1$s）</string>
-    <string name="device_profile_hint">自动按屏幕比例选择；不支持该屏幕的游戏会使用兼容尺寸</string>
+    <string name="device_profile_hint">自动：平板用 iPad、手机用 iPhone（游戏支持时），按屏幕比例选尺寸，游戏有高清资源时用 Retina 机型；不支持该屏幕的游戏会使用兼容尺寸。iPhone 6 之前的游戏，选 iPhone 6 / 6 Plus 时会和真机一样按 iPhone 5 的尺寸显示</string>
     <string-array name="device_profile_labels">
         <item>自动</item>
         <item>iPhone 3GS（480×320）</item>
-        <item>iPhone 4（960×640）</item>
-        <item>iPhone 4S（960×640）</item>
-        <item>iPhone 5（1136×640）</item>
-        <item>iPhone 5s（1136×640）</item>
+        <item>iPhone 4 / 4S（960×640）</item>
+        <item>iPhone 5 / 5s（1136×640）</item>
         <item>iPhone 6（1334×750）</item>
         <item>iPhone 6 Plus（2208×1242）</item>
         <item>iPad 2（1024×768）</item>
@@ -121,6 +120,7 @@
     <string name="option_tilt_controls">用摇杆模拟重力感应</string>
     <string name="option_network">允许游戏联网</string>
     <string name="option_check_updates">自动检查更新</string>
+    <string name="option_online_posters">在线获取游戏海报</string>
     <string name="language">语言：%1$s</string>
     <string name="language_title">语言</string>
     <string name="language_system">跟随系统</string>
@@ -176,4 +176,7 @@
     <string name="keep_alive_channel">后台保留游戏</string>
     <string name="keep_alive_channel_description">切到后台时，让系统不容易关闭正在运行的游戏，以免丢失进度。</string>
     <string name="keep_alive_running">运行中。切到后台时游戏会暂停并保留进度。</string>
+    <string name="shortcut_unsupported">你的桌面不支持添加快捷方式。</string>
+    <string name="shortcut_added">已添加到桌面。</string>
+    <string name="shortcut_game_missing">找不到这个游戏，可能已经被删除了。</string>
 </resources>
