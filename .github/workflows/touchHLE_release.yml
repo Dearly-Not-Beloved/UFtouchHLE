@@ -1,0 +1,128 @@
+name: Build touchHLE
+
+on:
+  push:
+    branches: [ "trunk" ]
+  pull_request:
+    branches: [ "trunk" ]
+  create: # for tags
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-android:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    # actions/checkout really doesn't work well with git-describe for some
+    # reason (most likely it strips the annotation off the tag somehow).
+    - name: Checkout touchHLE
+      shell: bash # windows :)
+      run: |
+        mkdir -p "$GITHUB_WORKSPACE"
+        git clone "${{ github.server_url }}/${{ github.repository }}" "$GITHUB_WORKSPACE"
+        cd "$GITHUB_WORKSPACE"
+        git fetch origin "$GITHUB_REF"
+        git checkout "$GITHUB_SHA" # avoid race condition if branch/tag changes
+    - name: Get Submodules
+      run: git submodule update --init
+    - name: Try to get cached copy of Boost
+      id: cache-boost
+      uses: actions/cache@v4
+      with:
+        path: vendor/boost
+        key: boost_1_81_0
+    - if: ${{ steps.cache-boost.outputs.cache-hit != 'true' }}
+      name: Download Boost
+      run: curl -L -o boost_1_81_0.7z "https://archives.boost.io/release/1.81.0/source/boost_1_81_0.7z"
+    - if: ${{ steps.cache-boost.outputs.cache-hit != 'true' }}
+      name: Extract Boost
+      run: 7z -ovendor x boost_1_81_0.7z && mv vendor/boost_1_81_0 vendor/boost
+    - name: Try to get cached copy of cmake
+      id: cache-cmake
+      uses: actions/cache@v4
+      with:
+        path: vendor/cmake
+        key: cmake_3_31_6_linux
+    - if: ${{ steps.cache-cmake.outputs.cache-hit != 'true' }}
+      name: Download Cmake
+      run: curl -L -O "https://github.com/Kitware/CMake/releases/download/v3.31.6/cmake-3.31.6-linux-x86_64.tar.gz"
+    - if: ${{ steps.cache-cmake.outputs.cache-hit != 'true' }}
+      name: Extract Cmake
+      run: tar xzvf "cmake-3.31.6-linux-x86_64.tar.gz" -C vendor && mv vendor/cmake-3.31.6-linux-x86_64 vendor/cmake
+    - name: Install AArch64 Android Rust toolchain
+      run: rustup target add aarch64-linux-android
+    - name: Install cargo-ndk
+      run: cargo install cargo-ndk@3.5.4
+    # Gradle version compatibility is a nightmare and we refuse to use gradlew.
+    - name: Try to get a cached copy of Gradle
+      id: cache-gradle
+      uses: actions/cache@v4
+      with:
+        path: gradle
+        key: gradle-8.11.1
+    - if: ${{ steps.cache-gradle.outputs.cache-hit != 'true' }}
+      name: Download Gradle
+      run: curl -L -o gradle-8.11.1-bin.zip "https://services.gradle.org/distributions/gradle-8.11.1-bin.zip"
+    - if: ${{ steps.cache-gradle.outputs.cache-hit != 'true' }}
+      name: Extract Gradle
+      run: 7z -ogradle x gradle-8.11.1-bin.zip
+    # We need to install the correct version of Android NDK manually
+    - name: Try to get a cached copy of Android NDK
+      id: cache-android-ndk
+      uses: actions/cache@v4
+      with:
+        path: android-ndk
+        key: android-ndk-r28c
+    - if: ${{ steps.cache-android-ndk.outputs.cache-hit != 'true' }}
+      name: Download Android NDK
+      run: curl -L -o android-ndk-r28c-linux.zip "https://dl.google.com/android/repository/android-ndk-r28c-linux.zip"
+    - if: ${{ steps.cache-android-ndk.outputs.cache-hit != 'true' }}
+      name: Extract Android NDK
+      run: 7z -oandroid-ndk -snld x android-ndk-r28c-linux.zip
+    - name: Link Android NDK
+      run: ln -s $PWD'/android-ndk/android-ndk-r28c' $ANDROID_SDK_ROOT'/ndk/28.2.13676358'
+    # Why isn't there a command for this?
+    - name: Generate local.properties file
+      run: echo 'sdk.dir='$ANDROID_SDK_ROOT > android/local.properties
+    # Sign with a fixed key (from repository secrets) so new versions can be
+    # installed over old ones. Without the secrets, Gradle falls back to a
+    # throwaway debug key.
+    - name: Decode signing key
+      env:
+        TOUCHHLE_KEYSTORE_BASE64: ${{ secrets.TOUCHHLE_KEYSTORE_BASE64 }}
+      run: |
+        if [ -n "$TOUCHHLE_KEYSTORE_BASE64" ]; then
+          echo "$TOUCHHLE_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/touchHLE_UF.keystore"
+          echo "TOUCHHLE_KEYSTORE_FILE=$RUNNER_TEMP/touchHLE_UF.keystore" >> "$GITHUB_ENV"
+        else
+          echo "::warning::TOUCHHLE_KEYSTORE_BASE64 secret not set, APK will be signed with a throwaway debug key"
+        fi
+    # Don't attempt to run tests (can't run on Android).
+    - name: Build for Android
+      run: cd android && ../gradle/gradle-8.11.1/bin/gradle assembleRelease
+      env:
+        # The version should match the ndkVersion defined in `android\app\build.gradle`
+        ANDROID_NDK_ROOT: '/usr/local/lib/android/sdk/ndk/28.2.13676358'
+        CMAKE: ${{ github.workspace }}/vendor/cmake/bin/cmake
+        TOUCHHLE_KEYSTORE_PASSWORD: ${{ secrets.TOUCHHLE_KEYSTORE_PASSWORD }}
+    - name: Package APK
+      id: package
+      shell: bash
+      run: |
+        version="$(cargo run -q --package touchHLE_version)"
+        asset="UFtouchHLE_${version}_Android_AArch64.apk"
+        cp android/app/build/outputs/apk/release/app-release.apk "$asset"
+        echo "asset=$asset" >> "$GITHUB_OUTPUT"
+    - uses: actions/upload-artifact@v4
+      with:
+        name: ${{ steps.package.outputs.asset }}
+        path: ${{ steps.package.outputs.asset }}
+        if-no-files-found: error
+        compression-level: 0
