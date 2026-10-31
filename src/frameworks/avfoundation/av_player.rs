@@ -49,6 +49,42 @@ pub struct State {
     playbacks: HashMap<id, Playback>,
 }
 
+/// TEMPORARY, for test builds only (not for the pull request): playback
+/// statistics, logged once per second.
+struct PlaybackStats {
+    since: Instant,
+    shown: u32,
+    skipped: u32,
+    slowest_update: Duration,
+    max_lateness: Duration,
+}
+
+impl PlaybackStats {
+    fn new() -> PlaybackStats {
+        PlaybackStats {
+            since: Instant::now(),
+            shown: 0,
+            skipped: 0,
+            slowest_update: Duration::ZERO,
+            max_lateness: Duration::ZERO,
+        }
+    }
+
+    fn log_if_due(&mut self) {
+        if self.since.elapsed() < Duration::from_secs(1) {
+            return;
+        }
+        log!(
+            "AVPlayer: {} frames shown, {} skipped, slowest update {} ms, max lateness {} ms",
+            self.shown,
+            self.skipped,
+            self.slowest_update.as_millis(),
+            self.max_lateness.as_millis()
+        );
+        *self = PlaybackStats::new();
+    }
+}
+
 struct Playback {
     decoder: MovieDecoder,
     /// OpenAL source and buffer for the audio, if there is any.
@@ -58,6 +94,7 @@ struct Playback {
     /// When the wall clock started counting from `clock_base`, if playing.
     clock_started: Option<Instant>,
     ended: bool,
+    stats: PlaybackStats,
 }
 
 impl GuestArg for CMTime {
@@ -211,6 +248,7 @@ fn start_playback(env: &mut Environment, player: id, start: Duration) -> bool {
             clock_base: start,
             clock_started: Some(Instant::now()),
             ended: false,
+            stats: PlaybackStats::new(),
         },
     );
     true
@@ -257,8 +295,10 @@ fn playback_time(env: &mut Environment, player: id) -> Option<Duration> {
     }
 }
 
-/// Fit a video frame to the layer's aspect ratio by adding black bars, like
-/// `AVLayerVideoGravityResizeAspect` (the layer stretches its contents).
+/// Fit a video frame to the layer's aspect ratio by adding transparent bars,
+/// like `AVLayerVideoGravityResizeAspect` (the layer stretches its contents).
+/// The bars are transparent like those of a real `AVPlayerLayer`, so whatever
+/// is behind the layer (e.g. a decorative border) shows through.
 fn letterbox(pixels: Vec<u8>, width: u32, height: u32, bounds: CGRect) -> (Vec<u8>, u32, u32) {
     let (layer_width, layer_height) = (bounds.size.width, bounds.size.height);
     if layer_width <= 0.0 || layer_height <= 0.0 || width == 0 || height == 0 {
@@ -274,7 +314,7 @@ fn letterbox(pixels: Vec<u8>, width: u32, height: u32, bounds: CGRect) -> (Vec<u
     } else {
         ((height as f32 * layer_aspect).round() as u32, height)
     };
-    let mut out = [0u8, 0, 0, 255].repeat((new_width * new_height) as usize);
+    let mut out = [0u8, 0, 0, 0].repeat((new_width * new_height) as usize);
     let (x0, y0) = ((new_width - width) / 2, (new_height - height) / 2);
     for y in 0..height {
         let src = (y * width * 4) as usize;
@@ -308,6 +348,7 @@ pub fn handle_players(env: &mut Environment) {
             .playbacks
             .get_mut(&player)
             .unwrap();
+        let update_start = Instant::now();
         let mut latest_frame = None;
         let mut video_finished = false;
         loop {
@@ -317,7 +358,11 @@ pub fn handle_players(env: &mut Environment) {
                     break;
                 }
                 Some(frame_time) if frame_time <= time => {
+                    playback.stats.max_lateness = playback.stats.max_lateness.max(time - frame_time);
                     if let Some(Some(frame)) = playback.decoder.decode_next_frame() {
+                        if latest_frame.is_some() {
+                            playback.stats.skipped += 1;
+                        }
                         latest_frame = Some(frame);
                     }
                 }
@@ -325,6 +370,7 @@ pub fn handle_players(env: &mut Environment) {
             }
         }
         let duration = playback.decoder.duration();
+        let shown_frame = latest_frame.is_some();
         if let Some(frame) = latest_frame {
             let layers: Vec<id> = env
                 .framework_state
@@ -344,6 +390,19 @@ pub fn handle_players(env: &mut Environment) {
                 () = msg![env; layer setContents:image];
                 release(env, image);
             }
+        }
+        if let Some(playback) = env
+            .framework_state
+            .avfoundation
+            .av_player
+            .playbacks
+            .get_mut(&player)
+        {
+            if shown_frame {
+                playback.stats.shown += 1;
+            }
+            playback.stats.slowest_update = playback.stats.slowest_update.max(update_start.elapsed());
+            playback.stats.log_if_due();
         }
         if video_finished && time >= duration {
             let playback = env
